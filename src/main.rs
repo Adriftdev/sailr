@@ -54,12 +54,7 @@ async fn main() -> Result<(), CliError> {
         Commands::Env(a) => match a.command {
             EnvCommands::Create(arg) => {
                 logger.info(&format!("Creating a new environment"));
-                sailr::utils::create_env_toml(
-                    &arg.name, 
-                    arg.redis, 
-                    arg.postresql, 
-                    arg.registry
-                )?;
+                sailr::utils::create_env_toml(&arg.name, arg.redis, arg.postresql, arg.registry)?;
             }
         },
         Commands::Deploy(arg) => {

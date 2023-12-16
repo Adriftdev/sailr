@@ -94,7 +94,7 @@ pub fn copy_templates() -> Result<(), SailrError> {
         "Success",
         "Copied Sailr base templates to ./k8s/templates",
     );
-    
+
     Ok(())
 }
 
@@ -134,10 +134,8 @@ pub fn create_env_toml(
         );
         env.add_service(redis);
 
-        let redis_host = EnvironmentVariable::new(
-            "REDIS_HOST",
-            Some(toml::Value::String("redis".to_string())),
-        );
+        let redis_host =
+            EnvironmentVariable::new("REDIS_HOST", Some(toml::Value::String("redis".to_string())));
 
         let redis_port =
             EnvironmentVariable::new("REDIS_PORT", Some(toml::Value::String("6379".to_string())));
@@ -158,10 +156,8 @@ pub fn create_env_toml(
         );
         env.add_service(postgres);
 
-        let db_host = EnvironmentVariable::new(
-            "DB_HOST",
-            Some(toml::Value::String("postgres".to_string())),
-        );
+        let db_host =
+            EnvironmentVariable::new("DB_HOST", Some(toml::Value::String("postgres".to_string())));
 
         let db_port =
             EnvironmentVariable::new("DB_PORT", Some(toml::Value::String("5432".to_string())));

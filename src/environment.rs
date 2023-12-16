@@ -4,6 +4,7 @@ use toml::Value;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Environment {
+    pub version: String,
     pub name: String,
     pub log_level: String,
     pub service_whitelist: Vec<Service>,
@@ -14,8 +15,9 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn new(name: &str, ) -> Self {
+    pub fn new(name: &str) -> Self {
         Self {
+            version: "0.1.0".to_string(),
             name: name.to_string(),
             log_level: "INFO".to_string(),
             service_whitelist: Vec::new(),
@@ -126,7 +128,11 @@ impl Serialize for Service {
             service.insert("path".to_string(), self.path.clone().unwrap());
         }
 
-        if self.tag.is_none() && self.major_version.is_none() && self.minor_version.is_none() && self.patch_version.is_none() {
+        if self.tag.is_none()
+            && self.major_version.is_none()
+            && self.minor_version.is_none()
+            && self.patch_version.is_none()
+        {
             service.insert("version".to_string(), "latest".to_string());
         } else if self.major_version.is_none()
             || self.minor_version.is_none()
