@@ -8,14 +8,13 @@ use kube::api::{Patch, PatchParams};
 use kube::client::ConfigExt;
 use kube::core::{DynamicObject, GroupVersionKind};
 use kube::discovery::{ApiCapabilities, ApiResource, Scope};
-use kube::{self, Api, Discovery};
+use kube::{Api, Client, Discovery};
 use scribe_rust::{log, Color};
 use serde::Deserialize;
 
 use tower::ServiceBuilder;
 
 use crate::errors::KubeError;
-use crate::kube::kube::Client;
 use kube::config::Config;
 
 pub async fn get_all_deployments() -> Result<(), KubeError> {
@@ -138,19 +137,13 @@ pub async fn apply(
         if let Some((ar, caps)) = res {
             let api = dynamic_api(ar, caps, client.clone(), Some(&namespace), false);
             let data: serde_json::Value = serde_json::to_value(&obj).map_err(|e| {
-                KubeError::UnexpectedError(format!(
-                    "Json Serialization failed: {}",
-                    e
-                ))
+                KubeError::UnexpectedError(format!("Json Serialization failed: {}", e))
             })?;
             let _ = api
                 .patch(&name.clone().unwrap(), &ssapply, &Patch::Apply(data))
                 .await
                 .map_err(|e| {
-                    KubeError::ResourceUpdateFailed(format!(
-                        "Resource patch failed: {}",
-                        e
-                    ))
+                    KubeError::ResourceUpdateFailed(format!("Resource patch failed: {}", e))
                 })?;
             log(
                 Color::Blue,

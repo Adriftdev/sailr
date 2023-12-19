@@ -1,10 +1,16 @@
+use std::path::Path;
+
+use serde;
 use serde::ser::Serialize;
 use serde::{Deserialize, Deserializer, Serializer};
 use toml::Value;
 
+use crate::filesystem;
+use crate::utils::get_current_timestamp;
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Environment {
-    pub version: String,
+    pub schema_version: String,
     pub name: String,
     pub log_level: String,
     pub service_whitelist: Vec<Service>,
@@ -12,12 +18,18 @@ pub struct Environment {
     pub default_replicas: u32,
     pub registry: String,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
+    #[serde(skip)]
+    file_manager: filesystem::FileSystemManager,
 }
 
 impl Environment {
+    // Creates a new Sailr environment instance for the specified name.
+    // This searches for an environment configuration file at `./k8s/environments/<name>/config.toml`.
+    // Default values are used for properties like log level, domain, and default replicas unless overridden in the config file.
+    // A `FileSystemManager` is used to manage access and manipulation of environment configuration files.
     pub fn new(name: &str) -> Self {
         Self {
-            version: "0.1.0".to_string(),
+            schema_version: "0.1.0".to_string(),
             name: name.to_string(),
             log_level: "INFO".to_string(),
             service_whitelist: Vec::new(),
@@ -25,6 +37,13 @@ impl Environment {
             default_replicas: 1,
             registry: "docker.io".to_string(),
             environment_variables: Some(Vec::new()),
+            file_manager: filesystem::FileSystemManager::new(
+                Path::new("./k8s/environments")
+                    .join(name)
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            ),
         }
     }
 
@@ -32,18 +51,22 @@ impl Environment {
         self.service_whitelist.iter().find(|s| s.name == name)
     }
 
+    // Returns a list of services in the environment.
     pub fn list_services(&self) -> Vec<&Service> {
         self.service_whitelist.iter().collect()
     }
 
+    // Adds a service to the environment.
     pub fn add_service(&mut self, service: Service) {
         self.service_whitelist.push(service);
     }
 
+    // Removes a service from the environment.
     pub fn remove_service(&mut self, name: &str) {
         self.service_whitelist.retain(|s| s.name != name);
     }
 
+    // Returns an environment variable from the environment.
     pub fn get_environment_variable(&self, name: &str) -> Option<&EnvironmentVariable> {
         if let Some(env_vars) = &self.environment_variables {
             env_vars.iter().find(|e| e.name == name)
@@ -52,16 +75,92 @@ impl Environment {
         }
     }
 
+    // Adds an environment variable to the environment.
     pub fn add_environment_variable(&mut self, env_var: EnvironmentVariable) {
         if let Some(env_vars) = &mut self.environment_variables {
             env_vars.push(env_var);
         }
     }
 
+    // Removes an environment variable from the environment.
     pub fn remove_environment_variable(&mut self, name: &str) {
         if let Some(env_vars) = &mut self.environment_variables {
             env_vars.retain(|e| e.name != name);
         }
+    }
+
+    // Loads the environment configuration from the `./k8s/environments/<name>/config.toml` file, overriding default values set in the constructor.
+    // An error is returned if the file is missing, cannot be read, or contains an incompatible schema version.
+    pub fn load_from_file(name: &String) -> Result<Self, Box<dyn std::error::Error>> {
+        let filemanager = filesystem::FileSystemManager::new(
+            Path::new("./k8s/environments")
+                .join(name)
+                .to_str()
+                .unwrap()
+                .to_string(),
+        );
+
+        let contents = filemanager.read_file(&"config.toml".to_string())?;
+        let env = toml::from_str::<Self>(&contents)?; // Use destructuring assignment
+
+        if env.schema_version != "0.1.0" {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                    "Invalid schema version: expected {}, found {}",
+                    "0.1.0", env.schema_version
+                ),
+            )));
+        }
+
+        Ok(env)
+    }
+
+    pub fn save_to_file(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let contents = toml::to_string(&self)?;
+        self.file_manager
+            .create_file(&"config.toml".to_string(), &contents)?;
+        Ok(())
+    }
+
+    pub fn get_variables(&self, service: &Service) -> Vec<(String, String)> {
+        let mut variables = Vec::new();
+        variables.push(("name".to_string(), self.name.clone()));
+        variables.push(("log_level".to_string(), self.log_level.clone()));
+        variables.push(("domain".to_string(), self.domain.clone()));
+
+        variables.push(("deployment_date".to_string(), get_current_timestamp()));
+
+        variables.push((
+            "default_replicas".to_string(),
+            self.default_replicas.to_string(),
+        ));
+        variables.push(("registry".to_string(), self.registry.clone()));
+        variables.push(("schema_version".to_string(), self.schema_version.clone()));
+
+        variables.push(("service_name".to_string(), service.name.clone()));
+
+        variables.push(("service_namespace".to_string(), service.namespace.clone()));
+
+        if let Some(path) = &service.path {
+            variables.push(("service_path".to_string(), path.clone()));
+        }
+
+        variables.push(("service_version".to_string(), service.get_version()));
+
+        if let Some(env_vars) = &self.environment_variables {
+            env_vars.iter().for_each(|e| {
+                variables.push((
+                    e.name.clone(),
+                    e.value
+                        .clone()
+                        .unwrap_or(Value::String("".to_string()))
+                        .to_string(),
+                ))
+            })
+        }
+
+        variables
     }
 }
 

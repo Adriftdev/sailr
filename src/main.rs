@@ -1,8 +1,10 @@
 use sailr::{
     cli::{Cli, Commands, EnvCommands},
+    environment::Environment,
     errors::CliError,
-    generate, provider,
-    utils::ensure_dir,
+    generate::Generator,
+    provider,
+    templates::TemplateManager,
 };
 
 use anyhow::Result;
@@ -29,10 +31,6 @@ async fn main() -> Result<(), CliError> {
                 std::process::exit(1);
             }
 
-            ensure_dir("./k8s/environments")?;
-            ensure_dir("./k8s/templates")?;
-            ensure_dir("./k8s/generated")?;
-
             if arg.provider == "aws" {
                 logger.info(&format!("Initializing a new Sailr project on AWS"));
                 provider::Provider::new(provider::AwsProvider).initialize_project()?;
@@ -49,7 +47,7 @@ async fn main() -> Result<(), CliError> {
                 provider::Provider::new(provider::K3SProvider).initialize_project()?;
             }
 
-            sailr::utils::copy_templates()?;
+            TemplateManager::new().copy_base_templates().unwrap();
         }
         Commands::Env(a) => match a.command {
             EnvCommands::Create(arg) => {
@@ -59,16 +57,46 @@ async fn main() -> Result<(), CliError> {
         },
         Commands::Deploy(arg) => {
             logger.info(&format!("Deploying an environment"));
-            sailr::deploy::deploy(arg.context.to_string(), &arg.name).await?;
+            sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }
         Commands::Generate(arg) => {
             logger.info(&format!("Generating an environment"));
-            generate::generate(&arg.name).await?;
+
+            let env = match Environment::load_from_file(&arg.name) {
+                Ok(env) => env,
+                Err(e) => {
+                    logger.error(&format!("Failed to load environment: {}", e));
+                    std::process::exit(1);
+                }
+            };
+
+            let mut template_manager = TemplateManager::new();
+            let templates = &template_manager.read_templates(Some(&env)).unwrap();
+
+            let services = env.list_services();
+
+            let mut generator = Generator::new();
+
+            for service in services {
+                let variables = &env.get_variables(service);
+                for template in templates {
+                    if template.name != service.name {
+                        continue;
+                    }
+                    let content = template_manager
+                        .replace_variables(template, &variables)
+                        .unwrap();
+
+                    generator.add_template(&template, content)
+                }
+            }
+            generator.generate(&arg.name)?;
+            logger.info(&format!("Generation Complete"));
         }
-        Commands::Go(arg) => {
+        Commands::Go(_arg) => {
             logger.info(&format!("Generating and deploying an environment"));
-            generate::generate(&arg.name).await?;
-            sailr::deploy::deploy(arg.context.to_string(), &arg.name).await?;
+            //generate::generate(&arg.name).await?;
+            //sailr::deploy::deploy(arg.context.to_string(), &arg.name).await?;
         }
         _ => {}
     }

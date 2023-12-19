@@ -1,12 +1,12 @@
+pub mod kube_api;
 use anyhow::Result;
-
 
 use std::path::Path;
 
 use async_recursion::async_recursion;
 use scribe_rust::{log, Color};
 
-use crate::{kube as crate_kube, errors::DeployError};
+use crate::errors::DeployError;
 
 #[async_recursion]
 pub async fn apply_path_recursive(
@@ -44,7 +44,7 @@ pub async fn apply_path_recursive(
         }
     } else {
         let path = path.to_path_buf();
-        let res = crate_kube::apply(Some(path), client, discovery).await?;
+        let res = kube_api::apply(Some(path), client, discovery).await?;
         manifest.push(res);
     }
 
@@ -57,7 +57,7 @@ pub async fn deploy(ctx: String, env_name: &str) -> Result<(), DeployError> {
         "Deploying",
         &format!("Deploying to {} for {}", ctx, env_name),
     );
-    let client = crate_kube::create_client(ctx).await?;
+    let client = kube_api::create_client(ctx).await?;
     let discovery = kube::Discovery::new(client.clone())
         .run()
         .await

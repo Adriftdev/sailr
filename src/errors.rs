@@ -144,6 +144,20 @@ pub enum SailrError {
 }
 
 #[derive(Error, Debug)]
+pub enum FileSystemManagerError {
+    #[error("Directory does not exist: {0}")]
+    DirectoryNotFound(String),
+    #[error("Failed to create directory: {0}")]
+    DirectoryCreationFailed(String),
+    #[error("Failed to remove directory: {0}")]
+    DirectoryRemovalFailed(String),
+    #[error("Failed to read file!: {0}")]
+    FileReadFailed(String),
+    #[error("Failed to write file!: {0}")]
+    FileWriteFailed(String),
+}
+
+#[derive(Error, Debug)]
 pub enum DeployError {
     #[error("Failed to deploy environment: {0}")]
     EnvironmentDeploymentFailed(String),
