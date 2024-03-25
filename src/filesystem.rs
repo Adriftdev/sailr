@@ -90,12 +90,18 @@ impl FileSystemManager {
 
     pub fn delete_file(&self, file_name: &String) -> Result<(), Box<dyn Error>> {
         let path = Path::new(self.path.as_str()).join(file_name);
+        if !path.exists() {
+            return Ok(());
+        }
         remove_file(path)?;
         Ok(())
     }
 
     pub fn delete_dir(&self, dir_name: &String) -> Result<(), Box<dyn Error>> {
         let path = Path::new(self.path.as_str()).join(dir_name);
+        if !path.exists() {
+            return Ok(());
+        }
         remove_dir_all(path)?;
         Ok(())
     }

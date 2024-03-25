@@ -1,4 +1,7 @@
-use clap::{clap_derive::Args, command, Parser, Subcommand};
+use std::io;
+
+use clap::{clap_derive::Args, command, Command, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate, Generator, Shell};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -10,8 +13,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Initialize a new Sailr project
+    /// Initialize a new project
     Init(InitArgs),
+    /// Generate shell completions
+    Completions(CompletionsArgs),
     /// Manage environments
     Env(EnvArgs),
     /// Deploy an environment
@@ -20,21 +25,16 @@ pub enum Commands {
     Generate(GenerateArgs),
     /// Generate and deploy an environment
     Go(GoArgs),
-    /// Archive an environment
-    Archive(ArchiveArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct InitArgs {
-    /// Provider to use
-    #[arg(
-        name = "provider",
-        short = 'p',
-        long = "provider",
-        help = "Provider to use"
-    )]
-    pub provider: String,
+pub struct CompletionsArgs {
+    #[arg(help = "Shell to generate completions for", value_enum)]
+    pub shell: Shell,
 }
+
+#[derive(Debug, Args)]
+pub struct InitArgs {}
 
 #[derive(Debug, Args)]
 pub struct EnvArgs {
@@ -80,6 +80,18 @@ pub struct CreateArgs {
         help = "Enable system registry pod"
     )]
     pub registry: bool,
+
+    #[arg(help = "Provider to use", value_enum)]
+    pub provider: Provider,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum Provider {
+    GCP,
+}
+
+pub fn print_completions<G: Generator>(gen: G, cmd: &mut Command) {
+    generate(gen, cmd, cmd.get_name().to_string(), &mut io::stdout());
 }
 
 #[derive(Debug, Args)]

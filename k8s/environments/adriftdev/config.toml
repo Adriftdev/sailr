@@ -1,0 +1,19 @@
+schema_version = "0.1.0"
+name = "adriftdev"
+log_level = "INFO"
+domain = "localhost"
+default_replicas = 1
+registry = "docker.io"
+
+[[service_whitelist]]
+path = "redis"
+name = "default/redis"
+version = "latest"
+
+[[environment_variables]]
+name = "REDIS_HOST"
+value = "redis"
+
+[[environment_variables]]
+name = "REDIS_PORT"
+value = "6379"

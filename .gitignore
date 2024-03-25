@@ -1,6 +1,6 @@
 target/*
 .env
 .DS_Store
-k8s/*
+
 !src/k8s/*
 .kube
