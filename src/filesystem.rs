@@ -70,10 +70,22 @@ impl FileSystemManager {
         Ok(())
     }
 
-    pub fn read_file(&self, file_name: &String) -> Result<String, Box<dyn Error>> {
-        let path = Path::new(self.path.as_str()).join(file_name);
-        let contents: String = read_to_string(path)?;
-        Ok(contents)
+    pub fn read_file(
+        &self,
+        file_name: &String,
+        dir: Option<&String>,
+    ) -> Result<String, Box<dyn Error>> {
+        if let Some(dir_path) = dir {
+            let path = Path::new(dir_path).join(file_name);
+            println!("{:?}", path);
+            let contents: String = read_to_string(path)?;
+            Ok(contents)
+        } else {
+            let path = Path::new(self.path.as_str()).join(file_name);
+            println!("{:?}", path);
+            let contents: String = read_to_string(path)?;
+            Ok(contents)
+        }
     }
 
     pub fn read_dir(&self, dir_name: &String) -> Result<Vec<String>, Box<dyn Error>> {

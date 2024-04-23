@@ -1,8 +1,8 @@
-use std::error::Error;
+use std::{error::Error, path::Path};
 
 use scribe_rust::{log, Color};
 
-use crate::{environment::Environment, filesystem::FileSystemManager};
+use crate::{config::Config, environment::Environment, filesystem::FileSystemManager};
 
 pub struct Template {
     pub name: String,
@@ -94,10 +94,11 @@ impl TemplateManager {
     pub fn read_templates(
         &mut self,
         env: Option<&Environment>,
-    ) -> Result<Vec<Template>, Box<dyn Error>> {
+    ) -> Result<(Vec<Template>, Vec<Config>), Box<dyn Error>> {
         let template_dirs = self.filemanager.read_dir(&"".to_string())?;
 
         let mut templates = Vec::new();
+        let mut config_maps = Vec::new();
 
         for template_name in template_dirs {
             let template_dir = self.filemanager.read_dir(&template_name)?;
@@ -114,9 +115,20 @@ impl TemplateManager {
             }
 
             for template_file in template_dir {
+                if template_file.contains("config") {
+                    let (config_name, config_map_content) =
+                        self.read_config_files(&template_name)?;
+                    config_maps.push(Config::new(
+                        &template_name.clone(),
+                        &config_map_content,
+                        &config_name,
+                        &"./k8s/templates".to_string(),
+                    ));
+                    continue;
+                }
                 let path = format!("{}/{}", &template_name, &template_file);
                 log(Color::Gray, "Reading", &path);
-                let template = self.filemanager.read_file(&path)?;
+                let template = self.filemanager.read_file(&path, None)?;
                 templates.push(Template::new(
                     template_name.clone(),
                     template_file,
@@ -125,7 +137,55 @@ impl TemplateManager {
             }
         }
 
-        Ok(templates)
+        Ok((templates, config_maps))
+    }
+
+    pub fn read_config_files(
+        &self,
+        path: &String,
+    ) -> Result<(String, Vec<String>), Box<dyn Error>> {
+        let config_files = self.filemanager.read_dir(
+            &Path::new(&path.to_string())
+                .join("config")
+                .to_str()
+                .unwrap()
+                .to_string(),
+        )?;
+
+        let config_map = config_files.into_iter().fold(
+            (
+                format!(
+                    "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {}\ndata:\n",
+                    path
+                )
+                .to_string(),
+                Vec::new(),
+            ),
+            |mut acc: (String, Vec<String>), config| {
+                let config_file = &Path::new(&path.to_string())
+                    .join("config")
+                    .join(&config)
+                    .to_str()
+                    .unwrap()
+                    .to_string();
+                log(Color::Gray, "Reading", &config_file);
+                let config_content = self
+                    .filemanager
+                    .read_file(&config_file, Some(&"./k8s/templates".to_string()))
+                    .unwrap();
+
+                acc.0.push_str(&format!("\n  {:?}: |", &config));
+
+                for line in config_content.lines() {
+                    acc.0.push_str(&format!("\n    {}", &line))
+                }
+
+                acc.1.push(config);
+                acc
+            },
+        );
+
+        Ok(config_map)
     }
 
     // Replaces variables in the template. Any missing variable will be left untouched,

@@ -15,7 +15,7 @@ use scribe_rust;
 
 fn generate(name: &str, env: &Environment) {
     let mut template_manager = TemplateManager::new();
-    let templates = &template_manager.read_templates(Some(&env)).unwrap();
+    let (templates, config_maps) = &template_manager.read_templates(Some(&env)).unwrap();
 
     let services = env.list_services();
 
@@ -32,6 +32,13 @@ fn generate(name: &str, env: &Environment) {
                 .unwrap();
 
             generator.add_template(&template, content)
+        }
+        for config in config_maps {
+            if config.name != service.name {
+                continue;
+            }
+
+            generator.add_config_map(config);
         }
     }
     let _ = generator.generate(&name.to_string());

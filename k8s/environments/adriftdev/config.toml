@@ -10,6 +10,11 @@ path = "redis"
 name = "default/redis"
 version = "latest"
 
+[[service_whitelist]]
+path = "postgres"
+name = "default/postgres"
+version = "latest"
+
 [[environment_variables]]
 name = "REDIS_HOST"
 value = "redis"

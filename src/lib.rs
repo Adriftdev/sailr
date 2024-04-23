@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod config;
 pub mod deployment;
 pub mod environment;
 pub mod errors;

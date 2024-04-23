@@ -100,7 +100,7 @@ impl Environment {
                 .to_string(),
         );
 
-        let contents = filemanager.read_file(&"config.toml".to_string())?;
+        let contents = filemanager.read_file(&"config.toml".to_string(), None)?;
         let env = toml::from_str::<Self>(&contents)?; // Use destructuring assignment
 
         if env.schema_version != "0.1.0" {

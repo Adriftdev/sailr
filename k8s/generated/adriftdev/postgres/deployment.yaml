@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: default
+  annotations:
+    date: 2024-04-23 21:18:33
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      volumes:
+        - name: postgres-pvc
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+      containers:
+        - name: postgres-container
+          image: postgres:latest
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-password
+                  key: db-password
+            - name: DOMAIN
+              value: localhost
+            - name: LOG_LEVEL
+              value: INFO
+            - name: PGDATA
+              value: /var/lib/postgresql/data/db-files/
+          ports:
+            - containerPort: 5432
+              hostPort: 5432
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - mountPath: "/var/lib/postgresql/data"
+              name: postgres-pvc
