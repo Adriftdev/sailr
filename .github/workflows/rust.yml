@@ -15,26 +15,14 @@ jobs:
     strategy:
       matrix:
         platform:
-          - release_for: FreeBSD-x86_64
+          - os_name: Linux-x86_64
             os: ubuntu-20.04
-            target: x86_64-unknown-freebsd
-            bin: precious
-            name: precious-FreeBSD-x86_64.tar.gz
-            command: build
-
-          - release_for: Windows-x86_64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            bin: precious.exe
-            name: precious-Windows-x86_64.zip
-            command: both
-
-          - release_for: macOS-x86_64
-            os: macOS-latest
-            target: x86_64-apple-darwin
-            bin: precious
-            name: precious-Darwin-x86_64.tar.gz
-            command: both
+            target: x86_64-unknown-linux-musl
+            bin: ubi
+            name: ubi-Linux-x86_64-musl.tar.gz
+            cross: false
+            cargo_command: cargo
+            
 
     runs-on: ${{ matrix.platform.os }}
     steps:
