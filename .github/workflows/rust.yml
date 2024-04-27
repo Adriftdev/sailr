@@ -43,6 +43,9 @@ jobs:
       - name: Install tools
         shell: bash
         run: |
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list~
+          sudo sed -Ei 's/^# deb-src /deb-src /' /etc/apt/sources.list
+          sudo apt-get update
           sudo apt build-dep nginx
           sudo apt install musl-tools
         if: ${{ !contains(matrix.platform.os, 'macOS-latest') }}
