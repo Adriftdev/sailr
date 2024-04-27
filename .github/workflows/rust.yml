@@ -50,6 +50,7 @@ jobs:
         shell: bash
         run: |
           export PKG_CONFIG_SYSROOT_DIR=/
+          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
           export RUSTFLAGS="-C target-feature=-crt-static"
           rustup target add ${{ matrix.platform.target }} 
           ${{ matrix.platform.cargo_command }} build --locked --release --target ${{ matrix.platform.target }}          
