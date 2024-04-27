@@ -39,6 +39,7 @@ jobs:
           git config --global user.email "joshua.tracey08@gmail.com"
           git config --global user.name "Joshua Tracey"
           export PKG_CONFIG_SYSROOT_DIR=/
+          export PKG_CONFIG_ALLOW_CROSS=1
           
       - name: Install tools
         shell: bash
