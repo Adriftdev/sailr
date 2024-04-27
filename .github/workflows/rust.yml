@@ -43,13 +43,14 @@ jobs:
       - name: Install tools
         shell: bash
         run: |
-          sudo apt install musl-tools libssl-dev
+          sudo apt install musl-tools openssl-dev
         if: ${{ !contains(matrix.platform.os, 'macOS-latest') }}
 
       - name: Build binary (*nix)
         shell: bash
         run: |
           export PKG_CONFIG_SYSROOT_DIR=/
+          export RUSTFLAGS="-C target-feature=-crt-static"
           rustup target add ${{ matrix.platform.target }} 
           ${{ matrix.platform.cargo_command }} build --locked --release --target ${{ matrix.platform.target }}          
         if: ${{ !contains(matrix.platform.os, 'windows') }}
