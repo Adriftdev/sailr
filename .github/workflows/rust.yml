@@ -50,8 +50,22 @@ jobs:
         shell: bash
         run: |
           export PKG_CONFIG_SYSROOT_DIR=/
-          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
-          export RUSTFLAGS="-C target-feature=-crt-static"
+          export OPENSSL_DIR="/opt/openssl"
+          curl "https://www.openssl.org/source/openssl-1.1.1t.tar.gz" \
+            --output "/tmp/openssl.tar.gz"
+          mkdir --parent "/tmp/openssl"
+          tar \
+            --extract \
+            --file="/tmp/openssl.tar.gz" \
+            --strip=1 \
+            --directory="/tmp/openssl"
+          ( \
+            cd "${TMP}/openssl" \
+            ./config \
+              --prefix="/opt/openssl" \
+              --openssldir="/opt/openssl" \
+            make && make install \
+          )
           rustup target add ${{ matrix.platform.target }} 
           ${{ matrix.platform.cargo_command }} build --locked --release --target ${{ matrix.platform.target }}          
         if: ${{ !contains(matrix.platform.os, 'windows') }}
