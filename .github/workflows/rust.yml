@@ -31,6 +31,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+      - name: Install tools
+        shell: bash
+        run: sudo apt install musl-tools
       - name: Build binary
         uses: houseabsolute/actions-rust-cross@v0
         with:
