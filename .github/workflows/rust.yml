@@ -22,7 +22,10 @@ jobs:
             name: ubi-Linux-x86_64-musl.tar.gz
             cross: false
             cargo_command: cargo
-            
+        toolchain:
+          - stable
+          - beta
+          - nightly
 
     runs-on: ${{ matrix.platform.os }}
     steps:
