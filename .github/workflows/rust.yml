@@ -37,7 +37,7 @@ jobs:
       - name: Install Buildroot Dependencies
         run: |   
           sudo apt-get update 
-          sudo apt-get install -y build-essential make host-pkg-conf ncurses-dev help2man
+          sudo apt-get install -y build-essential make ncurses-dev help2man
 
       - name: Configure and Build Sysroot with Buildroot
         run: |
