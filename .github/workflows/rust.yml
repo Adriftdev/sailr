@@ -43,7 +43,7 @@ jobs:
       - name: Install tools
         shell: bash
         run: |
-          sudo apt install musl-tools openssl-dev
+          sudo apt install musl-tools libssl-dev
         if: ${{ !contains(matrix.platform.os, 'macOS-latest') }}
 
       - name: Build binary (*nix)
