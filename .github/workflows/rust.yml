@@ -45,24 +45,17 @@ jobs:
         run: |
           git config --global user.email "joshua.tracey08@gmail.com"
           git config --global user.name "Joshua Tracey"
+          export PKG_CONFIG_SYSROOT_DIR=/
           
       - name: Install tools
         shell: bash
         run: sudo apt install musl-tools
         if: ${{ !contains(matrix.platform.os, 'macOS-latest') }}
-        
-      - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v0
-        with:
-          command: "build"
-          target: ${{ matrix.platform.target }}
-          toolchain: ${{ matrix.toolchain }}
-          args: "--locked --release"
-          strip: true
-          
+
       - name: Build binary (*nix)
         shell: bash
         run: |
+          export PKG_CONFIG_SYSROOT_DIR=/
           ${{ matrix.platform.cargo_command }} build --locked --release --target ${{ matrix.platform.target }}          
         if: ${{ !contains(matrix.platform.os, 'windows') }}
         
