@@ -42,7 +42,9 @@ jobs:
           
       - name: Install tools
         shell: bash
-        run: sudo apt install musl-tools openssl-devel
+        run: |
+          sudo apt build-dep nginx
+          sudo apt install musl-tools
         if: ${{ !contains(matrix.platform.os, 'macOS-latest') }}
 
       - name: Build binary (*nix)
