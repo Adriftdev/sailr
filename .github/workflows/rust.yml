@@ -11,17 +11,26 @@ env:
 
 jobs:
   release:
-    name: Release - ${{ matrix.platform.release_for }}
+    name: Release - ${{ matrix.platform.os_name }} with rust ${{ matrix.toolchain }}
     strategy:
       matrix:
         platform:
           - os_name: Linux-x86_64
             os: ubuntu-20.04
+            release_for: linux_x86_64
             target: x86_64-unknown-linux-musl
             bin: ubi
             name: ubi-Linux-x86_64-musl.tar.gz
-            cross: false
+            cross: true
             cargo_command: cargo
+            
+          - os_name: macOS-aarch64
+            os: macOS-latest
+            target: aarch64-apple-darwin
+            bin: ubi
+            name: ubi-Darwin-aarch64.tar.gz
+            skip_tests: true
+            
         toolchain:
           - stable
           - beta
@@ -31,9 +40,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+        
+      - name: Configure Git
+        run: |
+          git config --global user.email "joshua.tracey08@gmail.com"
+          git config --global user.name "Joshua Tracey"
+          
       - name: Install tools
         shell: bash
         run: sudo apt install musl-tools
+        
       - name: Build binary
         uses: houseabsolute/actions-rust-cross@v0
         with:
