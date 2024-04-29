@@ -6,13 +6,21 @@ default_replicas = 1
 registry = "docker.io"
 
 [[service_whitelist]]
-path = "redis"
-name = "default/redis"
+name = "redis"
 version = "latest"
 
 [[service_whitelist]]
-path = "postgres"
-name = "default/postgres"
+name = "postgres"
+version = "latest"
+
+[[service_whitelist]]
+path = "core/test"
+name = "test"
+version = "latest"
+
+[[service_whitelist]]
+path = "core/test2"
+name = "test2"
 version = "latest"
 
 [[environment_variables]]

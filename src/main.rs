@@ -24,7 +24,8 @@ fn generate(name: &str, env: &Environment) {
     for service in services {
         let variables = &env.get_variables(service);
         for template in templates {
-            if template.name != service.name {
+            if template.name != service.name && template.name != service.path.clone().unwrap() {
+                println!("Skipping template: {}", template.name);
                 continue;
             }
             let content = template_manager

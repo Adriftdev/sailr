@@ -277,21 +277,23 @@ impl<'de> Deserialize<'de> for Service {
                 }
             };
 
-        let name = service.get("name").unwrap();
+        let name = service.get("name").expect("Service name is required");
+        let namespace = service
+            .get("namespace")
+            .unwrap_or(&"default".to_string())
+            .to_string();
+
         let path = match service.get("path") {
             Some(path) => path,
             None => "",
         };
         let version = service.get("version").unwrap();
 
-        let mut name = name.split('/');
-        let namespace = name.next().unwrap();
-        let name = name.next().unwrap();
         if !version.contains('-') && !version.contains('.') {
             let tag = version.to_string();
             return Ok(Self::new(
                 name,
-                namespace,
+                &namespace,
                 Some(path),
                 None,
                 None,

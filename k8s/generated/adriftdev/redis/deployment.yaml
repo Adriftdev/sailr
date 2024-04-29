@@ -5,7 +5,7 @@ metadata:
   name: redis
   namespace: default
   annotations:
-    date: 2024-04-23 21:18:33
+    date: 2024-04-29 16:06:43
 spec:
   replicas: 1
   selector:

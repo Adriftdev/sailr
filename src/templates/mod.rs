@@ -1,9 +1,10 @@
-use std::{error::Error, path::Path};
+use std::{collections::HashSet, error::Error, path::Path};
 
 use scribe_rust::{log, Color};
 
 use crate::{config::Config, environment::Environment, filesystem::FileSystemManager};
 
+#[derive(Clone, Debug)]
 pub struct Template {
     pub name: String,
     pub file_name: String,
@@ -95,7 +96,45 @@ impl TemplateManager {
         &mut self,
         env: Option<&Environment>,
     ) -> Result<(Vec<Template>, Vec<Config>), Box<dyn Error>> {
-        let template_dirs = self.filemanager.read_dir(&"".to_string())?;
+        let mut template_dirs: HashSet<String> = HashSet::new();
+        //read the templates from the environment
+        //if path is specified in path, read the templates from the path instead and append to the template_dirs
+        if let Some(env) = &env {
+            for service in &env.service_whitelist {
+                println!("Service: {:?}", service.name);
+
+                if service.path == None || service.path.clone().unwrap() == "".to_string() {
+                    template_dirs.insert(service.name.clone());
+                    continue;
+                }
+
+                println!("Service Path: {:?}", service.path.clone().unwrap());
+
+                let path = service
+                    .path
+                    .clone()
+                    .unwrap()
+                    .split("/")
+                    .into_iter()
+                    .fold(Path::new(&"".to_string()).to_owned(), |acc, x| acc.join(x));
+
+                let parent = path.parent().unwrap().to_str().unwrap().to_string();
+
+                let service_template_dir = self.filemanager.read_dir(&parent)?;
+                template_dirs.remove(&path.parent().unwrap().to_str().unwrap().to_string());
+
+                let templates = service_template_dir.into_iter().map(|x| {
+                    Path::new(path.parent().unwrap())
+                        .join(x)
+                        .to_str()
+                        .unwrap()
+                        .to_string()
+                });
+                template_dirs.extend(templates);
+            }
+        }
+
+        println!("Template Dirs: {:?}", template_dirs.clone());
 
         let mut templates = Vec::new();
         let mut config_maps = Vec::new();
@@ -105,7 +144,7 @@ impl TemplateManager {
 
             if let Some(env) = &env {
                 if !env.service_whitelist.iter().any(|x| {
-                    if &x.name == &template_name {
+                    if template_name.contains(x.name.as_str()) {
                         return true;
                     }
                     return false;
@@ -126,7 +165,11 @@ impl TemplateManager {
                     ));
                     continue;
                 }
-                let path = format!("{}/{}", &template_name, &template_file);
+                let path = Path::new(&template_name)
+                    .join(&template_file)
+                    .to_str()
+                    .unwrap()
+                    .to_string();
                 log(Color::Gray, "Reading", &path);
                 let template = self.filemanager.read_file(&path, None)?;
                 templates.push(Template::new(
