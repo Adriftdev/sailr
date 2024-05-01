@@ -134,8 +134,6 @@ impl TemplateManager {
             }
         }
 
-        println!("Template Dirs: {:?}", template_dirs.clone());
-
         let mut templates = Vec::new();
         let mut config_maps = Vec::new();
 
