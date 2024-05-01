@@ -19,9 +19,19 @@ tar = "~0.4"
 chrono = "~0.4"
 scribe-rust = "~0.2"
 k8s-openapi = { version = "~0.18", features = ["v1_26"] }
-kube = { version = "~0.83", features = ["runtime", "derive", "client", "rustls-tls", "jsonpatch"] }
+kube = { version = "~0.83", features = [
+    "runtime",
+    "derive",
+    "client",
+    "rustls-tls",
+    "jsonpatch",
+] }
 tower = { version = "0.4.13", features = ["buffer", "filter", "util"] }
-tower-http = { version = "0.4.0", features = ["auth", "map-response-body", "trace"] }
+tower-http = { version = "0.4.0", features = [
+    "auth",
+    "map-response-body",
+    "trace",
+] }
 hyper = { version = "0.14.13", features = ["client", "http1", "stream", "tcp"] }
 hyper-rustls = { version = "0.24.0" }
 async-recursion = "1.0.4"
@@ -29,7 +39,6 @@ thiserror = "1.0.43"
 anyhow = "1.0.72"
 serde_json = "1.0.103"
 clap_complete = "4.5.1"
-roomservice = { path= "./roomservice-rust"}
 
 checksums = "0.5"
 colored = "1.6.1"
@@ -39,13 +48,6 @@ serde_derive = "1.0.80"
 subprocess = "0.1.17"
 globwalk = "0.5.0"
 ignore = "0.4.7"
-
-[workspace]
-
-members = [
-    "roomservice-rust",
-]
-
 
 [profile.release]
 opt-level = 3

@@ -188,6 +188,7 @@ pub struct Service {
     pub name: String,
     pub namespace: String,
     pub path: Option<String>,
+    pub build: Option<String>,
     pub major_version: Option<i32>,
     pub minor_version: Option<i32>,
     pub patch_version: Option<i32>,
@@ -199,6 +200,7 @@ impl Service {
         name: &str,
         namespace: &str,
         path: Option<&str>,
+        build: Option<&str>,
         major_version: Option<i32>,
         minor_version: Option<i32>,
         patch_version: Option<i32>,
@@ -208,6 +210,7 @@ impl Service {
             name: name.to_string(),
             namespace: namespace.to_string(),
             path: path.map(|p| p.to_string()),
+            build: build.map(|b| b.to_string()),
             major_version,
             minor_version,
             patch_version,
@@ -225,6 +228,10 @@ impl Serialize for Service {
         );
         if self.path.is_some() {
             service.insert("path".to_string(), self.path.clone().unwrap());
+        }
+
+        if self.build.is_some() {
+            service.insert("build".to_string(), self.build.clone().unwrap());
         }
 
         if self.tag.is_none()
@@ -287,6 +294,9 @@ impl<'de> Deserialize<'de> for Service {
             Some(path) => path,
             None => "",
         };
+
+        let build = service.get("build");
+
         let version = service.get("version").unwrap();
 
         if !version.contains('-') && !version.contains('.') {
@@ -295,6 +305,7 @@ impl<'de> Deserialize<'de> for Service {
                 name,
                 &namespace,
                 Some(path),
+                build.map(|b| b.as_str()),
                 None,
                 None,
                 None,
@@ -333,6 +344,7 @@ impl<'de> Deserialize<'de> for Service {
                 name: name.to_string(),
                 namespace: namespace.to_string(),
                 path: Some(path.to_string()),
+                build: build.cloned(),
                 major_version,
                 minor_version,
                 patch_version,
@@ -371,6 +383,7 @@ impl<'de> Deserialize<'de> for Service {
                 name: name.to_string(),
                 namespace: namespace.to_string(),
                 path: Some(path.to_string()),
+                build: build.cloned(),
                 major_version,
                 minor_version,
                 patch_version,

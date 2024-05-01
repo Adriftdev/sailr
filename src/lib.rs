@@ -1,3 +1,4 @@
+pub mod builder;
 pub mod cli;
 pub mod config;
 pub mod deployment;
@@ -6,5 +7,6 @@ pub mod errors;
 pub mod filesystem;
 pub mod generate;
 pub mod provider;
+pub mod roomservice;
 pub mod templates;
 pub mod utils;

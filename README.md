@@ -16,6 +16,11 @@ and get more out of their Kubernetes deployments.
 
 Try Sailr today and see the difference it can make.
 
+### System Requirments
+
+- OpenTofu (Terraform replacement).
+- Docker
+
 ### Usage 
 
 #### Builtin Template Environment Variables 

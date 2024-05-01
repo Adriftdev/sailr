@@ -30,7 +30,8 @@ pub fn create_env_toml(
         let redis = Service::new(
             "redis",
             "default",
-            Some("redis"),
+            None,
+            None,
             None,
             None,
             None,
@@ -52,7 +53,8 @@ pub fn create_env_toml(
         let postgres = Service::new(
             "postgres",
             "default",
-            Some("postgres"),
+            None,
+            None,
             None,
             None,
             None,
@@ -78,7 +80,8 @@ pub fn create_env_toml(
         let registry = Service::new(
             "registry",
             "kube-system",
-            Some("registry"),
+            None,
+            None,
             None,
             None,
             None,

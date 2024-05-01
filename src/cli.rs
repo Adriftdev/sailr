@@ -23,6 +23,8 @@ pub enum Commands {
     Deploy(DeployArgs),
     /// Generate an environment
     Generate(GenerateArgs),
+    /// Build related projects
+    Build(BuildArgs),
     /// Generate and deploy an environment
     Go(GoArgs),
 }
@@ -128,6 +130,35 @@ pub struct GenerateArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct BuildArgs {
+    /// Name of the environment
+    #[arg(
+        name = "name",
+        short = 'n',
+        long = "name",
+        help = "Name of the environment"
+    )]
+    pub name: String,
+
+    #[arg(
+        name = "force",
+        short = 'f',
+        long = "force",
+        help = "Force all rooms to build, ignore the cache"
+    )]
+    pub force: Option<bool>,
+
+    /// Name of the environment
+    #[arg(
+        name = "ignore",
+        short = 'i',
+        long = "ignore",
+        help = "rooms to ignore from the build of the environment"
+    )]
+    pub ignore: Option<String>,
+}
+
+#[derive(Debug, Args)]
 pub struct GoArgs {
     /// Kubernetes context to use
     #[arg(
@@ -146,6 +177,23 @@ pub struct GoArgs {
         help = "Name of the environment"
     )]
     pub name: String,
+
+    #[arg(
+        name = "force",
+        short = 'f',
+        long = "force",
+        help = "Force all rooms to build, ignore the cache"
+    )]
+    pub force: Option<bool>,
+
+    /// Name of the environment
+    #[arg(
+        name = "ignore",
+        short = 'i',
+        long = "ignore",
+        help = "rooms to ignore from the build of the environment"
+    )]
+    pub ignore: Option<String>,
 }
 
 #[derive(Debug, Args)]

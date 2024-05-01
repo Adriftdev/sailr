@@ -1,6 +1,7 @@
 use std::io;
 
 use sailr::{
+    builder::{split_matches, Builder},
     cli::{Cli, Commands, EnvCommands},
     environment::Environment,
     errors::CliError,
@@ -84,6 +85,30 @@ async fn main() -> Result<(), CliError> {
 
             logger.info(&format!("Generation Complete"));
         }
+        Commands::Build(arg) => {
+            let env = match Environment::load_from_file(&arg.name) {
+                Ok(env) => env,
+                Err(e) => {
+                    logger.error(&format!("Failed to load environment: {}", e));
+                    std::process::exit(1);
+                }
+            };
+
+            let services = env
+                .list_services()
+                .into_iter()
+                .filter(|s| s.build.is_some());
+
+            let mut builder = Builder::new(
+                "./".to_string(),
+                ".roomservice".to_string(),
+                arg.force.unwrap_or(false),
+                services.into_iter().map(|s| s.name.clone()).collect(),
+                split_matches(arg.ignore),
+            );
+
+            builder.build();
+        }
         Commands::Go(arg) => {
             logger.info(&format!("Generating and deploying an environment"));
 
@@ -96,6 +121,22 @@ async fn main() -> Result<(), CliError> {
             };
 
             generate(&arg.name, &env);
+
+            let services = env
+                .list_services()
+                .into_iter()
+                .filter(|s| s.build.is_some());
+
+            let mut builder = Builder::new(
+                "./".to_string(),
+                ".roomservice".to_string(),
+                arg.force.unwrap_or(false),
+                services.into_iter().map(|s| s.name.clone()).collect(),
+                split_matches(arg.ignore),
+            );
+
+            builder.build();
+
             sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }
     }
