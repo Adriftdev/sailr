@@ -4,7 +4,7 @@ metadata:
   name: postgres
   namespace: default
   annotations:
-    date: 2024-04-29 16:06:43
+    date: 2024-05-01 13:20:49
 spec:
   replicas: 1
   selector:

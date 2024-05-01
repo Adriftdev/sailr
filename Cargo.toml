@@ -29,3 +29,23 @@ thiserror = "1.0.43"
 anyhow = "1.0.72"
 serde_json = "1.0.103"
 clap_complete = "4.5.1"
+roomservice = { path= "./roomservice-rust"}
+
+checksums = "0.5"
+colored = "1.6.1"
+glob = "0.2.11"
+rayon = "1.0.0"
+serde_derive = "1.0.80"
+subprocess = "0.1.17"
+globwalk = "0.5.0"
+ignore = "0.4.7"
+
+[workspace]
+
+members = [
+    "roomservice-rust",
+]
+
+
+[profile.release]
+opt-level = 3
