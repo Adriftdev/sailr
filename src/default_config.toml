@@ -27,7 +27,7 @@ path = "core/test2" # change the template directory relative to the k8s/template
 name = "test2" # avaliable as `service_name`
 version = "1.2.0" # accepts semver versions or tags, avaliable in service templates as `service_version`
 namespace = "test-namespace" # avaliabel as `service_namespace`
-build = true # weither to build code, optional as some service don't 
+build = "./test" # src dir to build code, optional as some service don't 
              # need to build because they just use remote images.  
 
 
@@ -49,7 +49,7 @@ value = "6379" # this will be injected into templates where ever {{REDIS_HOST}} 
 #-----------------------   BUILD   --------------------------#
 
 # Example Roomservice config
-[[build]]
+[build]
 beforeAll = "echo 'do something before'" # executes before all build steps (globally) from project root
 
 [build.rooms.test]

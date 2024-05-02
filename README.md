@@ -60,7 +60,7 @@ Under the hood uses the core of roomservice-rust credit goes to [Curtis Wilkinso
 
 Some changes to roomservice config have been made for this applciation - config file has been merged into the config.toml and defined them is as below.
 
-* **[[build]] (array):** (Optional) An array of build configurations. Each build configuration can have the following properties:
+* **[build]** (Optional) Global roomservice configs. Each build configuration can have the following properties:
     * **beforeAll (string):** (Optional) A shell command to execute before all service builds.
     * **[build.rooms.] (object):** Build configuration for a specific service directory. The key `` corresponds to the service name or a custom name.
         * **path (string):** (Required) The path to the service build directory relative to the project root.

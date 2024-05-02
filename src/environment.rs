@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer, Serializer};
 use toml::Value;
 
 use crate::filesystem;
+use crate::roomservice::config::Config;
 use crate::utils::get_current_timestamp;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -17,7 +18,7 @@ pub struct Environment {
     pub domain: String,
     pub default_replicas: u8,
     pub registry: String,
-    pub build: Option<bool>,
+    pub build: Option<Config>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     #[serde(skip)]
     file_manager: filesystem::FileSystemManager,
