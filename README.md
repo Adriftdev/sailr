@@ -69,7 +69,7 @@ Each environment variable definition has the following properties:
 
 This section defines build configurations for services.
 
-Under the hood uses the core of roomservice-rust credit goes to [Curtis Wilkenson]() for the roomservice code :D.
+Under the hood uses the core of roomservice-rust credit goes to [Curtis Wilkinson](https://github.com/curtiswilkinson/roomservice-rust) for the roomservice code :D.
 
 some chnages to roomservice config have been made for this applciation
 
