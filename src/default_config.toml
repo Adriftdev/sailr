@@ -45,6 +45,7 @@ value = "redis" # this will be injected into templates where ever {{REDIS_HOST}}
 name = "REDIS_PORT"
 value = "6379" # this will be injected into templates where ever {{REDIS_HOST}} appears.
 
+
 #-----------------------   BUILD   --------------------------#
 
 # Example Roomservice config
