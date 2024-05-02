@@ -116,6 +116,5 @@ Future versions might introduce support for additional cloud providers like GCP 
 
 ## Contributing
 
-Sailr is likely an open-source project (based on the lack of a versioning scheme and the presence of a Cargo.toml file). 
-If you're interested in contributing to Sailr's development, look for a contributing guide in the project's repository. 
+Sailr is likely an open-source project. If you're interested in contributing to Sailr's development, look for a contributing guide in the project's repository. 
 It will outline the process for submitting bug reports, feature requests, and code patches.
