@@ -8,7 +8,7 @@ use toml::{from_str, to_string};
 use crate::environment::{Environment, EnvironmentVariable, Service};
 use crate::errors::SailrError;
 
-const ENV_DIR: &str = "./k8s/environments/";
+pub const ENV_DIR: &str = "./k8s/environments/";
 
 pub fn delete_env(env_name: &str) -> Result<(), SailrError> {
     std::fs::remove_file(Path::new(ENV_DIR).join(format!(

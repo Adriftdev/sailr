@@ -1,5 +1,5 @@
-use colored::Colorize;
 use rayon::prelude::*;
+use scribe_rust::log;
 pub mod config;
 pub mod room;
 pub mod util;
@@ -68,9 +68,9 @@ impl RoomserviceBuilder {
 
     pub fn exec(&mut self, update_hashes_only: bool, dry: bool, dump_scope: bool) {
         if !update_hashes_only {
-            println!("{}", "Diffing rooms".magenta().bold());
+            log(scribe_rust::Color::Blue, "Diffing rooms", "");
         } else {
-            println!("{}", "Updating all rooms".magenta().bold())
+            log(scribe_rust::Color::Blue, "Updating all rooms", "");
         }
 
         let force = self.force;
@@ -110,7 +110,7 @@ impl RoomserviceBuilder {
                     }
 
                     if room.should_build {
-                        Some(format!("{} {}", "==>".bold(), &room.name))
+                        Some(format!("==> {}", &room.name))
                     } else {
                         None
                     }
@@ -130,7 +130,7 @@ impl RoomserviceBuilder {
             }
 
             if self.before_all.is_some() {
-                println!("{}", "\nExecuting Before All".magenta().bold());
+                log(scribe_rust::Color::Blue, "Executing Before All", "");
                 match exec_cmd(
                     "./",
                     &self.before_all.as_ref().unwrap(),
@@ -142,7 +142,7 @@ impl RoomserviceBuilder {
             }
 
             if is_before_sync {
-                println!("{}", "\nExecuting Before Sync".magenta().bold());
+                log(scribe_rust::Color::Blue, "Executing Before Sync", "");
                 self.rooms.iter_mut().for_each(|room| {
                     let hook = room.hooks.before_synchronously.clone();
                     exec_room_cmd(room, hook);
@@ -150,7 +150,7 @@ impl RoomserviceBuilder {
             }
 
             if is_before {
-                println!("{}", "\nExecuting Before".magenta().bold());
+                log(scribe_rust::Color::Blue, "Executing Before", "");
                 self.rooms.par_iter_mut().for_each(|room| {
                     let hook = room.hooks.before.clone();
                     exec_room_cmd(room, hook);
@@ -158,7 +158,7 @@ impl RoomserviceBuilder {
             }
 
             if is_run_para {
-                println!("{}", "\nExecuting Run Parallel".magenta().bold());
+                log(scribe_rust::Color::Blue, "Executing Run Parallel", "");
                 self.rooms.par_iter_mut().for_each(|room| {
                     let hook = room.hooks.run_parallel.clone();
 
@@ -167,7 +167,7 @@ impl RoomserviceBuilder {
             }
 
             if is_run_sync {
-                println!("{}", "\nExecuting Run Synchronously".magenta().bold());
+                log(scribe_rust::Color::Blue, "Executing Run Synchronously", "");
                 self.rooms.iter_mut().for_each(|room| {
                     let hook = room.hooks.run_synchronously.clone();
 
@@ -175,7 +175,7 @@ impl RoomserviceBuilder {
                 });
             }
             if is_after {
-                println!("{}", "\nExecuting After".magenta().bold());
+                log(scribe_rust::Color::Blue, "Executing After", "");
                 self.rooms.par_iter_mut().for_each(|room| {
                     let hook = room.hooks.after.clone();
                     exec_room_cmd(room, hook);
@@ -183,7 +183,7 @@ impl RoomserviceBuilder {
             }
 
             if self.after_all.is_some() {
-                println!("{}", "\nExecuting After All".magenta().bold());
+                log(scribe_rust::Color::Blue, "Executing After All", "");
 
                 match exec_cmd(
                     "./",
@@ -206,7 +206,11 @@ impl RoomserviceBuilder {
         }
 
         if was_error {
-            println!("\n{}", "Errors occured during roomservice".bold().red())
+            log(
+                scribe_rust::Color::Red,
+                "Errors occured during roomservice",
+                "",
+            );
         }
     }
 }
@@ -219,7 +223,11 @@ fn exec_room_cmd(room: &mut RoomBuilder, cmd: Option<String>) {
     if should_build && !is_errored {
         match cmd {
             Some(cmd) => {
-                println!("{} {} {}", "==>".bold(), "[Starting]".cyan(), name);
+                log(
+                    scribe_rust::Color::Yellow,
+                    "[Starting]",
+                    &format!("==> {}", name),
+                );
                 match exec_cmd(&cwd, &cmd, name) {
                     Ok(_) => (),
                     Err(_) => room.set_errored(),
@@ -240,12 +248,15 @@ fn exec_cmd(cwd: &str, cmd: &str, name: &str) -> Result<(), ()> {
     {
         Ok(capture_data) => match capture_data.exit_status {
             Exited(0) => {
-                println!("{} {} {}", "==>".bold(), "[Completed]".green(), name);
+                log(
+                    scribe_rust::Color::Yellow,
+                    "[Completed]",
+                    &format!("==> {}", name),
+                );
                 Ok(())
             }
             _ => {
-                println!("{} {} {}", "==>".bold(), "[Error]".red(), name);
-
+                log(scribe_rust::Color::Red, "[Error]", &format!("==> {}", name));
                 println!(
                     "{}\n{}",
                     capture_data.stdout_str(),

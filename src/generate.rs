@@ -59,15 +59,6 @@ impl Generator {
             };
         }
 
-        println!(
-            "templates: {:?}",
-            self.templates
-                .clone()
-                .into_iter()
-                .map(|x| x.name)
-                .collect::<Vec<String>>()
-        );
-
         for template in &self.templates {
             let path = Path::new(name)
                 .join(&template.name)

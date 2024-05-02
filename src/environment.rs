@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer, Serializer};
 use toml::Value;
 
 use crate::filesystem;
+use crate::roomservice::config::Config;
 use crate::utils::get_current_timestamp;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -15,8 +16,9 @@ pub struct Environment {
     pub log_level: String,
     pub service_whitelist: Vec<Service>,
     pub domain: String,
-    pub default_replicas: u32,
+    pub default_replicas: u8,
     pub registry: String,
+    pub build: Option<Config>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     #[serde(skip)]
     file_manager: filesystem::FileSystemManager,
@@ -36,6 +38,7 @@ impl Environment {
             domain: "localhost".to_string(),
             default_replicas: 1,
             registry: "docker.io".to_string(),
+            build: None,
             environment_variables: Some(Vec::new()),
             file_manager: filesystem::FileSystemManager::new(
                 Path::new("./k8s/environments")
@@ -103,12 +106,12 @@ impl Environment {
         let contents = filemanager.read_file(&"config.toml".to_string(), None)?;
         let env = toml::from_str::<Self>(&contents)?; // Use destructuring assignment
 
-        if env.schema_version != "0.1.0" {
+        if env.schema_version != "0.2.0" {
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!(
                     "Invalid schema version: expected {}, found {}",
-                    "0.1.0", env.schema_version
+                    "0.2.0", env.schema_version
                 ),
             )));
         }

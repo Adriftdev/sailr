@@ -1,45 +1,39 @@
-use crate::roomservice::{
-    config::{read, RoomConfig},
-    room::{Hooks, RoomBuilder},
-    util::{fail, Failable},
+use crate::{
+    environment::Environment,
+    roomservice::{
+        config::RoomConfig,
+        room::{Hooks, RoomBuilder},
+        util::{fail, Failable},
+    },
 };
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 use crate::roomservice::RoomserviceBuilder;
 
 pub struct Builder {
     roomservice: RoomserviceBuilder,
-    project: String,
     only: Vec<String>,
     ignore: Vec<String>,
 }
 
 impl Builder {
-    pub fn new(
-        project: String,
-        cache_dir: String,
-        force: bool,
-        only: Vec<String>,
-        ignore: Vec<String>,
-    ) -> Builder {
+    pub fn new(cache_dir: String, force: bool, only: Vec<String>, ignore: Vec<String>) -> Builder {
         Builder {
-            roomservice: RoomserviceBuilder::new(project.clone(), cache_dir, force),
-            project,
+            roomservice: RoomserviceBuilder::new("./".to_string(), cache_dir, force),
             only,
             ignore,
         }
     }
 
-    pub fn build(&mut self) {
-        let project_path = find_config(&self.project).unwrap_fail("No config found.");
-        let canonical_project_path = std::path::Path::new(&project_path).canonicalize().unwrap();
+    pub fn build(&mut self, env: &Environment) {
+        let canonical_project_path = std::path::Path::new(&"./").canonicalize().unwrap();
 
         let project_root = canonical_project_path.parent().unwrap();
 
         let path_buf = project_root.join(".roomservice");
 
         let cache_dir = path_buf.to_str().unwrap().to_owned().to_string();
-        let cfg = read(&project_path);
+        let cfg = env.build.clone().unwrap_fail("No config found.");
 
         if cfg.before_all.is_some() {
             self.roomservice.add_before_all(&cfg.before_all.unwrap())
@@ -93,33 +87,6 @@ impl Builder {
         }
 
         self.roomservice.exec(false, false, false);
-    }
-}
-
-fn find_config(base_path: &str) -> Option<String> {
-    if base_path.contains(".yml") {
-        Some(base_path.to_string())
-    } else {
-        let path = Path::new(base_path);
-        let maybe_config_path = Path::new(&path).join("roomservice.config.yml");
-
-        if maybe_config_path.exists() {
-            return Some(maybe_config_path.to_str().unwrap().to_string());
-        } else {
-            let parent = maybe_config_path.parent()?;
-
-            if Path::new(parent).exists() {
-                let relative_path = if &base_path[..2] == "./" {
-                    Path::new("../").join(&base_path[2..])
-                } else {
-                    Path::new("../").join(base_path)
-                };
-
-                find_config(relative_path.to_str().unwrap())
-            } else {
-                None
-            }
-        }
     }
 }
 

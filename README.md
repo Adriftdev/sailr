@@ -21,40 +21,69 @@ Try Sailr today and see the difference it can make.
 - OpenTofu (Terraform replacement).
 - Docker
 
-### Usage 
 
-#### Builtin Template Environment Variables 
+## Sailr Configuration File Documentation
 
-- name - The name of the environment.
-- log_level - the global logging leveling, generally used for setting the log level of the applications
-- domain - The domain url
-- default_replicas - The global environment level default replicas setting. 
+This document outlines the configuration options for the Sailr CLI application, used for generating and deploying services to a Kubernetes cluster.
 
-* Custom environment variables can be set by using the following 
+### Schema Version
 
-```toml
-[[environment_variables]]
-name = "DB_HOST"
-value = "postgres"
+* **schema_version (string):** (Required) The schema version of the configuration file. Currently set to `0.2.0`. Changing this version might indicate breaking changes, new features, or patches to the Sailr config specification.
 
-[[environment_variables]]
-name = "DB_PORT"
-value = "5432"
-```
+### Global Configuration
 
-#### Service Whitelist
+These settings apply globally and can be referenced within templates using double curly braces (`{{ }}`). 
 
-Service whitelist defines the services that are allowed to run in a particular
-environment. They are defined using the following 
+* **name (string):** (Required) The name of the environment. Used for identification and template replacement (e.g., `{{env_name}}`).
+* **log_level (string):** (Optional) The desired logging level for the Sailr CLI application itself. Defaults to "INFO".
+* **domain (string):** (Required) The domain name for your services. Used throughout configurations and templates.
+* **default_replicas (integer):** (Optional) The default number of replicas for deployed services. Defaults to 1.
+* **registry (string):** (Optional) The container image registry to use for deployments. Defaults to "docker.io".
 
-```toml
-[[service_whitelist]]
-name = "core/proxy"
-version = "1.0.0"
+### Service Whitelist
 
-[[service_whitelist]]
-path="postgres"
-name = "postgres"
-version = "1.0.0"
+This section defines the services to be generated and deployed.
 
-```
+* **[[service_whitelist]] (array):** An array of service definitions.
+
+Each service definition within the whitelist has the following properties:
+
+  * **name (string):** (Required) The name of the service. Used for image pulling and as a reference in templates (`{{service_name}}`).
+  * **version (string):** (Required) The version of the service image (semver or tag). Used in templates (`{{service_version}}`).
+  * **path (string):** (Optional) The path to the service template directory relative to `k8s/templates`. Defaults to the service name.
+  * **namespace (string):** (Optional) The namespace where the service will be deployed in Kubernetes. Defaults to the environment name.
+  * **build (boolean):** (Optional) Whether to build the service image before deployment. Defaults to `true`.
+
+### Environment Variables
+
+This section defines environment variables used during service generation and injected into templates.
+
+* **[[environment_variables]] (array):** An array of environment variable definitions.
+
+Each environment variable definition has the following properties:
+
+  * **name (string):** (Required) The name of the environment variable.
+  * **value (string):** (Required) The value to be assigned to the environment variable. This value will be replaced with `{{name}}` in templates.
+
+### Build Configuration
+
+This section defines build configurations for services.
+
+Under the hood uses the core of roomservice-rust credit goes to [Curtis Wilkenson]() for the roomservice code :D.
+
+some chnages to roomservice config have been made for this applciation
+
+- config file has been merged into the config.toml and defined them is as below.
+
+
+* **[[build]] (array):** (Optional) An array of build configurations.
+
+Each build configuration can have the following properties:
+
+  * **beforeAll (string):** (Optional) A shell command to execute before all service builds.
+  * **[build.rooms.<name>] (object):** Build configuration for a specific service directory. The `<name>` corresponds to the service name or a custom name.
+    * **path (string):** (Required) The path to the service build directory relative to the project root.
+    * **run_parallel (string):** (Optional) A shell command to run in parallel for all builds.
+    * **before (string):** (Optional) A shell command to run before building the service image.
+    * **after (string):** (Optional) A shell command to run after building the service image.
+

@@ -36,7 +36,11 @@ pub struct CompletionsArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct InitArgs {}
+pub struct InitArgs {
+    /// Name of the environment
+    #[arg(name = "name", help = "Name of the environment")]
+    pub name: String,
+}
 
 #[derive(Debug, Args)]
 pub struct EnvArgs {

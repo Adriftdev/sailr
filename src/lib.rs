@@ -6,6 +6,7 @@ pub mod environment;
 pub mod errors;
 pub mod filesystem;
 pub mod generate;
+pub mod infra;
 pub mod provider;
 pub mod roomservice;
 pub mod templates;

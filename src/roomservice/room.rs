@@ -1,5 +1,5 @@
 use crate::roomservice::util::fail;
-use checksums::{hash_file, Algorithm::BLAKE2};
+use checksums::{hash_file, Algorithm::BLAKE2S};
 use ignore::Walk;
 use std::fs::{self, File};
 use std::io::prelude::*;
@@ -60,7 +60,7 @@ impl RoomBuilder {
                             scope.push_str("\n")
                         }
 
-                        hash.push_str(&hash_file(file.path(), BLAKE2));
+                        hash.push_str(&hash_file(file.path(), BLAKE2S));
                         hash.push_str("\n");
                     }
                 }

@@ -1,10 +1,7 @@
-use crate::roomservice::util::Failable;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::Read;
 
-#[derive(Debug, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(rename = "beforeAll")]
     pub before_all: Option<String>,
@@ -13,7 +10,7 @@ pub struct Config {
     pub after_all: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RoomConfig {
     pub path: String,
     #[serde(default = "default_include")]
@@ -31,14 +28,4 @@ pub struct RoomConfig {
 
 fn default_include() -> String {
     "./**/*.*".to_string()
-}
-
-pub fn read(path_to_project: &str) -> Config {
-    let mut config_contents = String::new();
-    let mut file = File::open(path_to_project).unwrap_fail("Unable to open config");
-
-    file.read_to_string(&mut config_contents)
-        .expect("Error reading the config file");
-
-    serde_yaml::from_str(&config_contents).unwrap()
 }

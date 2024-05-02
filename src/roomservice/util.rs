@@ -1,8 +1,8 @@
-use colored::Colorize;
+use scribe_rust::log;
 use std::fmt::Display;
 
 pub fn fail<T: Display>(message: T) {
-    println!("{} {}", "Error:".red().bold(), message);
+    log(scribe_rust::Color::Red, "Error", &message.to_string());
     std::process::exit(1)
 }
 

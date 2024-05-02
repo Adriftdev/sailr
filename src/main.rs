@@ -5,6 +5,7 @@ use sailr::{
     cli::{Cli, Commands, EnvCommands},
     environment::Environment,
     errors::CliError,
+    infra::{local_k8s::LocalK8, Infra},
     templates::TemplateManager,
 };
 
@@ -54,8 +55,10 @@ async fn main() -> Result<(), CliError> {
     let cli = Cli::parse();
 
     match cli.commands {
-        Commands::Init(_) => {
+        Commands::Init(arg) => {
             TemplateManager::new().copy_base_templates().unwrap();
+            let infra = Infra::new(Box::new(LocalK8::new(arg.name, 1)));
+            infra.generate(infra.read_config("local".to_string()));
         }
         Commands::Completions(arg) => {
             clap_complete::generate(arg.shell, &mut Cli::command(), "sailr", &mut io::stdout());
@@ -100,14 +103,13 @@ async fn main() -> Result<(), CliError> {
                 .filter(|s| s.build.is_some());
 
             let mut builder = Builder::new(
-                "./".to_string(),
                 ".roomservice".to_string(),
                 arg.force.unwrap_or(false),
                 services.into_iter().map(|s| s.name.clone()).collect(),
                 split_matches(arg.ignore),
             );
 
-            builder.build();
+            builder.build(&env);
         }
         Commands::Go(arg) => {
             logger.info(&format!("Generating and deploying an environment"));
@@ -128,14 +130,13 @@ async fn main() -> Result<(), CliError> {
                 .filter(|s| s.build.is_some());
 
             let mut builder = Builder::new(
-                "./".to_string(),
                 ".roomservice".to_string(),
                 arg.force.unwrap_or(false),
                 services.into_iter().map(|s| s.name.clone()).collect(),
                 split_matches(arg.ignore),
             );
 
-            builder.build();
+            builder.build(&env);
 
             sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }
