@@ -40,6 +40,22 @@ pub struct InitArgs {
     /// Name of the environment
     #[arg(name = "name", help = "Name of the environment")]
     pub name: String,
+
+    #[arg(
+        name = "Config Template Path",
+        short = 'c',
+        long = "config-template",
+        help = "sailr config template path to use instead of the default one."
+    )]
+    pub config_template_path: Option<String>,
+
+    #[arg(
+        name = "Default Registry",
+        short = 'r',
+        long = "registry",
+        help = "Default registry to use for images"
+    )]
+    pub default_registry: Option<String>,
 }
 
 #[derive(Debug, Args)]

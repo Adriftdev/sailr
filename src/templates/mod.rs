@@ -101,14 +101,10 @@ impl TemplateManager {
         //if path is specified in path, read the templates from the path instead and append to the template_dirs
         if let Some(env) = &env {
             for service in &env.service_whitelist {
-                println!("Service: {:?}", service.name);
-
                 if service.path == None || service.path.clone().unwrap() == "".to_string() {
                     template_dirs.insert(service.name.clone());
                     continue;
                 }
-
-                println!("Service Path: {:?}", service.path.clone().unwrap());
 
                 let path = service
                     .path

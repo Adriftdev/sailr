@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::Path};
 
 use sailr::{
     builder::{split_matches, Builder},
@@ -7,6 +7,7 @@ use sailr::{
     errors::CliError,
     infra::{local_k8s::LocalK8, Infra},
     templates::TemplateManager,
+    utils::replace_variables,
 };
 
 use anyhow::Result;
@@ -47,24 +48,61 @@ fn generate(name: &str, env: &Environment) {
     let _ = generator.generate(&name.to_string());
 }
 
-fn create_default_env_config(name: String) {
-    let default_env_config = (
-        "config.toml".to_string(),
-        include_str!("default_config.toml").to_string(),
-    );
+fn create_default_env_config(
+    name: String,
+    config_template: Option<String>,
+    registry: Option<String>,
+) {
+    if config_template.is_some() {
+        let file_manager =
+            sailr::filesystem::FileSystemManager::new("./k8s/environments".to_string());
 
-    let file_manager = sailr::filesystem::FileSystemManager::new("./k8s/environments".to_string());
+        let content = file_manager
+            .read_file(&config_template.clone().unwrap(), Some(&"".to_string()))
+            .unwrap();
 
-    file_manager
-        .create_file(
-            &std::path::Path::new(&name)
-                .join(default_env_config.0)
-                .to_str()
-                .unwrap()
-                .to_string(),
-            &default_env_config.1,
-        )
-        .unwrap();
+        let generated_config = replace_variables(
+            content.clone(),
+            vec![
+                ("name".to_string(), name.clone()),
+                (
+                    "registry".to_string(),
+                    registry.unwrap_or("docker.io".to_string()),
+                ),
+            ],
+        );
+
+        file_manager
+            .create_file(
+                &std::path::Path::new(&name)
+                    .join("config.toml")
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+                &generated_config,
+            )
+            .unwrap();
+        return;
+    } else {
+        let default_env_config = (
+            "config.toml".to_string(),
+            include_str!("default_config.toml").to_string(),
+        );
+
+        let file_manager =
+            sailr::filesystem::FileSystemManager::new("./k8s/environments".to_string());
+
+        file_manager
+            .create_file(
+                &std::path::Path::new(&name)
+                    .join(default_env_config.0)
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+                &default_env_config.1,
+            )
+            .unwrap();
+    }
 }
 #[tokio::main]
 async fn main() -> Result<(), CliError> {
@@ -76,7 +114,11 @@ async fn main() -> Result<(), CliError> {
     match cli.commands {
         Commands::Init(arg) => {
             TemplateManager::new().copy_base_templates().unwrap();
-            create_default_env_config(arg.name.clone());
+            create_default_env_config(
+                arg.name.clone(),
+                arg.config_template_path,
+                arg.default_registry,
+            );
             let infra = Infra::new(Box::new(LocalK8::new(arg.name, 1)));
             infra.generate(infra.read_config("local".to_string()));
         }

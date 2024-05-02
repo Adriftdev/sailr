@@ -137,3 +137,11 @@ pub fn get_current_timestamp() -> String {
     let now = Utc::now();
     now.format("%Y-%m-%d %H:%M:%S").to_string()
 }
+
+pub fn replace_variables(content: String, variables: Vec<(String, String)>) -> String {
+    let mut new_content = content.clone();
+    for (key, value) in variables {
+        new_content = new_content.replace(&format!("{{{{{}}}}}", key), &value);
+    }
+    new_content
+}
