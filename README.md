@@ -17,58 +17,72 @@ Sailr is the perfect tool for Kubernetes users who want to save time, reduce str
 
 ## CLI Usage
 
-Initialization
+### Initialization
+
+Initializes a new environment named <environment_name>. Creates a directory structure and a default configuration file.
 
 ```bash 
-sailr init <environment_name>: Initializes a new environment named <environment_name>. Creates a directory structure and a default configuration file.
+sailr init <environment_name> 
 ```
 
-Completions
+### Completions
+
+Generates shell completion scripts for bash or zsh to enhance the Sailr CLI experience.
 
 ```bash 
-sailr completions [bash|zsh] : Generates shell completion scripts for bash or zsh to enhance the Sailr CLI experience.
+sailr completions [bash|zsh] 
 ```
 
-Environment Management (depricated - This happens in init, use config templates and k8s/default.toml to change default config)
+### Environment Management 
+
+**(depricated - This happens in init, use config templates and k8s/default.toml to change default config)**
+
+Creates a new environment named <environment_name> with optional local service pods like PostgreSQL and Redis (intended for development environments).
 
 ```bash 
-sailr env create <environment_name>: Creates a new environment named <environment_name> with optional local service pods like PostgreSQL and Redis (intended for development environments).
+sailr env create <environment_name> 
 ```
 
-Deployment
+### Deployment
+
+Deploys an existing environment named <environment_name> to a specified Kubernetes cluster context.
 
 ```bash 
-sailr deploy <environment_name>: Deploys an existing environment named <environment_name> to a specified Kubernetes cluster context.
+sailr deploy <environment_name> 
 ```
 
-Generation
+### Generation
+
+Generates deployment manifests for services defined in the <environment_name> environment configuration file without deploying them to the cluster.
 
 ```bash 
-sailr generate <environment_name>: Generates deployment manifests for services defined in the <environment_name> environment configuration file without deploying them to the cluster.
+sailr generate <environment_name> 
 ```
 
-Building
+### Building
+
+ Builds container images for services in the <environment_name> environment. Optionally excludes services listed in <service1,service2,...> (comma-separated) from the build process.
 
 ```bash 
-sailr build <environment_name> [--ignore <service1,service2,...>]: Builds container images for services in the <environment_name> environment. Optionally excludes services listed in <service1,service2,...> (comma-separated) from the build process.
+sailr build <environment_name> [--ignore <service1,service2,...>]
 ```
 
-Combined Workflow
+### Combined Workflow
 
+Combines generation and deployment in a single command for the <environment_name> environment.
 
 ```bash 
-sailr go <environment_name>: Combines generation and deployment in a single command for the <environment_name> environment.
+sailr go <environment_name>: 
 ```
 
-Additional Notes
+### Additional Notes
 
-    Use the --force flag with build to rebuild all service images regardless of the cache.
-    Refer to the documentation for detailed configuration options and advanced usage.
+- Use the --force flag with build to rebuild all service images regardless of the cache.
+- Refer to the documentation for detailed configuration options and advanced usage.
 
-Getting Help
+### Getting Help
 
-- Consult the Sailr project documentation (if available).
-- Explore online resources like community forums or mailing lists for Sailr.
+- Consult the Sailr project documentation [here]().
 
 ## Sailr Configuration File
 
