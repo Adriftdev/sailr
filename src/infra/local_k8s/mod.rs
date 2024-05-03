@@ -2,7 +2,7 @@ use std::path::Path;
 
 use scribe_rust::log;
 
-use crate::{filesystem::FileSystemManager, utils::ENV_DIR};
+use crate::{environment::Environment, filesystem::FileSystemManager, utils::ENV_DIR};
 
 use super::{ClusterConfig, ClusterTargetBuilder};
 
@@ -56,7 +56,27 @@ impl ClusterTargetBuilder for LocalK8 {
         }
     }
 
-    fn build(&self) {
+    fn build(&self, config: &ClusterConfig) {
         println!("Building local kubernetes cluster");
+        // execute system process `tofu apply` in the directory
+        std::process::Command::new("tofu")
+            .arg("init")
+            .current_dir(Path::new(ENV_DIR).join(&config.cluster_name))
+            .output()
+            .expect("Failed to execute terraform apply");
+
+        let result = std::process::Command::new("tofu")
+            .arg("apply")
+            .arg("-auto-approve")
+            .current_dir(Path::new(ENV_DIR).join(&config.cluster_name))
+            .output()
+            .expect("Failed to execute terraform apply");
+
+        if result.status.success() {
+            println!("Cluster built successfully");
+        } else {
+            println!("Cluster build failed");
+            println!("{}", String::from_utf8_lossy(&result.stderr));
+        }
     }
 }

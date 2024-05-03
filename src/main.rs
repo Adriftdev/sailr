@@ -185,8 +185,9 @@ async fn main() -> Result<(), CliError> {
                 arg.config_template_path,
                 arg.default_registry,
             );
-            let infra = Infra::new(Box::new(LocalK8::new(arg.name, 1)));
-            infra.generate(infra.read_config("local".to_string()));
+            let infra = Infra::new(Box::new(LocalK8::new(arg.name.clone(), 1)));
+            infra.generate(infra.read_config(arg.name.clone()));
+            infra.build(infra.read_config(arg.name.clone()));
         }
         Commands::Completions(arg) => {
             clap_complete::generate(arg.shell, &mut Cli::command(), "sailr", &mut io::stdout());

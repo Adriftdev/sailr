@@ -16,7 +16,7 @@ pub struct ClusterConfig {
 
 pub trait ClusterTargetBuilder {
     fn generate(&self, config: &ClusterConfig, variables: Vec<(String, String)>); // variables: (key, value)
-    fn build(&self);
+    fn build(&self, config: &ClusterConfig);
     fn replace_variables(&self, content: String, variables: Vec<(String, String)>) -> String {
         let mut new_content = content.clone();
         for (key, value) in variables {
@@ -39,7 +39,7 @@ impl Infra {
         // @Note: This should be reading from a file
         ClusterConfig {
             cluster_name: env_name,
-            kube_version: "1.28.1".to_string(),
+            kube_version: "v1.28.3".to_string(),
         }
     }
 
@@ -48,8 +48,8 @@ impl Infra {
         self.cluster_type.generate(&config, variables)
     }
 
-    pub fn build(&self) {
-        self.cluster_type.build();
+    pub fn build(&self, config: ClusterConfig) {
+        self.cluster_type.build(&config);
     }
 
     pub fn get_cluster_variables(&self, config: &ClusterConfig) -> Vec<(String, String)> {
