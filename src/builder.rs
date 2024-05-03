@@ -25,12 +25,10 @@ impl Builder {
         }
     }
 
-    pub fn build(&mut self, env: &Environment) {
+    pub fn build(&mut self, env: &Environment) -> Result<(), String> {
         let canonical_project_path = std::path::Path::new(&"./").canonicalize().unwrap();
 
-        let project_root = canonical_project_path.parent().unwrap();
-
-        let path_buf = project_root.join(".roomservice");
+        let path_buf = canonical_project_path.join(".roomservice");
 
         let cache_dir = path_buf.to_str().unwrap().to_owned().to_string();
         let cfg = env.build.clone().unwrap_fail("No config found.");
@@ -87,6 +85,7 @@ impl Builder {
         }
 
         self.roomservice.exec(false, false, false);
+        Ok(())
     }
 }
 

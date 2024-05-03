@@ -1,4 +1,4 @@
-use std::{collections::HashSet, error::Error, path::Path};
+use std::{collections::BTreeSet, error::Error, path::Path};
 
 use scribe_rust::{log, Color};
 
@@ -96,7 +96,7 @@ impl TemplateManager {
         &mut self,
         env: Option<&Environment>,
     ) -> Result<(Vec<Template>, Vec<Config>), Box<dyn Error>> {
-        let mut template_dirs: HashSet<String> = HashSet::new();
+        let mut template_dirs: BTreeSet<String> = BTreeSet::new();
         //read the templates from the environment
         //if path is specified in path, read the templates from the path instead and append to the template_dirs
         if let Some(env) = &env {

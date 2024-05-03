@@ -40,7 +40,6 @@ impl LocalK8 {
 
 impl ClusterTargetBuilder for LocalK8 {
     fn generate(&self, config: &ClusterConfig, variables: Vec<(String, String)>) {
-        println!("Generating local kubernetes cluster");
         let mut vars = self.get_variables();
         vars.extend(variables.clone());
         for (filename, content) in &self.files {

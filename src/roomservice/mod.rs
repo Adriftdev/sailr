@@ -14,7 +14,7 @@ pub struct RoomserviceBuilder {
     pub rooms: Vec<room::RoomBuilder>,
     pub after_all: Option<String>,
     project: String,
-    _cache_dir: String,
+    cache_dir: String,
     force: bool,
 }
 
@@ -31,7 +31,7 @@ impl RoomserviceBuilder {
         RoomserviceBuilder {
             project,
             force,
-            _cache_dir: cache_dir,
+            cache_dir: cache_dir,
             rooms: Vec::new(),
             before_all: None,
             after_all: None,

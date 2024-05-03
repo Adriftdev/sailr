@@ -106,7 +106,6 @@ impl RoomBuilder {
     pub fn should_build(&mut self, force: bool, dump_scope: bool) {
         let prev = self.prev_hash();
         let curr = self.generate_hash(dump_scope);
-        // println!("Current Hash is: {}, previous hash was: {:?}", curr, prev);
         if force {
             self.should_build = true
         } else {

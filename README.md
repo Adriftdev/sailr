@@ -15,7 +15,62 @@ Sailr is the perfect tool for Kubernetes users who want to save time, reduce str
 - OpenTofu (Terraform replacement)
 - Docker
 
-## Sailr Configuration File Documentation
+## CLI Usage
+
+Initialization
+
+```bash 
+sailr init <environment_name>: Initializes a new environment named <environment_name>. Creates a directory structure and a default configuration file.
+```
+
+Completions
+
+```bash 
+sailr completions [bash|zsh] : Generates shell completion scripts for bash or zsh to enhance the Sailr CLI experience.
+```
+
+Environment Management (depricated - This happens in init, use config templates and k8s/default.toml to change default config)
+
+```bash 
+sailr env create <environment_name>: Creates a new environment named <environment_name> with optional local service pods like PostgreSQL and Redis (intended for development environments).
+```
+
+Deployment
+
+```bash 
+sailr deploy <environment_name>: Deploys an existing environment named <environment_name> to a specified Kubernetes cluster context.
+```
+
+Generation
+
+```bash 
+sailr generate <environment_name>: Generates deployment manifests for services defined in the <environment_name> environment configuration file without deploying them to the cluster.
+```
+
+Building
+
+```bash 
+sailr build <environment_name> [--ignore <service1,service2,...>]: Builds container images for services in the <environment_name> environment. Optionally excludes services listed in <service1,service2,...> (comma-separated) from the build process.
+```
+
+Combined Workflow
+
+
+```bash 
+sailr go <environment_name>: Combines generation and deployment in a single command for the <environment_name> environment.
+```
+
+Additional Notes
+
+    Use the --force flag with build to rebuild all service images regardless of the cache.
+    Refer to the documentation for detailed configuration options and advanced usage.
+
+Getting Help
+
+- Consult the Sailr project documentation (if available).
+- Explore online resources like community forums or mailing lists for Sailr.
+
+## Sailr Configuration File
 
 This document outlines the configuration options for the Sailr CLI application, used for generating and deploying services to a Kubernetes cluster.
 

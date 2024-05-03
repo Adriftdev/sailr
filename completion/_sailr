@@ -30,10 +30,15 @@ _sailr() {
         case $line[1] in
             (init)
 _arguments "${_arguments_options[@]}" \
+'-c+[sailr config template path to use instead of the default one.]:Config Template Path: ' \
+'--config-template=[sailr config template path to use instead of the default one.]:Config Template Path: ' \
+'-r+[Default registry to use for images]:Default Registry: ' \
+'--registry=[Default registry to use for images]:Default Registry: ' \
 '-h[Print help]' \
 '--help[Print help]' \
 '-V[Print version]' \
 '--version[Print version]' \
+':name -- Name of the environment:' \
 && ret=0
 ;;
 (completions)
@@ -74,7 +79,7 @@ _arguments "${_arguments_options[@]}" \
 '-V[Print version]' \
 '--version[Print version]' \
 ':name -- Name of the environment:' \
-':provider -- Provider to use:(gcp aws azure docker k3s)' \
+':provider -- Provider to use:(gcp)' \
 && ret=0
 ;;
 (help)
@@ -127,20 +132,30 @@ _arguments "${_arguments_options[@]}" \
 '--version[Print version]' \
 && ret=0
 ;;
-(go)
+(build)
 _arguments "${_arguments_options[@]}" \
-'-c+[Kubernetes context to use]:context: ' \
-'--context=[Kubernetes context to use]:context: ' \
 '-n+[Name of the environment]:name: ' \
 '--name=[Name of the environment]:name: ' \
+'-f+[Force all rooms to build, ignore the cache]:force:(true false)' \
+'--force=[Force all rooms to build, ignore the cache]:force:(true false)' \
+'-i+[rooms to ignore from the build of the environment]:ignore: ' \
+'--ignore=[rooms to ignore from the build of the environment]:ignore: ' \
 '-h[Print help]' \
 '--help[Print help]' \
 '-V[Print version]' \
 '--version[Print version]' \
 && ret=0
 ;;
-(archive)
+(go)
 _arguments "${_arguments_options[@]}" \
+'-c+[Kubernetes context to use]:context: ' \
+'--context=[Kubernetes context to use]:context: ' \
+'-n+[Name of the environment]:name: ' \
+'--name=[Name of the environment]:name: ' \
+'-f+[Force all rooms to build, ignore the cache]:force:(true false)' \
+'--force=[Force all rooms to build, ignore the cache]:force:(true false)' \
+'-i+[rooms to ignore from the build of the environment]:ignore: ' \
+'--ignore=[rooms to ignore from the build of the environment]:ignore: ' \
 '-h[Print help]' \
 '--help[Print help]' \
 '-V[Print version]' \
@@ -195,11 +210,11 @@ _arguments "${_arguments_options[@]}" \
 _arguments "${_arguments_options[@]}" \
 && ret=0
 ;;
-(go)
+(build)
 _arguments "${_arguments_options[@]}" \
 && ret=0
 ;;
-(archive)
+(go)
 _arguments "${_arguments_options[@]}" \
 && ret=0
 ;;
@@ -219,26 +234,26 @@ esac
 (( $+functions[_sailr_commands] )) ||
 _sailr_commands() {
     local commands; commands=(
-'init:' \
-'completions:' \
+'init:Initialize a new project' \
+'completions:Generate shell completions' \
 'env:Manage environments' \
 'deploy:Deploy an environment' \
 'generate:Generate an environment' \
+'build:Build related projects' \
 'go:Generate and deploy an environment' \
-'archive:Archive an environment' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sailr commands' commands "$@"
 }
-(( $+functions[_sailr__archive_commands] )) ||
-_sailr__archive_commands() {
+(( $+functions[_sailr__build_commands] )) ||
+_sailr__build_commands() {
     local commands; commands=()
-    _describe -t commands 'sailr archive commands' commands "$@"
+    _describe -t commands 'sailr build commands' commands "$@"
 }
-(( $+functions[_sailr__help__archive_commands] )) ||
-_sailr__help__archive_commands() {
+(( $+functions[_sailr__help__build_commands] )) ||
+_sailr__help__build_commands() {
     local commands; commands=()
-    _describe -t commands 'sailr help archive commands' commands "$@"
+    _describe -t commands 'sailr help build commands' commands "$@"
 }
 (( $+functions[_sailr__completions_commands] )) ||
 _sailr__completions_commands() {
@@ -326,13 +341,13 @@ _sailr__env__help__help_commands() {
 (( $+functions[_sailr__help_commands] )) ||
 _sailr__help_commands() {
     local commands; commands=(
-'init:' \
-'completions:' \
+'init:Initialize a new project' \
+'completions:Generate shell completions' \
 'env:Manage environments' \
 'deploy:Deploy an environment' \
 'generate:Generate an environment' \
+'build:Build related projects' \
 'go:Generate and deploy an environment' \
-'archive:Archive an environment' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sailr help commands' commands "$@"

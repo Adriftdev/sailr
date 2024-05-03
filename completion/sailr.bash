@@ -12,8 +12,11 @@ _sailr() {
             ",$1")
                 cmd="sailr"
                 ;;
-            sailr,archive)
-                cmd="sailr__archive"
+            sailr,build)
+                cmd="sailr__build"
+                ;;
+            sailr,completions)
+                cmd="sailr__completions"
                 ;;
             sailr,deploy)
                 cmd="sailr__deploy"
@@ -45,8 +48,11 @@ _sailr() {
             sailr__env__help,help)
                 cmd="sailr__env__help__help"
                 ;;
-            sailr__help,archive)
-                cmd="sailr__help__archive"
+            sailr__help,build)
+                cmd="sailr__help__build"
+                ;;
+            sailr__help,completions)
+                cmd="sailr__help__completions"
                 ;;
             sailr__help,deploy)
                 cmd="sailr__help__deploy"
@@ -76,7 +82,7 @@ _sailr() {
 
     case "${cmd}" in
         sailr)
-            opts="-h -V --help --version init env deploy generate go archive help"
+            opts="-h -V --help --version init completions env deploy generate build go help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -89,8 +95,46 @@ _sailr() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sailr__archive)
-            opts="-h --help"
+        sailr__build)
+            opts="-n -f -i -h -V --name --force --ignore --help --version"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --name)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -n)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --force)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                -f)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --ignore)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -i)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sailr__completions)
+            opts="-h -V --help --version bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -104,7 +148,7 @@ _sailr() {
             return 0
             ;;
         sailr__deploy)
-            opts="-c -n -h --context --name --help"
+            opts="-c -n -h -V --context --name --help --version"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -134,7 +178,7 @@ _sailr() {
             return 0
             ;;
         sailr__env)
-            opts="-h --help create help"
+            opts="-h -V --help --version create help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -148,7 +192,7 @@ _sailr() {
             return 0
             ;;
         sailr__env__create)
-            opts="-h --help [name]"
+            opts="-p -r -g -h -V --postgres --redis --registry --help --version <name> gcp"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -204,7 +248,7 @@ _sailr() {
             return 0
             ;;
         sailr__generate)
-            opts="-n -h --name --help"
+            opts="-n -h -V --name --help --version"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -226,7 +270,7 @@ _sailr() {
             return 0
             ;;
         sailr__go)
-            opts="-c -n -h --context --name --help"
+            opts="-c -n -f -i -h -V --context --name --force --ignore --help --version"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -248,6 +292,22 @@ _sailr() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --force)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                -f)
+                    COMPREPLY=($(compgen -W "true false" -- "${cur}"))
+                    return 0
+                    ;;
+                --ignore)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -i)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -256,7 +316,7 @@ _sailr() {
             return 0
             ;;
         sailr__help)
-            opts="init env deploy generate go archive help"
+            opts="init completions env deploy generate build go help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -269,7 +329,21 @@ _sailr() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        sailr__help__archive)
+        sailr__help__build)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sailr__help__completions)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -382,21 +456,13 @@ _sailr() {
             return 0
             ;;
         sailr__init)
-            opts="-n -c -p -h --name --context --provider --help"
+            opts="-c -r -h -V --config-template --registry --help --version <name>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
-                --name)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                -n)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --context)
+                --config-template)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -404,11 +470,11 @@ _sailr() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                --provider)
+                --registry)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                -p)
+                -r)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -422,4 +488,8 @@ _sailr() {
     esac
 }
 
-complete -F _sailr -o bashdefault -o default sailr
+if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then
+    complete -F _sailr -o nosort -o bashdefault -o default sailr
+else
+    complete -F _sailr -o bashdefault -o default sailr
+fi
