@@ -6,7 +6,10 @@ Kubernetes is a powerful tool for managing containerized applications, but it ca
 
 - Automate deployments and updates so you can sail through your work.
 - Manage resources efficiently so you don't run aground.
-- Troubleshoot problems quickly and easily so you can stay afloat.
+- Opinioned kubernetes infrastructure automation.
+
+## Roadmap
+- Zero downtime deployments 
 
 Sailr is the perfect tool for Kubernetes users who want to save time, reduce stress, and get more out of their Kubernetes deployments. Try Sailr today and see the difference it can make.
 
