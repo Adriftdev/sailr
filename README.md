@@ -17,6 +17,13 @@ Sailr is the perfect tool for Kubernetes users who want to save time, reduce str
 
 - OpenTofu (Terraform replacement)
 - Docker
+- minikube (local deployments only)
+
+## Minikube Setup
+
+```bash
+minikube start --driver=docker --download-only
+```
 
 ## CLI Usage
 

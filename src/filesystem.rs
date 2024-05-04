@@ -5,8 +5,6 @@ use std::{
     path::Path,
 };
 
-use scribe_rust::{log, Color};
-
 use crate::errors::{FileSystemManagerError, SailrError};
 
 pub fn ensure_dir(dir_name: &str) -> Result<(), SailrError> {
@@ -79,12 +77,10 @@ impl FileSystemManager {
     ) -> Result<String, Box<dyn Error>> {
         if let Some(dir_path) = dir {
             let path = Path::new(dir_path).join(file_name);
-            log(Color::Gray, "Reading File: ", path.to_str().unwrap());
             let contents: String = read_to_string(path)?;
             Ok(contents)
         } else {
             let path = Path::new(self.path.as_str()).join(file_name);
-            log(Color::Gray, "Reading File: ", path.to_str().unwrap());
             let contents: String = read_to_string(path)?;
             Ok(contents)
         }
@@ -92,7 +88,6 @@ impl FileSystemManager {
 
     pub fn read_dir(&self, dir_name: &String) -> Result<Vec<String>, Box<dyn Error>> {
         let path = Path::new(self.path.as_str()).join(dir_name);
-        log(Color::Gray, "Reading Dir: ", path.to_str().unwrap());
         let mut files = Vec::new();
         for entry in read_dir(path)? {
             let entry = entry?;

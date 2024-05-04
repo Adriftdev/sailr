@@ -14,7 +14,7 @@ pub struct RoomserviceBuilder {
     pub rooms: Vec<room::RoomBuilder>,
     pub after_all: Option<String>,
     project: String,
-    cache_dir: String,
+    _cache_dir: String,
     force: bool,
 }
 
@@ -31,7 +31,7 @@ impl RoomserviceBuilder {
         RoomserviceBuilder {
             project,
             force,
-            cache_dir: cache_dir,
+            _cache_dir: cache_dir,
             rooms: Vec::new(),
             before_all: None,
             after_all: None,
@@ -211,6 +211,7 @@ impl RoomserviceBuilder {
                 "Errors occured during roomservice",
                 "",
             );
+            std::process::exit(1);
         }
     }
 }
@@ -225,7 +226,7 @@ fn exec_room_cmd(room: &mut RoomBuilder, cmd: Option<String>) {
             Some(cmd) => {
                 log(
                     scribe_rust::Color::Yellow,
-                    "[Starting]",
+                    "Starting",
                     &format!("==> {}", name),
                 );
                 match exec_cmd(&cwd, &cmd, name) {
@@ -250,13 +251,13 @@ fn exec_cmd(cwd: &str, cmd: &str, name: &str) -> Result<(), ()> {
             Exited(0) => {
                 log(
                     scribe_rust::Color::Yellow,
-                    "[Completed]",
+                    "Completed",
                     &format!("==> {}", name),
                 );
                 Ok(())
             }
             _ => {
-                log(scribe_rust::Color::Red, "[Error]", &format!("==> {}", name));
+                log(scribe_rust::Color::Red, "Error", &format!("==> {}", name));
                 println!(
                     "{}\n{}",
                     capture_data.stdout_str(),

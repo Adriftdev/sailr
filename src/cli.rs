@@ -18,7 +18,7 @@ pub enum Commands {
     /// Generate shell completions
     Completions(CompletionsArgs),
     /// Manage environments
-    Env(EnvArgs),
+    Infra(InfraArgs),
     /// Deploy an environment
     Deploy(DeployArgs),
     /// Generate an environment
@@ -56,18 +56,31 @@ pub struct InitArgs {
         help = "Default registry to use for images"
     )]
     pub default_registry: Option<String>,
+
+    #[arg(help = "Provider to use", value_enum)]
+    pub provider: Option<Provider>,
+
+    #[arg(
+        name = "Infrastructure Template",
+        short = 'i',
+        long = "infra-templates",
+        help = "Template path for infrastruture templates"
+    )]
+    pub infra_template_path: Option<String>,
 }
 
 #[derive(Debug, Args)]
-pub struct EnvArgs {
+pub struct InfraArgs {
     #[command(subcommand)]
-    pub command: EnvCommands,
+    pub command: InfraCommands,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum EnvCommands {
-    /// Create a new environment
+pub enum InfraCommands {
+    /// Create a new infra
     Create(CreateArgs),
+    Apply(ApplyArgs),
+    Destroy(DestroyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -76,35 +89,38 @@ pub struct CreateArgs {
     #[arg(name = "name", help = "Name of the environment")]
     pub name: String,
 
-    /// Enable local postgres pod
-    #[arg(
-        name = "postgres",
-        short = 'p',
-        long = "postgres",
-        help = "Enable local postgres pod (usually development only)"
-    )]
-    pub postresql: bool,
-
-    /// Enable local redis pod
-    #[arg(
-        name = "redis",
-        short = 'r',
-        long = "redis",
-        help = "Enable local redis pod (usually development only / only small caches)"
-    )]
-    pub redis: bool,
-
-    /// Enable system registry pod
-    #[arg(
-        name = "registry",
-        short = 'g',
-        long = "registry",
-        help = "Enable system registry pod"
-    )]
-    pub registry: bool,
-
     #[arg(help = "Provider to use", value_enum)]
-    pub provider: Provider,
+    pub provider: Option<Provider>,
+
+    #[arg(
+        name = "Default Registry",
+        short = 'r',
+        long = "registry",
+        help = "Default registry to use for images"
+    )]
+    pub default_registry: Option<String>,
+
+    #[arg(
+        name = "Infrastructure Template",
+        short = 'i',
+        long = "infra-templates",
+        help = "Template path for infrastruture templates"
+    )]
+    pub infra_template_path: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ApplyArgs {
+    /// Name of the environment
+    #[arg(name = "name", help = "Name of the environment")]
+    pub name: String,
+}
+
+#[derive(Debug, Args)]
+pub struct DestroyArgs {
+    /// Name of the environment
+    #[arg(name = "name", help = "Name of the environment")]
+    pub name: String,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]

@@ -7,6 +7,12 @@ pub enum ClusterTarget {
 }
 */
 
+use std::path::Path;
+
+use scribe_rust::log;
+
+use crate::{filesystem::FileSystemManager, load_global_vars, utils::ENV_DIR};
+
 pub mod local_k8s;
 
 pub struct ClusterConfig {
@@ -17,13 +23,6 @@ pub struct ClusterConfig {
 pub trait ClusterTargetBuilder {
     fn generate(&self, config: &ClusterConfig, variables: Vec<(String, String)>); // variables: (key, value)
     fn build(&self, config: &ClusterConfig);
-    fn replace_variables(&self, content: String, variables: Vec<(String, String)>) -> String {
-        let mut new_content = content.clone();
-        for (key, value) in variables {
-            new_content = new_content.replace(&format!("{{{{{}}}}}", key), &value);
-        }
-        new_content
-    }
 }
 
 pub struct Infra {
@@ -35,16 +34,16 @@ impl Infra {
         Infra { cluster_type }
     }
 
-    pub fn read_config(&self, env_name: String) -> ClusterConfig {
+    pub fn read_config(env_name: String) -> ClusterConfig {
         // @Note: This should be reading from a file
         ClusterConfig {
             cluster_name: env_name,
-            kube_version: "v1.28.3".to_string(),
+            kube_version: "v1.30.0".to_string(),
         }
     }
 
     pub fn generate(&self, config: ClusterConfig) {
-        let variables = self.get_cluster_variables(&config);
+        let variables = Infra::get_cluster_variables(&config);
         self.cluster_type.generate(&config, variables)
     }
 
@@ -52,10 +51,105 @@ impl Infra {
         self.cluster_type.build(&config);
     }
 
-    pub fn get_cluster_variables(&self, config: &ClusterConfig) -> Vec<(String, String)> {
+    pub fn get_cluster_variables(config: &ClusterConfig) -> Vec<(String, String)> {
         vec![
             ("kube_version".to_string(), config.kube_version.clone()),
             ("cluster_name".to_string(), config.cluster_name.clone()),
         ]
+    }
+
+    fn replace_variables(content: String, variables: Vec<(String, String)>) -> String {
+        let mut new_content = content.clone();
+        for (key, value) in variables {
+            new_content = new_content.replace(&format!("{{{{{}}}}}", key), &value);
+        }
+        new_content
+    }
+
+    pub fn use_template(name: &String, template_path: &String, vars: &mut Vec<(String, String)>) {
+        log(
+            scribe_rust::Color::Blue,
+            "Started",
+            "Generating local kubernetes cluster",
+        );
+        let config = &Infra::read_config(name.to_string());
+
+        let file_manager =
+            FileSystemManager::new(Path::new(ENV_DIR).join(name).to_str().unwrap().to_string());
+
+        let files = FileSystemManager::new(Path::new(template_path).to_str().unwrap().to_string())
+            .read_dir(&"".to_string())
+            .unwrap()
+            .into_iter()
+            .map(|f| {
+                (
+                    f.clone(),
+                    Path::new(template_path)
+                        .join(f)
+                        .to_str()
+                        .unwrap()
+                        .to_string(),
+                )
+            })
+            .collect::<Vec<(String, String)>>();
+
+        vars.extend(load_global_vars().unwrap());
+        vars.extend(Infra::get_cluster_variables(config));
+
+        for (filename, file_path) in files.into_iter() {
+            println!("{}", file_path);
+            let content = file_manager
+                .read_file(&file_path, Some(&"".to_string()))
+                .unwrap();
+
+            let generated_content = Infra::replace_variables(content, vars.clone());
+            let path = Path::new(ENV_DIR)
+                .join(&config.cluster_name)
+                .join(filename.clone());
+            log(
+                scribe_rust::Color::Gray,
+                "Infra initialize",
+                path.to_str().unwrap(),
+            );
+            file_manager
+                .create_file(&filename, &generated_content)
+                .unwrap();
+        }
+    }
+
+    pub fn apply(config: ClusterConfig) {
+        let handle = std::process::Command::new("tofu")
+            .arg("apply")
+            .arg("-auto-approve")
+            .current_dir(Path::new(ENV_DIR).join(&config.cluster_name))
+            .spawn()
+            .expect("Failed to execute terraform apply");
+
+        let result = handle.wait_with_output().unwrap();
+
+        if result.status.success() {
+            println!("Cluster built successfully");
+        } else {
+            println!("Cluster build failed");
+            println!("{}", String::from_utf8_lossy(&result.stderr));
+        }
+    }
+
+    pub fn destroy(config: ClusterConfig) {
+        let handle = std::process::Command::new("tofu")
+            .arg("destroy")
+            .arg("-auto-approve")
+            .current_dir(Path::new(ENV_DIR).join(&config.cluster_name))
+            .spawn()
+            .expect("Failed to execute terraform apply");
+
+        let result = handle.wait_with_output().unwrap();
+
+        if result.status.success() {
+            println!("Cluster built successfully");
+        } else {
+            println!("Cluster build failed");
+            println!("{}", String::from_utf8_lossy(&result.stderr));
+        }
     }
 }
