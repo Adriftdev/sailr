@@ -2,20 +2,18 @@ use std::path::Path;
 
 use scribe_rust::log;
 
-use crate::{environment::Environment, filesystem::FileSystemManager, utils::ENV_DIR};
+use crate::{filesystem::FileSystemManager, load_global_vars, utils::ENV_DIR};
 
-use super::{ClusterConfig, ClusterTargetBuilder};
+use super::{ClusterConfig, ClusterTargetBuilder, Infra};
 
 pub struct LocalK8 {
-    pub nodes: u8,
     pub files: Vec<(String, String)>, // (filename, content)
     file_manager: FileSystemManager,
 }
 
 impl LocalK8 {
-    pub fn new(name: String, nodes: u8) -> LocalK8 {
+    pub fn new(name: String) -> LocalK8 {
         LocalK8 {
-            nodes,
             files: vec![
                 ("main.tf".to_string(), include_str!("main.tf").to_string()),
                 (
@@ -32,18 +30,20 @@ impl LocalK8 {
             ),
         }
     }
-
-    pub fn get_variables(&self) -> Vec<(String, String)> {
-        vec![("nodes".to_string(), self.nodes.to_string())]
-    }
 }
 
 impl ClusterTargetBuilder for LocalK8 {
     fn generate(&self, config: &ClusterConfig, variables: Vec<(String, String)>) {
-        let mut vars = self.get_variables();
+        log(
+            scribe_rust::Color::Blue,
+            "Started",
+            "Generating local kubernetes cluster",
+        );
+
+        let mut vars = load_global_vars().unwrap();
         vars.extend(variables.clone());
         for (filename, content) in &self.files {
-            let generated_content = self.replace_variables(content.clone(), vars.clone());
+            let generated_content = Infra::replace_variables(content.clone(), vars.clone());
             let path = Path::new(ENV_DIR).join(&config.cluster_name).join(filename);
             log(
                 scribe_rust::Color::Gray,
@@ -57,20 +57,30 @@ impl ClusterTargetBuilder for LocalK8 {
     }
 
     fn build(&self, config: &ClusterConfig) {
-        println!("Building local kubernetes cluster");
+        log(
+            scribe_rust::Color::Blue,
+            "Started",
+            "Building local kubernetes cluster",
+        );
         // execute system process `tofu apply` in the directory
-        std::process::Command::new("tofu")
+        let handle = std::process::Command::new("tofu")
             .arg("init")
             .current_dir(Path::new(ENV_DIR).join(&config.cluster_name))
-            .output()
+            .spawn()
             .expect("Failed to execute terraform apply");
 
-        let result = std::process::Command::new("tofu")
+        let output = handle.wait_with_output().unwrap();
+
+        println!("{:?}", output.stdout);
+
+        let handle = std::process::Command::new("tofu")
             .arg("apply")
             .arg("-auto-approve")
             .current_dir(Path::new(ENV_DIR).join(&config.cluster_name))
-            .output()
+            .spawn()
             .expect("Failed to execute terraform apply");
+
+        let result = handle.wait_with_output().unwrap();
 
         if result.status.success() {
             println!("Cluster built successfully");

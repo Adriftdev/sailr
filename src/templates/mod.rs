@@ -164,7 +164,6 @@ impl TemplateManager {
                     .to_str()
                     .unwrap()
                     .to_string();
-                log(Color::Gray, "Reading", &path);
                 let template = self.filemanager.read_file(&path, None)?;
                 templates.push(Template::new(
                     template_name.clone(),
@@ -205,7 +204,7 @@ impl TemplateManager {
                     .to_str()
                     .unwrap()
                     .to_string();
-                log(Color::Gray, "Reading", &config_file);
+
                 let config_content = self
                     .filemanager
                     .read_file(&config_file, Some(&"./k8s/templates".to_string()))
