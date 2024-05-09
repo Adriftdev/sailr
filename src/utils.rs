@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::{fs::File, io, io::Write, path::Path, sync::Mutex};
 
 use anyhow::Result;
@@ -138,7 +139,7 @@ pub fn get_current_timestamp() -> String {
     now.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-pub fn replace_variables(content: String, variables: Vec<(String, String)>) -> String {
+pub fn replace_variables(content: String, variables: BTreeMap<String, String>) -> String {
     let mut new_content = content.clone();
     for (key, value) in variables {
         new_content = new_content.replace(&format!("{{{{{}}}}}", key), &value);

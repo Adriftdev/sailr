@@ -67,6 +67,14 @@ pub struct InitArgs {
         help = "Template path for infrastruture templates"
     )]
     pub infra_template_path: Option<String>,
+
+    #[arg(
+        name = "Region",
+        short = 'r',
+        long = "region",
+        help = "Region to use for the provider"
+    )]
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -77,10 +85,21 @@ pub struct InfraArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum InfraCommands {
-    /// Create a new infra
     Create(CreateArgs),
     Apply(ApplyArgs),
     Destroy(DestroyArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ApplyArgs {
+    /// Name of the environment
+    #[arg(
+        name = "name",
+        short = 'n',
+        long = "name",
+        help = "Name of the environment"
+    )]
+    pub name: String,
 }
 
 #[derive(Debug, Args)]
@@ -107,25 +126,33 @@ pub struct CreateArgs {
         help = "Template path for infrastruture templates"
     )]
     pub infra_template_path: Option<String>,
-}
 
-#[derive(Debug, Args)]
-pub struct ApplyArgs {
-    /// Name of the environment
-    #[arg(name = "name", help = "Name of the environment")]
-    pub name: String,
+    #[arg(
+        name = "Region",
+        short = 'r',
+        long = "region",
+        help = "Region to use for the provider"
+    )]
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct DestroyArgs {
     /// Name of the environment
-    #[arg(name = "name", help = "Name of the environment")]
+    #[arg(
+        name = "name",
+        short = 'n',
+        long = "name",
+        help = "Name of the environment"
+    )]
     pub name: String,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum Provider {
-    GCP,
+    Local,
+    Aws,
+    Gcp,
 }
 
 pub fn print_completions<G: Generator>(gen: G, cmd: &mut Command) {

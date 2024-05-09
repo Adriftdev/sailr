@@ -7,11 +7,13 @@ pub enum ClusterTarget {
 }
 */
 
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use scribe_rust::log;
 
 use crate::{filesystem::FileSystemManager, load_global_vars, utils::ENV_DIR};
+
+pub mod aws_eks;
 
 pub mod local_k8s;
 
@@ -58,7 +60,7 @@ impl Infra {
         ]
     }
 
-    fn replace_variables(content: String, variables: Vec<(String, String)>) -> String {
+    fn replace_variables(content: String, variables: BTreeMap<String, String>) -> String {
         let mut new_content = content.clone();
         for (key, value) in variables {
             new_content = new_content.replace(&format!("{{{{{}}}}}", key), &value);
@@ -66,7 +68,11 @@ impl Infra {
         new_content
     }
 
-    pub fn use_template(name: &String, template_path: &String, vars: &mut Vec<(String, String)>) {
+    pub fn use_template(
+        name: &String,
+        template_path: &String,
+        vars: &mut BTreeMap<String, String>,
+    ) {
         log(
             scribe_rust::Color::Blue,
             "Started",
@@ -114,6 +120,42 @@ impl Infra {
             file_manager
                 .create_file(&filename, &generated_content)
                 .unwrap();
+        }
+
+        log(
+            scribe_rust::Color::Green,
+            "Finished",
+            "Generating local kubernetes cluster",
+        );
+
+        log(
+            scribe_rust::Color::Blue,
+            "Started",
+            "Building local kubernetes cluster",
+        );
+
+        let handle = std::process::Command::new("tofu")
+            .arg("init")
+            .current_dir(Path::new(ENV_DIR).join(name))
+            .spawn()
+            .expect("Failed to execute terraform init");
+
+        handle.wait_with_output().unwrap();
+
+        let handle = std::process::Command::new("tofu")
+            .arg("apply")
+            .arg("-auto-approve")
+            .current_dir(Path::new(ENV_DIR).join(&config.cluster_name))
+            .spawn()
+            .expect("Failed to execute terraform apply");
+
+        let result = handle.wait_with_output().unwrap();
+
+        if result.status.success() {
+            println!("Cluster built successfully");
+        } else {
+            println!("Cluster build failed");
+            println!("{}", String::from_utf8_lossy(&result.stderr));
         }
     }
 

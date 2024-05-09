@@ -7,7 +7,7 @@ use sailr::{
     environment::Environment,
     errors::CliError,
     generate,
-    infra::{local_k8s::LocalK8, Infra},
+    infra::{aws_eks::AwsEks, local_k8s::LocalK8, Infra},
     templates::TemplateManager,
 };
 
@@ -27,21 +27,29 @@ async fn main() -> Result<(), CliError> {
     match cli.commands {
         Commands::Init(arg) => {
             TemplateManager::new().copy_base_templates().unwrap();
+
             create_default_env_config(
                 arg.name.clone(),
                 arg.config_template_path,
                 arg.default_registry.clone(),
             );
+
             if let Some(template_path) = arg.infra_template_path {
                 create_default_env_infra(arg.name, Some(template_path), arg.default_registry)
             } else if let Some(provider) = arg.provider {
-                match provider {
-                    Provider::GCP => {
-                        let infra = Infra::new(Box::new(LocalK8::new(arg.name.clone())));
-                        infra.generate(Infra::read_config(arg.name.clone()));
-                        infra.build(Infra::read_config(arg.name.clone()));
+                let infra = match provider {
+                    Provider::Local => Infra::new(Box::new(LocalK8::new(arg.name.clone()))),
+                    Provider::Aws => Infra::new(Box::new(AwsEks::new(
+                        arg.name.clone(),
+                        arg.region.unwrap_or("eu-west-2".to_string()),
+                    ))),
+                    _ => {
+                        logger.error(&format!("Provider {:?} not supported", provider));
+                        std::process::exit(1);
                     }
-                }
+                };
+                infra.generate(Infra::read_config(arg.name.clone()));
+                infra.build(Infra::read_config(arg.name.clone()));
             } else {
                 let infra = Infra::new(Box::new(LocalK8::new(arg.name.clone())));
                 infra.generate(Infra::read_config(arg.name.clone()));
@@ -57,12 +65,18 @@ async fn main() -> Result<(), CliError> {
                 if let Some(template_path) = arg.infra_template_path {
                     create_default_env_infra(arg.name, Some(template_path), arg.default_registry);
                 } else if let Some(provider) = arg.provider {
-                    match provider {
-                        Provider::GCP => {
-                            let infra = Infra::new(Box::new(LocalK8::new(arg.name.clone())));
-                            infra.generate(Infra::read_config(arg.name.clone()));
+                    let infra = match provider {
+                        Provider::Local => Infra::new(Box::new(LocalK8::new(arg.name.clone()))),
+                        Provider::Aws => Infra::new(Box::new(AwsEks::new(
+                            arg.name.clone(),
+                            arg.region.unwrap_or("eu-west-2".to_string()),
+                        ))),
+                        _ => {
+                            logger.error(&format!("Provider {:?} not supported", provider));
+                            std::process::exit(1);
                         }
-                    }
+                    };
+                    infra.generate(Infra::read_config(arg.name.clone()));
                 } else {
                     let infra = Infra::new(Box::new(LocalK8::new(arg.name.clone())));
                     infra.generate(Infra::read_config(arg.name.clone()));

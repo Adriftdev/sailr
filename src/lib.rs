@@ -14,6 +14,7 @@ pub mod config;
 pub mod deployment;
 pub mod environment;
 pub mod errors;
+pub mod executor;
 pub mod filesystem;
 pub mod generate;
 pub mod infra;
@@ -30,33 +31,33 @@ pub struct GlobalVars {
     pub custom_vars: Option<BTreeMap<String, String>>,
 }
 
-pub fn load_global_vars() -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+pub fn load_global_vars() -> Result<BTreeMap<String, String>, Box<dyn std::error::Error>> {
     let filemanager =
         filesystem::FileSystemManager::new(Path::new("./k8s").to_str().unwrap().to_string());
 
     let contents = filemanager.read_file(&"default.toml".to_string(), None)?;
     let global_vars = toml::from_str::<GlobalVars>(&contents)?; // Use destructuring assignment
 
-    let mut vars = vec![];
+    let mut vars = BTreeMap::new();
 
     if let Some(default_registry) = global_vars.default_registry {
-        vars.push(("default_registry".to_string(), default_registry));
+        vars.insert("default_registry".to_string(), default_registry);
     }
 
     if let Some(default_domain) = global_vars.default_domain {
-        vars.push(("default_domain".to_string(), default_domain));
+        vars.insert("default_domain".to_string(), default_domain);
     }
 
     if let Some(default_config_template) = global_vars.default_config_template {
-        vars.push((
+        vars.insert(
             "default_config_template".to_string(),
             default_config_template,
-        ));
+        );
     }
 
     if let Some(custom_vars) = global_vars.custom_vars {
         for (key, value) in custom_vars {
-            vars.push((key, value));
+            vars.insert(key, value);
         }
     }
 
@@ -102,14 +103,14 @@ pub fn create_default_env_config(
     let mut vars = load_global_vars().unwrap();
 
     if vars.len() == 0 {
-        vars.push(("default_registry".to_string(), "docker.io".to_string()));
-        vars.push(("default_domain".to_string(), "example.com".to_string()));
+        vars.insert("default_registry".to_string(), "docker.io".to_string());
+        vars.insert("default_domain".to_string(), "example.com".to_string());
     }
 
-    vars.push(("name".to_string(), name.clone()));
+    vars.insert("name".to_string(), name.clone());
 
     if registry.is_some() {
-        vars.push(("default_registry".to_string(), registry.unwrap()));
+        vars.insert("default_registry".to_string(), registry.unwrap());
     }
 
     let file_manager = FileSystemManager::new("./k8s/environments".to_string());
@@ -182,15 +183,18 @@ pub fn create_default_env_infra(
     let mut vars = load_global_vars().unwrap();
 
     if vars.len() == 0 {
-        vars.push(("default_registry".to_string(), "docker.io".to_string()));
-        vars.push(("default_domain".to_string(), "example.com".to_string()));
+        vars.insert("default_registry".to_string(), "docker.io".to_string());
+        vars.insert("default_domain".to_string(), "example.com".to_string());
     }
 
-    vars.push(("name".to_string(), name.clone()));
+    vars.insert("name".to_string(), name.clone());
 
     if registry.is_some() {
-        vars.push(("default_registry".to_string(), registry.unwrap()));
+        println!("Registry: {:?}", registry);
+        vars.insert("default_registry".to_string(), registry.unwrap());
     }
+
+    println!("Vars: {:?}", vars);
 
     if let Some(config_template) = infra_template {
         Infra::use_template(&name, &config_template, &mut vars);
