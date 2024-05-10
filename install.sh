@@ -56,7 +56,6 @@ mv "$DOWNLOAD_DIR/$CLI_NAME" "$INSTALL_DIR/$CLI_NAME"
 rm -rf "$DOWNLOAD_DIR"
 
 echo "Installation complete! Add '$INSTALL_DIR' to your PATH environment variable to use sailr from any directory."
-echo "  For example, in bash: 'export PATH=$PATH:$HOME/bin'"
 
 # Add sailr completions for the default shell (optional, user-scoped)
 SHELL=${SHELL##*/}  # Get only the basename of the current shell
