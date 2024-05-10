@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script version
-VERSION="1.0.0"
+VERSION="1.2.0"
 
 # Rust installation check and guidance
 if ! command -v rustc &> /dev/null; then
@@ -24,11 +24,12 @@ DOWNLOAD_DIR=$(mktemp -d)
 CLI_NAME="sailr"
 
 # Download URL for the pre-built CLI binary (replace with your appropriate URL)
-CLI_URL="https://example.com/releases/$CLI_NAME-$(uname -m)-unknown-linux-gnu"
+CLI_URL="https://github.com/Adriftdev/sailr/releases/download/v$VERSION/sailr-v$VERSION-unknown-linux-gnu"
+
 
 # Check for macOS-specific download (if applicable)
 if [[ $(uname) == "Darwin" ]]; then
-  CLI_URL="https://example.com/releases/$CLI_NAME-$(uname -m)-apple-darwin"
+  CLI_URL="https://github.com/Adriftdev/sailr/releases/download/v$VERSION/sailr-v$VERSION-apple-darwin-arm64"
 fi
 
 # Download the CLI binary
