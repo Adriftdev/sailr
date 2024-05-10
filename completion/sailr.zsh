@@ -34,11 +34,16 @@ _arguments "${_arguments_options[@]}" \
 '--config-template=[sailr config template path to use instead of the default one.]:Config Template Path: ' \
 '-r+[Default registry to use for images]:Default Registry: ' \
 '--registry=[Default registry to use for images]:Default Registry: ' \
+'-i+[Template path for infrastruture templates]:Infrastructure Template: ' \
+'--infra-templates=[Template path for infrastruture templates]:Infrastructure Template: ' \
+'-r+[Region to use for the provider]:Region: ' \
+'--region=[Region to use for the provider]:Region: ' \
 '-h[Print help]' \
 '--help[Print help]' \
 '-V[Print version]' \
 '--version[Print version]' \
 ':name -- Name of the environment:' \
+'::provider -- Provider to use:(local aws gcp)' \
 && ret=0
 ;;
 (completions)
@@ -50,41 +55,61 @@ _arguments "${_arguments_options[@]}" \
 ':shell -- Shell to generate completions for:(bash elvish fish powershell zsh)' \
 && ret=0
 ;;
-(env)
+(infra)
 _arguments "${_arguments_options[@]}" \
 '-h[Print help]' \
 '--help[Print help]' \
 '-V[Print version]' \
 '--version[Print version]' \
-":: :_sailr__env_commands" \
-"*::: :->env" \
+":: :_sailr__infra_commands" \
+"*::: :->infra" \
 && ret=0
 
     case $state in
-    (env)
+    (infra)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:sailr-env-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:sailr-infra-command-$line[1]:"
         case $line[1] in
             (create)
 _arguments "${_arguments_options[@]}" \
-'-p[Enable local postgres pod (usually development only)]' \
-'--postgres[Enable local postgres pod (usually development only)]' \
-'-r[Enable local redis pod (usually development only / only small caches)]' \
-'--redis[Enable local redis pod (usually development only / only small caches)]' \
-'-g[Enable system registry pod]' \
-'--registry[Enable system registry pod]' \
+'-r+[Default registry to use for images]:Default Registry: ' \
+'--registry=[Default registry to use for images]:Default Registry: ' \
+'-i+[Template path for infrastruture templates]:Infrastructure Template: ' \
+'--infra-templates=[Template path for infrastruture templates]:Infrastructure Template: ' \
+'-r+[Region to use for the provider]:Region: ' \
+'--region=[Region to use for the provider]:Region: ' \
 '-h[Print help]' \
 '--help[Print help]' \
 '-V[Print version]' \
 '--version[Print version]' \
 ':name -- Name of the environment:' \
-':provider -- Provider to use:(gcp)' \
+'::provider -- Provider to use:(local aws gcp)' \
+&& ret=0
+;;
+(apply)
+_arguments "${_arguments_options[@]}" \
+'-n+[Name of the environment]:name: ' \
+'--name=[Name of the environment]:name: ' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+&& ret=0
+;;
+(destroy)
+_arguments "${_arguments_options[@]}" \
+'-n+[Name of the environment]:name: ' \
+'--name=[Name of the environment]:name: ' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
 && ret=0
 ;;
 (help)
 _arguments "${_arguments_options[@]}" \
-":: :_sailr__env__help_commands" \
+":: :_sailr__infra__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -92,9 +117,17 @@ _arguments "${_arguments_options[@]}" \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:sailr-env-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:sailr-infra-help-command-$line[1]:"
         case $line[1] in
             (create)
+_arguments "${_arguments_options[@]}" \
+&& ret=0
+;;
+(apply)
+_arguments "${_arguments_options[@]}" \
+&& ret=0
+;;
+(destroy)
 _arguments "${_arguments_options[@]}" \
 && ret=0
 ;;
@@ -182,19 +215,27 @@ _arguments "${_arguments_options[@]}" \
 _arguments "${_arguments_options[@]}" \
 && ret=0
 ;;
-(env)
+(infra)
 _arguments "${_arguments_options[@]}" \
-":: :_sailr__help__env_commands" \
-"*::: :->env" \
+":: :_sailr__help__infra_commands" \
+"*::: :->infra" \
 && ret=0
 
     case $state in
-    (env)
+    (infra)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:sailr-help-env-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:sailr-help-infra-command-$line[1]:"
         case $line[1] in
             (create)
+_arguments "${_arguments_options[@]}" \
+&& ret=0
+;;
+(apply)
+_arguments "${_arguments_options[@]}" \
+&& ret=0
+;;
+(destroy)
 _arguments "${_arguments_options[@]}" \
 && ret=0
 ;;
@@ -236,7 +277,7 @@ _sailr_commands() {
     local commands; commands=(
 'init:Initialize a new project' \
 'completions:Generate shell completions' \
-'env:Manage environments' \
+'infra:Manage environments' \
 'deploy:Deploy an environment' \
 'generate:Generate an environment' \
 'build:Build related projects' \
@@ -244,6 +285,21 @@ _sailr_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sailr commands' commands "$@"
+}
+(( $+functions[_sailr__help__infra__apply_commands] )) ||
+_sailr__help__infra__apply_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr help infra apply commands' commands "$@"
+}
+(( $+functions[_sailr__infra__apply_commands] )) ||
+_sailr__infra__apply_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr infra apply commands' commands "$@"
+}
+(( $+functions[_sailr__infra__help__apply_commands] )) ||
+_sailr__infra__help__apply_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr infra help apply commands' commands "$@"
 }
 (( $+functions[_sailr__build_commands] )) ||
 _sailr__build_commands() {
@@ -265,20 +321,20 @@ _sailr__help__completions_commands() {
     local commands; commands=()
     _describe -t commands 'sailr help completions commands' commands "$@"
 }
-(( $+functions[_sailr__env__create_commands] )) ||
-_sailr__env__create_commands() {
+(( $+functions[_sailr__help__infra__create_commands] )) ||
+_sailr__help__infra__create_commands() {
     local commands; commands=()
-    _describe -t commands 'sailr env create commands' commands "$@"
+    _describe -t commands 'sailr help infra create commands' commands "$@"
 }
-(( $+functions[_sailr__env__help__create_commands] )) ||
-_sailr__env__help__create_commands() {
+(( $+functions[_sailr__infra__create_commands] )) ||
+_sailr__infra__create_commands() {
     local commands; commands=()
-    _describe -t commands 'sailr env help create commands' commands "$@"
+    _describe -t commands 'sailr infra create commands' commands "$@"
 }
-(( $+functions[_sailr__help__env__create_commands] )) ||
-_sailr__help__env__create_commands() {
+(( $+functions[_sailr__infra__help__create_commands] )) ||
+_sailr__infra__help__create_commands() {
     local commands; commands=()
-    _describe -t commands 'sailr help env create commands' commands "$@"
+    _describe -t commands 'sailr infra help create commands' commands "$@"
 }
 (( $+functions[_sailr__deploy_commands] )) ||
 _sailr__deploy_commands() {
@@ -290,20 +346,20 @@ _sailr__help__deploy_commands() {
     local commands; commands=()
     _describe -t commands 'sailr help deploy commands' commands "$@"
 }
-(( $+functions[_sailr__env_commands] )) ||
-_sailr__env_commands() {
-    local commands; commands=(
-'create:Create a new environment' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'sailr env commands' commands "$@"
+(( $+functions[_sailr__help__infra__destroy_commands] )) ||
+_sailr__help__infra__destroy_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr help infra destroy commands' commands "$@"
 }
-(( $+functions[_sailr__help__env_commands] )) ||
-_sailr__help__env_commands() {
-    local commands; commands=(
-'create:Create a new environment' \
-    )
-    _describe -t commands 'sailr help env commands' commands "$@"
+(( $+functions[_sailr__infra__destroy_commands] )) ||
+_sailr__infra__destroy_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr infra destroy commands' commands "$@"
+}
+(( $+functions[_sailr__infra__help__destroy_commands] )) ||
+_sailr__infra__help__destroy_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr infra help destroy commands' commands "$@"
 }
 (( $+functions[_sailr__generate_commands] )) ||
 _sailr__generate_commands() {
@@ -325,25 +381,12 @@ _sailr__help__go_commands() {
     local commands; commands=()
     _describe -t commands 'sailr help go commands' commands "$@"
 }
-(( $+functions[_sailr__env__help_commands] )) ||
-_sailr__env__help_commands() {
-    local commands; commands=(
-'create:Create a new environment' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'sailr env help commands' commands "$@"
-}
-(( $+functions[_sailr__env__help__help_commands] )) ||
-_sailr__env__help__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'sailr env help help commands' commands "$@"
-}
 (( $+functions[_sailr__help_commands] )) ||
 _sailr__help_commands() {
     local commands; commands=(
 'init:Initialize a new project' \
 'completions:Generate shell completions' \
-'env:Manage environments' \
+'infra:Manage environments' \
 'deploy:Deploy an environment' \
 'generate:Generate an environment' \
 'build:Build related projects' \
@@ -356,6 +399,40 @@ _sailr__help_commands() {
 _sailr__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'sailr help help commands' commands "$@"
+}
+(( $+functions[_sailr__infra__help_commands] )) ||
+_sailr__infra__help_commands() {
+    local commands; commands=(
+'create:' \
+'apply:' \
+'destroy:' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sailr infra help commands' commands "$@"
+}
+(( $+functions[_sailr__infra__help__help_commands] )) ||
+_sailr__infra__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr infra help help commands' commands "$@"
+}
+(( $+functions[_sailr__help__infra_commands] )) ||
+_sailr__help__infra_commands() {
+    local commands; commands=(
+'create:' \
+'apply:' \
+'destroy:' \
+    )
+    _describe -t commands 'sailr help infra commands' commands "$@"
+}
+(( $+functions[_sailr__infra_commands] )) ||
+_sailr__infra_commands() {
+    local commands; commands=(
+'create:' \
+'apply:' \
+'destroy:' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sailr infra commands' commands "$@"
 }
 (( $+functions[_sailr__help__init_commands] )) ||
 _sailr__help__init_commands() {
