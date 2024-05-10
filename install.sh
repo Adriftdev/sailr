@@ -9,12 +9,7 @@ if ! command -v rustc &> /dev/null; then
   echo "Installing Rust is recommended for a complete development environment."
   echo "For installation instructions, visit the official Rust website: https://www.rust-lang.org/tools/install"
   echo "Would you like to continue with the CLI installation (without Rust compilation capabilities)?"
-  select yn in "Yes" "No"; do
-    case $yn in
-      Yes ) break;;
-      No ) exit 0;;
-    esac
-  done
+  exit 1;  
 fi
 
 # Temporary directory for downloads
