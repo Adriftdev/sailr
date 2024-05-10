@@ -82,8 +82,6 @@ if [ -n "$SAILR_COMPLETIONS_DIR" ]; then
   echo "Installing sailr completions for $SHELL..."
   mkdir -p $SAILR_COMPLETIONS_DIR
   # Download to user-writable directory
-  curl -fsSL https://raw.githubusercontent.com/Adriftdev/sailr/main/completions/sailr.$SHELL > "$SAILR_COMPLETIONS_DIR/sailr"
-  # Source the completions for the current shell session (optional)
-  # For bash/zsh, add: source "$SAILR_COMPLETIONS_DIR/sailr"
-  # For fish, add: fish_refresh
+  curl -fsSL https://raw.githubusercontent.com/Adriftdev/sailr/main/completion/sailr.$SHELL > "$SAILR_COMPLETIONS_DIR/sailr"
+  echo "please run: source $SAILR_COMPLETIONS_DIR/sailr"
 fi
