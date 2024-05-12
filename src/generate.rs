@@ -6,6 +6,7 @@ use anyhow::Result;
 
 use crate::{
     config::Config, errors::GenerateError, filesystem::FileSystemManager, templates::Template,
+    LOGGER,
 };
 
 pub struct Generator {
@@ -54,7 +55,7 @@ impl Generator {
                 .filemanager
                 .create_file(&path, &config_map.content.to_string())
             {
-                Ok(_) => log(Color::Blue, "Generated", &path),
+                Ok(_) => LOGGER.info(&path),
                 Err(_) => return Err(GenerateError::K8sResourceGenerationFailed(path)),
             };
         }
@@ -71,7 +72,7 @@ impl Generator {
                 .filemanager
                 .create_file(&path, &template.content.to_string())
             {
-                Ok(_) => log(Color::Blue, "Generated", &path),
+                Ok(_) => LOGGER.info(&path),
                 Err(_) => return Err(GenerateError::K8sResourceGenerationFailed(path)),
             };
         }

@@ -17,11 +17,21 @@ version = "latest"
 path = "core/test"
 name = "test"
 version = "latest"
+build = "./test"                                                 # Service build path for roomservice 
+before = "cargo check"                                           # Roomservice Before execution
+run_synchronous = "docker build . -t localhost:5000/test:latest" # Roomservice Run in sync execution
+after = "docker push localhost:5000/test:latest"                 # Roomservice after exectuion
+
 
 [[service_whitelist]]
-path = "core/test2"
-name = "test2"
-version = "latest"
+path = "core/test2"                                               # Path for (template) / (generate results)
+name = "test2"                                                    # Service name
+namespace = "develop"                                             # Namespace to deploy too.
+version = "latest"                                                # service version
+build = "./test2"                                                 # Service build path for roomservice 
+before = "pnpm build"                                             # Roomservice Before execution
+run_synchronous = "docker build . -t localhost:5000/test2:latest" # Roomservice Run in sync execution
+after = "docker push localhost:5000/test2:latest"                 # Roomservice after exectuion
 
 [[environment_variables]]
 name = "REDIS_HOST"

@@ -9,9 +9,7 @@ pub enum ClusterTarget {
 
 use std::{collections::BTreeMap, path::Path};
 
-use scribe_rust::log;
-
-use crate::{filesystem::FileSystemManager, load_global_vars, utils::ENV_DIR};
+use crate::{filesystem::FileSystemManager, load_global_vars, utils::ENV_DIR, LOGGER};
 
 pub mod aws_eks;
 
@@ -73,11 +71,7 @@ impl Infra {
         template_path: &String,
         vars: &mut BTreeMap<String, String>,
     ) {
-        log(
-            scribe_rust::Color::Blue,
-            "Started",
-            "Generating local kubernetes cluster",
-        );
+        LOGGER.info("Generating local kubernetes cluster");
         let config = &Infra::read_config(name.to_string());
 
         let file_manager =
@@ -112,27 +106,13 @@ impl Infra {
             let path = Path::new(ENV_DIR)
                 .join(&config.cluster_name)
                 .join(filename.clone());
-            log(
-                scribe_rust::Color::Gray,
-                "Infra initialize",
-                path.to_str().unwrap(),
-            );
+            LOGGER.trace(path.to_str().unwrap());
             file_manager
                 .create_file(&filename, &generated_content)
                 .unwrap();
         }
 
-        log(
-            scribe_rust::Color::Green,
-            "Finished",
-            "Generating local kubernetes cluster",
-        );
-
-        log(
-            scribe_rust::Color::Blue,
-            "Started",
-            "Building local kubernetes cluster",
-        );
+        LOGGER.info("Building local kubernetes cluster");
 
         let handle = std::process::Command::new("tofu")
             .arg("init")

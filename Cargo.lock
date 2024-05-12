@@ -1903,6 +1903,7 @@ dependencies = [
  "kube",
  "libc",
  "nix",
+ "once_cell",
  "pty",
  "rayon",
  "scribe-rust",

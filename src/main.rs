@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, sync::Arc};
 
 use sailr::{
     builder::{split_matches, Builder},
@@ -9,18 +9,16 @@ use sailr::{
     generate,
     infra::{aws_eks::AwsEks, local_k8s::LocalK8, Infra},
     templates::TemplateManager,
+    LOGGER,
 };
 
 use anyhow::Result;
 
 use clap::{CommandFactory, Parser};
 
-use scribe_rust;
-
 #[tokio::main]
 async fn main() -> Result<(), CliError> {
     dotenvy::dotenv().ok();
-    let logger = scribe_rust::Logger::default();
 
     let cli = Cli::parse();
 
@@ -44,7 +42,7 @@ async fn main() -> Result<(), CliError> {
                         arg.region.unwrap_or("eu-west-2".to_string()),
                     ))),
                     _ => {
-                        logger.error(&format!("Provider {:?} not supported", provider));
+                        LOGGER.error(&format!("Provider {:?} not supported", provider));
                         std::process::exit(1);
                     }
                 };
@@ -61,7 +59,7 @@ async fn main() -> Result<(), CliError> {
         }
         Commands::Infra(a) => match a.command {
             InfraCommands::Create(arg) => {
-                logger.info(&format!("Creating a new environment"));
+                LOGGER.info(&format!("Creating a new environment"));
                 if let Some(template_path) = arg.infra_template_path {
                     create_default_env_infra(arg.name, Some(template_path), arg.default_registry);
                 } else if let Some(provider) = arg.provider {
@@ -72,7 +70,7 @@ async fn main() -> Result<(), CliError> {
                             arg.region.unwrap_or("eu-west-2".to_string()),
                         ))),
                         _ => {
-                            logger.error(&format!("Provider {:?} not supported", provider));
+                            LOGGER.error(&format!("Provider {:?} not supported", provider));
                             std::process::exit(1);
                         }
                     };
@@ -86,29 +84,29 @@ async fn main() -> Result<(), CliError> {
             InfraCommands::Destroy(arg) => Infra::destroy(Infra::read_config(arg.name)),
         },
         Commands::Deploy(arg) => {
-            logger.info(&format!("Deploying an environment"));
+            LOGGER.info(&format!("Deploying an environment"));
             sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }
         Commands::Generate(arg) => {
-            logger.info(&format!("Generating an environment"));
+            LOGGER.info(&format!("Generating an environment"));
 
             let env = match Environment::load_from_file(&arg.name) {
                 Ok(env) => env,
                 Err(e) => {
-                    logger.error(&format!("Failed to load environment: {}", e));
+                    LOGGER.error(&format!("Failed to load environment: {}", e));
                     std::process::exit(1);
                 }
             };
 
             generate(&arg.name, &env);
 
-            logger.info(&format!("Generation Complete"));
+            LOGGER.info(&format!("Generation Complete"));
         }
         Commands::Build(arg) => {
             let env = match Environment::load_from_file(&arg.name) {
                 Ok(env) => env,
                 Err(e) => {
-                    logger.error(&format!("Failed to load environment: {}", e));
+                    LOGGER.error(&format!("Failed to load environment: {}", e));
                     std::process::exit(1);
                 }
             };
@@ -128,18 +126,18 @@ async fn main() -> Result<(), CliError> {
             match builder.build(&env) {
                 Ok(_) => (),
                 Err(e) => {
-                    logger.error(&format!("Failed to build environment: {}", e));
+                    LOGGER.error(&format!("Failed to build environment: {}", e));
                     std::process::exit(1);
                 }
             };
         }
         Commands::Go(arg) => {
-            logger.info(&format!("Generating and deploying an environment"));
+            LOGGER.info(&format!("Generating and deploying an environment"));
 
             let env = match Environment::load_from_file(&arg.name) {
                 Ok(env) => env,
                 Err(e) => {
-                    logger.error(&format!("Failed to load environment: {}", e));
+                    LOGGER.error(&format!("Failed to load environment: {}", e));
                     std::process::exit(1);
                 }
             };
@@ -159,7 +157,7 @@ async fn main() -> Result<(), CliError> {
             match builder.build(&env) {
                 Ok(_) => (),
                 Err(e) => {
-                    logger.error(&format!("Failed to build environment: {}", e));
+                    LOGGER.error(&format!("Failed to build environment: {}", e));
                     std::process::exit(1);
                 }
             };

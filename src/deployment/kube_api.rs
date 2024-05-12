@@ -9,12 +9,12 @@ use kube::client::ConfigExt;
 use kube::core::{DynamicObject, GroupVersionKind};
 use kube::discovery::{ApiCapabilities, ApiResource, Scope};
 use kube::{Api, Client, Discovery};
-use scribe_rust::{log, Color};
-use serde::Deserialize;
 
+use serde::Deserialize;
 use tower::ServiceBuilder;
 
 use crate::errors::KubeError;
+use crate::LOGGER;
 use kube::config::Config;
 
 pub async fn get_all_deployments() -> Result<(), KubeError> {
@@ -120,16 +120,11 @@ pub async fn apply(
                 ))
             })?
         } else {
-            log(
-                Color::Red,
-                "Error",
-                &format!("cannot apply object without valid TypeMeta {:?}", &obj),
-            );
-            log(
-                Color::Red,
-                "Error",
-                &format!("please add apiVersion and kind to the object"),
-            );
+            LOGGER.error(&format!(
+                "cannot apply object without valid TypeMeta {:?}",
+                &obj
+            ));
+            LOGGER.error(&format!("please add apiVersion and kind to the object"));
             continue;
         };
         let name = &obj.metadata.name;
@@ -145,17 +140,13 @@ pub async fn apply(
                 .map_err(|e| {
                     KubeError::ResourceUpdateFailed(format!("Resource patch failed: {}", e))
                 })?;
-            log(
-                Color::Blue,
-                "Success",
-                &format!("Applied {} {}", gvk.kind, name.clone().unwrap_or_default()),
-            );
+            LOGGER.info(&format!(
+                "Applied {} {}",
+                gvk.kind,
+                name.clone().unwrap_or_default()
+            ));
         } else {
-            log(
-                Color::Red,
-                "Error",
-                &format!("Cannot apply document for unknown {:?}", gvk),
-            );
+            LOGGER.error(&format!("Cannot apply document for unknown {:?}", gvk));
         }
     }
 

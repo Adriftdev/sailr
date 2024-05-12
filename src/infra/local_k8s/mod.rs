@@ -1,8 +1,6 @@
 use std::path::Path;
 
-use scribe_rust::log;
-
-use crate::{filesystem::FileSystemManager, load_global_vars, utils::ENV_DIR};
+use crate::{filesystem::FileSystemManager, load_global_vars, utils::ENV_DIR, LOGGER};
 
 use super::{ClusterConfig, ClusterTargetBuilder, Infra};
 
@@ -34,22 +32,14 @@ impl LocalK8 {
 
 impl ClusterTargetBuilder for LocalK8 {
     fn generate(&self, config: &ClusterConfig, variables: Vec<(String, String)>) {
-        log(
-            scribe_rust::Color::Blue,
-            "Started",
-            "Generating local kubernetes cluster",
-        );
+        LOGGER.info("Generating local kubernetes cluster");
 
         let mut vars = load_global_vars().unwrap();
         vars.extend(variables.clone());
         for (filename, content) in &self.files {
             let generated_content = Infra::replace_variables(content.clone(), vars.clone());
             let path = Path::new(ENV_DIR).join(&config.cluster_name).join(filename);
-            log(
-                scribe_rust::Color::Gray,
-                "Infra initialize",
-                path.to_str().unwrap(),
-            );
+            LOGGER.trace(path.to_str().unwrap());
             self.file_manager
                 .create_file(filename, &generated_content)
                 .unwrap();
@@ -57,11 +47,7 @@ impl ClusterTargetBuilder for LocalK8 {
     }
 
     fn build(&self, config: &ClusterConfig) {
-        log(
-            scribe_rust::Color::Blue,
-            "Started",
-            "Building local kubernetes cluster",
-        );
+        LOGGER.info("Building local kubernetes cluster");
         // execute system process `tofu apply` in the directory
         let handle = std::process::Command::new("tofu")
             .arg("init")

@@ -4,9 +4,8 @@ use anyhow::Result;
 use std::path::Path;
 
 use async_recursion::async_recursion;
-use scribe_rust::{log, Color};
 
-use crate::errors::DeployError;
+use crate::{errors::DeployError, LOGGER};
 
 #[async_recursion]
 pub async fn apply_path_recursive(
@@ -52,11 +51,7 @@ pub async fn apply_path_recursive(
 }
 
 pub async fn deploy(ctx: String, env_name: &str) -> Result<(), DeployError> {
-    log(
-        Color::Yellow,
-        "Deploying",
-        &format!("Deploying to {} for {}", ctx, env_name),
-    );
+    LOGGER.info(&format!("Deploying to {} for {}", ctx, env_name));
     let client = kube_api::create_client(ctx).await?;
     let discovery = kube::Discovery::new(client.clone())
         .run()
@@ -71,7 +66,7 @@ pub async fn deploy(ctx: String, env_name: &str) -> Result<(), DeployError> {
 
     // TODO: https://linear.app/adriftdev/issue/ADR-40/environment-version-management
     let _manifest = apply_path_recursive(path.as_path(), client, &discovery, &mut None).await?;
-    log(Color::Green, "Done", "Deployed successfully!");
+    LOGGER.info("Deployed successfully!");
 
     Ok(())
 }

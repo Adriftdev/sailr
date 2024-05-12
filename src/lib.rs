@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use environment::Environment;
 use filesystem::FileSystemManager;
@@ -8,13 +8,15 @@ use serde::Deserialize;
 use templates::TemplateManager;
 use utils::replace_variables;
 
+use once_cell::sync::Lazy;
+use scribe_rust::{self, Logger};
+
 pub mod builder;
 pub mod cli;
 pub mod config;
 pub mod deployment;
 pub mod environment;
 pub mod errors;
-pub mod executor;
 pub mod filesystem;
 pub mod generate;
 pub mod infra;
@@ -22,6 +24,8 @@ pub mod provider;
 pub mod roomservice;
 pub mod templates;
 pub mod utils;
+
+pub static LOGGER: Lazy<Arc<Logger>> = Lazy::new(|| Logger::default());
 
 #[derive(Debug, Deserialize)]
 pub struct GlobalVars {

@@ -7,6 +7,77 @@ VERSION="1.2.0"
 # Temporary directory for downloads (use user's home directory for safety)
 DOWNLOAD_DIR=$(mktemp -d --tmpdir=$HOME)
 
+
+if ! command -v docker &> /dev/null; then
+  echo "Docker is not installed. Please ensure docker is installed on your system."
+  if [[ $EUID -ne 0 ]]; then
+    echo "Would you like to install Docker now? (y/N) "
+    read -r install_docker
+    if [[ $install_docker == "y" ]]; then
+      # Add Docker's official GPG key:
+      sudo apt-get update
+      sudo apt-get -y install ca-certificates curl
+      sudo install -m 0755 -d /etc/apt/keyrings
+      sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+      # Add the repository to Apt sources:
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+      sudo apt-get update
+      sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      sudo groupadd docker
+      sudo usermod -aG docker $USER
+      newgrp docker
+    else
+      exit 1
+    fi
+  fi
+fi
+
+if ! command -v tofu &> /dev/null; then
+  echo "Tofu is not installed. Please ensure tofu is installed on your system."
+  if [[ $EUID -ne 0 ]]; then
+    echo "Would you like to install tofu now? (y/N) "
+    read -r install_tofu
+    if [[ $install_tofu == "y" ]]; then
+      # Download the installer script:
+      curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh -o install-opentofu.sh
+      # Alternatively: wget --secure-protocol=TLSv1_2 --https-only https://get.opentofu.org/install-opentofu.sh -O install-opentofu.sh
+
+      # Grant execution permissions:
+      chmod +x install-opentofu.sh
+
+      # Please inspect the downloaded script at this point.
+
+      # Run the installer:
+      ./install-opentofu.sh --install-method standalone
+
+      # Remove the installer:
+      rm install-opentofu.sh
+    else
+      exit 1
+    fi
+  fi
+fi
+
+if ! command -v minikube &> /dev/null; then
+  echo "Minikube is not installed. Please ensure minikube is installed on your system, to support the optional default develop cluster."
+  if [[ $EUID -ne 0 ]]; then
+    echo "Would you like to install Minikube now? (y/N) "
+    read -r install_minikube
+    if [[ $install_minikube == "y" ]]; then
+
+      curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+      sudo install minikube-linux-amd64 /usr/local/bin/minikube
+    else
+      exit 1
+    fi
+  fi
+fi
+
 # CLI name (replace with your actual CLI name)
 CLI_NAME="sailr"
 

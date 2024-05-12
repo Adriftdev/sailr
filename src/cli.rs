@@ -37,8 +37,12 @@ pub struct CompletionsArgs {
 
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// Name of the environment
-    #[arg(name = "name", help = "Name of the environment")]
+    #[arg(
+        name = "name",
+        short = 'n',
+        long = "name",
+        help = "Name of the environment"
+    )]
     pub name: String,
 
     #[arg(
@@ -70,7 +74,7 @@ pub struct InitArgs {
 
     #[arg(
         name = "Region",
-        short = 'r',
+        short = 'R',
         long = "region",
         help = "Region to use for the provider"
     )]

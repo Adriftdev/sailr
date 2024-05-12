@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
 
-use crate::errors::ProviderError;
+use crate::{errors::ProviderError, LOGGER};
 
 #[derive(Deserialize, Serialize)]
 pub struct GcpProviderKey {
@@ -42,18 +42,18 @@ pub struct K3SProvider;
 
 impl ProviderStrategy for AwsProvider {
     fn initialize_project(&self) -> Result<(), ProviderError> {
-        log(Color::Blue, "Initializing", "AWS provider...");
+        LOGGER.info("Initializin gAWS provider...");
         let _provider_key = env::var("PROVIDER_KEY").expect("PROVIDER_KEY must be set");
         // TODO: Create a new AWS project
 
-        log(Color::Green, "Success", "AWS provider initialized");
+        LOGGER.info("AWS provider initialized");
         Ok(())
     }
 }
 
 impl ProviderStrategy for GcpProvider {
     fn initialize_project(&self) -> Result<(), ProviderError> {
-        log(Color::Blue, "Initializing", "GCP provider...");
+        LOGGER.info("GCP provider...");
         let provider_key = serde_json::from_str::<GcpProviderKey>(
             &env::var("PROVIDER_KEY").expect("PROVIDER_KEY must be set"),
         );
@@ -64,14 +64,14 @@ impl ProviderStrategy for GcpProvider {
 
         // TODO: Create a new GCP project
 
-        log(Color::Green, "Success", "GCP provider initialized");
+        LOGGER.info("GCP provider initialized");
         Ok(())
     }
 }
 
 impl ProviderStrategy for DockerDesktopProvider {
     fn initialize_project(&self) -> Result<(), ProviderError> {
-        log(Color::Blue, "Initializing", "Docker Desktop provider...");
+        LOGGER.info("Docker Desktop provider...");
         // TODO: Create a new Docker Desktop project
 
         log(
@@ -85,10 +85,10 @@ impl ProviderStrategy for DockerDesktopProvider {
 
 impl ProviderStrategy for K3SProvider {
     fn initialize_project(&self) -> Result<(), ProviderError> {
-        log(Color::Blue, "Initializing", "k3s provider...");
+        LOGGER.info("k3s provider...");
         // TODO: Create a new k3s project
 
-        log(Color::Green, "Success", "k3s provider initialized");
+        LOGGER.info("k3s provider initialized");
         Ok(())
     }
 }
