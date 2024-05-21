@@ -13,6 +13,7 @@ Kubernetes is a powerful tool for managing containerized applications, but it ca
 - Sailr Workflow Stablization and cleanup.
 - Remove the dependency on OpenTofu, while keeping support for both OpenTofu/Terraform.
 - Helm support
+- Full handlebar like templating support - need to investigate best approach for this, that allows flow control and intuitive syntax.
 
 Sailr is the perfect tool for Kubernetes users who want to save time, reduce stress, and get more out of their Kubernetes deployments. Try Sailr today and see the difference it can make.
 
