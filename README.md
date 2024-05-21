@@ -9,7 +9,10 @@ Kubernetes is a powerful tool for managing containerized applications, but it ca
 - Opinioned kubernetes infrastructure automation.
 
 ## Roadmap
-- Zero downtime deployments 
+- Zero downtime deployments.
+- Sailr Workflow Stablization and cleanup.
+- Remove the dependency on OpenTofu, while keeping support for both OpenTofu/Terraform.
+- Helm support
 
 Sailr is the perfect tool for Kubernetes users who want to save time, reduce stress, and get more out of their Kubernetes deployments. Try Sailr today and see the difference it can make.
 
@@ -17,7 +20,6 @@ Sailr is the perfect tool for Kubernetes users who want to save time, reduce str
 
 - OpenTofu (Terraform replacement)
 - Docker
-- minikube (local deployments only)
 
 ## Minikube Setup
 
@@ -41,16 +43,6 @@ Generates shell completion scripts for bash or zsh to enhance the Sailr CLI expe
 
 ```bash 
 sailr completions [bash|zsh] 
-```
-
-### Environment Management 
-
-**(depricated - This happens in init, use config templates and k8s/default.toml to change default config)**
-
-Creates a new environment named <environment_name> with optional local service pods like PostgreSQL and Redis (intended for development environments).
-
-```bash 
-sailr env create <environment_name> 
 ```
 
 ### Deployment
@@ -88,7 +80,6 @@ sailr go <environment_name>:
 ### Additional Notes
 
 - Use the --force flag with build to rebuild all service images regardless of the cache.
-- Refer to the documentation for detailed configuration options and advanced usage.
 
 ### Getting Help
 
@@ -114,14 +105,23 @@ These settings apply globally and can be referenced within templates using doubl
 
 ### Service Whitelist
 
-This section defines the services to be generated and deployed.
+This section defines the services to be generated and deployed, and the build process optionally.
+
+Under the hood of the build system uses the core of roomservice-rust credit goes to [Curtis Wilkinson](https://github.com/curtiswilkinson/roomservice-rust) for the roomservice code :D.
+
+Some changes to roomservice config have been made for this applciation - config file has been merged into the config.toml and defined them is as below.
 
 * **[[service_whitelist]] (array):** An array of service definitions. Each service definition within the whitelist has the following properties:
     * **name (string):** (Required) The name of the service. Used for image pulling and as a reference in templates (`{{service_name}}`).
     * **version (string):** (Required) The version of the service image (semver or tag). Used in templates (`{{service_version}}`).
     * **path (string):** (Optional) The path to the service template directory relative to `k8s/templates`. Defaults to the service name.
     * **namespace (string):** (Optional) The namespace where the service will be deployed in Kubernetes. Defaults to the environment name.
-    * **build (boolean):** (Optional) Whether to build the service image before deployment. Defaults to `true`.
+    * **build (string):** (optional) The path to the service build directory relative to the project root.
+    * **run_parallel (string):** (Optional) A shell command to run in parallel for all builds.
+    * **run_synchronous (string):** (Optional) A shell command to run in synchronous.
+    * **before (string):** (Optional) A shell command to run before building the service image.
+    * **before_synchonous: (string):** (Optional) A shell command to run before building the service image.
+    * **after (string):** (Optional) A shell command to run after building the service image.
 
 ### Environment Variables
 
@@ -131,34 +131,16 @@ This section defines environment variables used during service generation and in
     * **name (string):** (Required) The name of the environment variable.
     * **value (string):** (Required) The value to be assigned to the environment variable. This value will be replaced with `{{name}}` in templates.
 
-### Build Configuration
-
-This section defines build configurations for services. 
-
-Under the hood uses the core of roomservice-rust credit goes to [Curtis Wilkinson](https://github.com/curtiswilkinson/roomservice-rust) for the roomservice code :D.
-
-Some changes to roomservice config have been made for this applciation - config file has been merged into the config.toml and defined them is as below.
-
-* **[build]** (Optional) Global roomservice configs. Each build configuration can have the following properties:
-    * **beforeAll (string):** (Optional) A shell command to execute before all service builds.
-    * **[build.rooms.] (object):** Build configuration for a specific service directory. The key `` corresponds to the service name or a custom name.
-        * **path (string):** (Required) The path to the service build directory relative to the project root.
-        * **run_parallel (string):** (Optional) A shell command to run in parallel for all builds.
-        * **before (string):** (Optional) A shell command to run before building the service image.
-        * **after (string):** (Optional) A shell command to run after building the service image.
-
 ## Core Functionalities
 
 Sailr provides a rich set of commands for interacting with service deployments:
 
 * **Initialization (init):** Initializes a new environment by copying base templates and creating a default configuration file.
 * **Completions (completions):** Generates shell completion scripts for popular shells to enhance the CLI experience.
-* **Environment Management (env):** 
-    * **Create (create):** Creates a new environment with optional local service pods like PostgreSQL and Redis (intended for development environments).
 * **Deployment (deploy):** Deploys an existing environment to a specified Kubernetes cluster context.
 * **Generation (generate):** Generates deployment manifests for an environment without deploying them to the cluster.
 * **Building (build):** Builds container images for services in an environment. Skips services already built unless the `--force` flag is used.
-* **Combined Workflow (go):** Combines generation and deployment in a single command, streamlining the process.
+* **Combined Workflow (go):** Combines build, generation, and deployment in a single command, streamlining the process.
 
 ## Advanced Usage and Gotchas
 
@@ -191,7 +173,7 @@ This command will rebuild all services in the my-env environment, even if they e
 Environment Providers
 
 Currently, Sailr supports deploying to a local Kubernetes cluster using the LocalK8 infrastructure provider. 
-Future versions might introduce support for additional cloud providers like GCP (as hinted by the Provider enum).
+Future versions might introduce support for additional cloud providers like GCP and AWS.
 
 ## Contributing
 
