@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Script version
 VERSION="1.2.0"
