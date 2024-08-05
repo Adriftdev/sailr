@@ -19,3 +19,6 @@ sidebar_position: 2
 ### Additional Options
 
 * `--force` (with `build`): Force rebuild all service images, ignoring the cache.
+* **Generating Specific Services:** Use the `--ignore` flag with the `build` and `go` commands. 
+* **Building without Deployment:** The `build` command focuses only on image creation.
+* **Service Build Caching:** Use `--force` to rebuild images even if they are cached.
