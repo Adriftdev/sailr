@@ -8,13 +8,13 @@ sidebar_position: 2
 
 | Command        | Description                                           | Example                             |
 | -------------- | ----------------------------------------------------- | ----------------------------------- |
-| `sailr init`   | Initialize a new environment.                        | `sailr init -n my-environment`        |
-| `sailr deploy` | Deploy an environment to your Kubernetes cluster.     | `sailr deploy -n my-environment -c my-context-name`     |
-| `sailr generate` | Generate manifests without deploying.                | `sailr generate -n my-environment`   |
-| `sailr build`  | Build container images for your services.           | `sailr build my-environment`      |
-| `sailr go`     | Combine build, generate, and deploy in one step.     | `sailr go -n my-environment -c my-context-name`         |
-| `sailr completions` | Generate shell completion scripts (bash or zsh). | `sailr completions bash`         |
-| `sailr --help` | Show help information for all Sailr commands.          | `sailr --help`                  | 
+| `init`   | Initialize a new environment.                        | `sailr init -n my-environment`        |
+| `deploy` | Deploy an environment to your Kubernetes cluster.     | `sailr deploy -n my-environment -c my-context-name`     |
+| `generate` | Generate manifests without deploying.                | `sailr generate -n my-environment`   |
+| `build`  | Build container images for your services.           | `sailr build my-environment`      |
+| `go`     | Combine build, generate, and deploy in one step.     | `sailr go -n my-environment -c my-context-name`         |
+| `completions` | Generate shell completion scripts (bash or zsh). | `sailr completions bash`         |
+| `help` | Show help information for all Sailr commands.          | `sailr --help`                  | 
 
 ### Additional Options
 
