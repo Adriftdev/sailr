@@ -275,8 +275,6 @@ impl Serialize for Service {
 }
 
 impl<'de> Deserialize<'de> for Service {
-    // I know know this is not using typical serde deserialization,
-    // but I couldn't be bother reading the docs. This works, so I'm happy.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let service: std::collections::HashMap<String, String> =
             match serde::Deserialize::deserialize(deserializer) {
@@ -315,84 +313,56 @@ impl<'de> Deserialize<'de> for Service {
                 Some(tag),
             ));
         }
-        if version.contains('-') {
-            let mut version_tag_split = version.split('-');
-            let tag = version_tag_split.next().unwrap().to_string();
-            let mut version = version.split('-').next().unwrap().split('.');
 
-            let major_version: Option<i32> = match version.next() {
-                Some(major_version) => match major_version.parse::<i32>() {
-                    Ok(major_version) => Some(major_version),
-                    Err(_) => None,
-                },
-                None => None,
-            };
-            let minor_version: Option<i32> = match version.next() {
-                Some(minor_version) => match minor_version.parse::<i32>() {
-                    Ok(minor_version) => Some(minor_version),
-                    Err(_) => None,
-                },
-                None => None,
-            };
+        // Enhanced version parsing to handle formats like 8.0
+        let mut version_parts = version.split('.');
+        let mut major_version: Option<i32> = None;
+        let mut minor_version: Option<i32> = None;
+        let mut patch_version: Option<i32> = None;
+        let mut tag: Option<String> = None;
 
-            let patch_version: Option<i32> = match version.next() {
-                Some(patch_version) => match patch_version.parse::<i32>() {
-                    Ok(patch_version) => Some(patch_version),
-                    Err(_) => None,
-                },
-                None => None,
-            };
-
-            Ok(Self {
-                name: name.to_string(),
-                namespace: namespace.to_string(),
-                path: Some(path.to_string()),
-                build: build.cloned(),
-                major_version,
-                minor_version,
-                patch_version,
-                tag: Some(tag),
-            })
-        } else {
-            let mut version = version.split('.');
-            let major_version: Option<i32> = match version.next() {
-                Some(major_version) => match major_version.parse::<i32>() {
-                    Ok(major_version) => Some(major_version),
-                    Err(_) => None,
-                },
-                None => None,
-            };
-            let minor_version: Option<i32> = match version.next() {
-                Some(minor_version) => match minor_version.parse::<i32>() {
-                    Ok(minor_version) => Some(minor_version),
-                    Err(_) => None,
-                },
-                None => None,
-            };
-
-            let patch_version: Option<i32> = match version.next() {
-                Some(patch_version) => match patch_version.parse::<i32>() {
-                    Ok(patch_version) => Some(patch_version),
-                    Err(_) => None,
-                },
-                None => None,
-            };
-
-            let tag = match version.next() {
-                Some(tag) => Some(tag.to_string()),
-                None => None,
-            };
-            Ok(Self {
-                name: name.to_string(),
-                namespace: namespace.to_string(),
-                path: Some(path.to_string()),
-                build: build.cloned(),
-                major_version,
-                minor_version,
-                patch_version,
-                tag,
-            })
+        if let Some(major_str) = version_parts.next() {
+            if let Ok(major) = major_str.parse::<i32>() {
+                major_version = Some(major);
+            }
         }
+
+        if let Some(minor_str) = version_parts.next() {
+            if let Ok(minor) = minor_str.parse::<i32>() {
+                minor_version = Some(minor);
+            }
+        }
+
+        if let Some(patch_str) = version_parts.next() {
+            if let Ok(patch) = patch_str.parse::<i32>() {
+                patch_version = Some(patch);
+            } else if patch_str.contains('-') {
+                let mut patch_tag_split = patch_str.split('-');
+                if let Some(patch_str) = patch_tag_split.next() {
+                    if let Ok(patch) = patch_str.parse::<i32>() {
+                        patch_version = Some(patch);
+                    }
+                }
+                if let Some(tag_str) = patch_tag_split.next() {
+                    tag = Some(tag_str.to_string());
+                }
+            }
+        }
+
+        Ok(Self {
+            name: name.to_string(),
+            namespace,
+            path: if path.is_empty() {
+                None
+            } else {
+                Some(path.to_string())
+            },
+            build: build.cloned(),
+            major_version,
+            minor_version,
+            patch_version,
+            tag,
+        })
     }
 }
 
@@ -410,34 +380,37 @@ impl PartialEq for Service {
 
 impl Service {
     pub fn get_version(&self) -> String {
-        if None == self.major_version && None == self.minor_version && None == self.patch_version {
+        if self.major_version.is_none()
+            && self.minor_version.is_none()
+            && self.patch_version.is_none()
+        {
             return self.tag.as_ref().unwrap().to_string();
         }
 
         if let Some(tag) = &self.tag {
             format!(
                 "{}.{}.{}-{}",
-                match self.major_version {
-                    Some(major_version) => major_version.to_string(),
-                    None => "0".to_string(),
-                },
-                match self.minor_version {
-                    Some(minor_version) => minor_version.to_string(),
-                    None => "0".to_string(),
-                },
-                match self.patch_version {
-                    Some(patch_version) => patch_version.to_string(),
-                    None => "0".to_string(),
-                },
+                self.major_version.unwrap_or(0),
+                self.minor_version.unwrap_or(0),
+                self.patch_version.unwrap_or(0),
                 tag
             )
         } else {
-            format!(
-                "{}.{}.{}",
-                self.major_version.unwrap_or(0),
-                self.minor_version.unwrap_or(0),
-                self.patch_version.unwrap_or(0)
-            )
+            // Handle cases where patch_version is None
+            if self.patch_version.is_none() {
+                format!(
+                    "{}.{}",
+                    self.major_version.unwrap_or(0),
+                    self.minor_version.unwrap_or(0),
+                )
+            } else {
+                format!(
+                    "{}.{}.{}",
+                    self.major_version.unwrap_or(0),
+                    self.minor_version.unwrap_or(0),
+                    self.patch_version.unwrap_or(0)
+                )
+            }
         }
     }
 
@@ -492,5 +465,151 @@ impl Service {
 
     pub fn set_tag(&mut self, tag: String) {
         self.tag = Some(tag);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{from_value, json};
+
+    #[test]
+    fn test_serialize_with_tag() {
+        let service = Service::new(
+            "my-service",
+            "my-namespace",
+            Some("/api/v1"),
+            Some("build-123"),
+            Some(1),
+            Some(2),
+            Some(3),
+            Some("beta".to_string()),
+        );
+
+        let serialized = serde_json::to_value(&service).unwrap();
+        assert_eq!(
+            serialized,
+            json!({
+                "name": "my-namespace/my-service",
+                "path": "/api/v1",
+                "build": "build-123",
+                "version": "1.2.3-beta"
+            })
+        );
+    }
+
+    #[test]
+    fn test_serialize_without_tag() {
+        let service = Service::new(
+            "another-service",
+            "default",
+            None,
+            None,
+            Some(0),
+            Some(1),
+            Some(0),
+            None,
+        );
+
+        let serialized = serde_json::to_value(&service).unwrap();
+        assert_eq!(
+            serialized,
+            json!({
+                "name": "default/another-service",
+                "version": "0.1.0"
+            })
+        );
+    }
+
+    #[test]
+    fn test_deserialize_with_tag() {
+        let json_data = json!({
+            "name": "test-service",
+            "version": "2.0.1-rc1"
+        });
+
+        let deserialized: Service = from_value(json_data).unwrap();
+        assert_eq!(
+            deserialized,
+            Service {
+                name: "test-service".to_string(),
+                namespace: "default".to_string(),
+                path: None,
+                build: None,
+                major_version: Some(2),
+                minor_version: Some(0),
+                patch_version: Some(1),
+                tag: Some("rc1".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn test_deserialize_without_tag() {
+        let json_data = json!({
+            "name": "test-service",
+            "version": "latest"
+        });
+
+        let deserialized: Service = from_value(json_data).unwrap();
+        assert_eq!(
+            deserialized,
+            Service {
+                name: "test-service".to_string(),
+                namespace: "default".to_string(),
+                path: Some("".to_string()),
+                build: None,
+                major_version: None,
+                minor_version: None,
+                patch_version: None,
+                tag: Some("latest".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn test_deserialize_version_without_patch() {
+        let json_data = json!({
+            "name": "version-test-service",
+            "version": "8.0"
+        });
+
+        let deserialized: Service = from_value(json_data).unwrap();
+        assert_eq!(
+            deserialized,
+            Service {
+                name: "version-test-service".to_string(),
+                namespace: "default".to_string(),
+                path: None,
+                build: None,
+                major_version: Some(8),
+                minor_version: Some(0),
+                patch_version: None, // Should not default to 0
+                tag: None
+            }
+        );
+    }
+
+    #[test]
+    fn test_deserialize_version_with_tag_in_patch() {
+        let json_data = json!({
+            "name": "patch-tag-service",
+            "version": "1.0.0-beta"
+        });
+
+        let deserialized: Service = from_value(json_data).unwrap();
+        assert_eq!(
+            deserialized,
+            Service {
+                name: "patch-tag-service".to_string(),
+                namespace: "default".to_string(),
+                path: None,
+                build: None,
+                major_version: Some(1),
+                minor_version: Some(0),
+                patch_version: Some(0),
+                tag: Some("beta".to_string())
+            }
+        );
     }
 }
