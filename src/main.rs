@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::io;
 
 use sailr::{
     builder::{split_matches, Builder},

@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use scribe_rust::{log, Color};
-
 use anyhow::Result;
 
 use crate::{
@@ -25,9 +23,14 @@ impl Generator {
     }
 
     pub fn add_template(&mut self, original_template: &Template, new_content: String) {
+        if original_template.content.contains("ConfigMap") {}
         self.templates.push(Template::new(
             original_template.name.clone(),
-            original_template.file_name.clone(),
+            if original_template.content.contains("kind: ConfigMap") {
+                format!("0_{}", original_template.file_name.clone())
+            } else {
+                original_template.file_name.clone()
+            },
             new_content,
         ));
     }

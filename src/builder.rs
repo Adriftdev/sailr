@@ -30,6 +30,8 @@ impl Builder {
 
         let path_buf = canonical_project_path.join(".roomservice");
 
+        let build_ignore_file = path_buf.join(".roomignore");
+
         let cache_dir = path_buf.to_str().unwrap().to_owned().to_string();
         let cfg = env.build.clone().unwrap_fail("No config found.");
 
@@ -80,6 +82,7 @@ impl Builder {
                         after: room_config.after,
                         finally: room_config.finally,
                     },
+                    Some(build_ignore_file.to_str().unwrap().to_owned().to_string()),
                 ))
             }
         }

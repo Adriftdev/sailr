@@ -1,8 +1,9 @@
-use crate::roomservice::util::fail;
 use checksums::{hash_file, Algorithm::BLAKE2S};
-use ignore::Walk;
+use ignore::WalkBuilder;
 use std::fs::{self, File};
 use std::io::prelude::*;
+
+use super::util::fail;
 
 #[derive(Debug)]
 pub struct RoomBuilder {
@@ -14,6 +15,7 @@ pub struct RoomBuilder {
     pub should_build: bool,
     pub latest_hash: Option<String>,
     pub errored: bool,
+    pub ignore_file: Option<String>, // Store the path to the .roomignore file
 }
 
 #[derive(Debug)]
@@ -33,6 +35,7 @@ impl RoomBuilder {
         cache_dir: String,
         include: String,
         hooks: Hooks,
+        ignore_file: Option<String>, // Accept .roomignore file as an argument
     ) -> RoomBuilder {
         RoomBuilder {
             name,
@@ -43,6 +46,7 @@ impl RoomBuilder {
             errored: false,
             should_build: true,
             latest_hash: None,
+            ignore_file, // Initialize the ignore file path
         }
     }
 
@@ -50,14 +54,21 @@ impl RoomBuilder {
         let mut hash = String::with_capacity(256);
         let mut scope = String::new();
 
-        for maybe_file in Walk::new(&self.path) {
+        // Use WalkBuilder to apply .roomignore if it exists
+        let mut builder = WalkBuilder::new(&self.path);
+
+        if let Some(ignore_file_path) = &self.ignore_file {
+            builder.add_ignore(ignore_file_path);
+        }
+
+        for maybe_file in builder.build() {
             let file = maybe_file.unwrap();
             match file.file_type() {
                 Some(entry) => {
                     if entry.is_file() {
                         if dump_scope {
                             scope.push_str(file.path().to_str().unwrap());
-                            scope.push_str("\n")
+                            scope.push_str("\n");
                         }
 
                         hash.push_str(&hash_file(file.path(), BLAKE2S));
@@ -88,7 +99,7 @@ impl RoomBuilder {
     }
 
     pub fn set_errored(&mut self) {
-        self.errored = true
+        self.errored = true;
     }
 
     pub fn write_hash(&self) {
@@ -107,12 +118,12 @@ impl RoomBuilder {
         let prev = self.prev_hash();
         let curr = self.generate_hash(dump_scope);
         if force {
-            self.should_build = true
+            self.should_build = true;
         } else {
             match prev {
                 Some(old_hash) => {
                     if old_hash == curr {
-                        self.should_build = false
+                        self.should_build = false;
                     } else {
                         self.should_build = true;
                     }

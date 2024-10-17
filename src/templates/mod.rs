@@ -148,13 +148,18 @@ impl TemplateManager {
             }
 
             for template_file in template_dir {
-                if template_file.contains("config") {
+                if template_file == "config" {
+                    println!("config file");
                     let (config_name, config_map_content) =
                         self.read_config_files(&template_name)?;
                     config_maps.push(Config::new(
                         &template_name.clone(),
                         &config_map_content,
-                        &config_name,
+                        &config_name
+                            .split("/")
+                            .last()
+                            .unwrap_or_default()
+                            .to_string(),
                         &"./k8s/templates".to_string(),
                     ));
                     continue;
@@ -220,6 +225,8 @@ impl TemplateManager {
                 acc
             },
         );
+
+        println!("{:?}", config_map);
 
         Ok(config_map)
     }
