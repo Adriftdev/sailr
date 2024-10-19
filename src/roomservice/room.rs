@@ -58,11 +58,19 @@ impl RoomBuilder {
         let mut builder = WalkBuilder::new(&self.path);
 
         if let Some(ignore_file_path) = &self.ignore_file {
-            builder.add_ignore(ignore_file_path);
+            // read the ignore file content and split it by new line
+            // then add each line to the WalkBuilder ignore list
+            let ignore_file_content =
+                fs::read_to_string(ignore_file_path).expect("unable to read ignore file");
+            let ignore_list: Vec<&str> = ignore_file_content.split("\n").collect();
+            for ignore in ignore_list {
+                builder.add_ignore(ignore);
+            }
         }
 
         for maybe_file in builder.build() {
             let file = maybe_file.unwrap();
+            println!("file: {:?}", file);
             match file.file_type() {
                 Some(entry) => {
                     if entry.is_file() {
