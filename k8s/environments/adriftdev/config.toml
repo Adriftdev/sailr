@@ -6,37 +6,12 @@ default_replicas = 1
 registry = "docker.io"
 
 [[service_whitelist]]
-name = "redis"
-version = "latest"
-
-[[service_whitelist]]
-name = "postgres"
-version = "latest"
-
-[[service_whitelist]]
 path = "core/test"
 name = "test"
-version = "latest"
-build = "./test"                                                 # Service build path for roomservice 
-before = "cargo check"                                           # Roomservice Before execution
-run_synchronous = "docker build . -t localhost:5000/test:latest" # Roomservice Run in sync execution
-after = "docker push localhost:5000/test:latest"                 # Roomservice after exectuion
+version = "latest"                    # Roomservice Run in sync execution
+build = "./test/service/test-service"
 
-
-[[service_whitelist]]
-path = "core/test2"                                               # Path for (template) / (generate results)
-name = "test2"                                                    # Service name
-namespace = "develop"                                             # Namespace to deploy too.
-version = "latest"                                                # service version
-build = "./test2"                                                 # Service build path for roomservice 
-before = "pnpm build"                                             # Roomservice Before execution
-run_synchronous = "docker build . -t localhost:5000/test2:latest" # Roomservice Run in sync execution
-after = "docker push localhost:5000/test2:latest"                 # Roomservice after exectuion
-
-[[environment_variables]]
-name = "REDIS_HOST"
-value = "redis"
-
-[[environment_variables]]
-name = "REDIS_PORT"
-value = "6379"
+[build.rooms.test]
+path = "./test/service/test-service"
+beforeSynchronous = "bash ./scripts/init.sh"
+before = "docker build . -t  localhost:5000/test:latest"
