@@ -31,7 +31,7 @@ impl Environment {
     // A `FileSystemManager` is used to manage access and manipulation of environment configuration files.
     pub fn new(name: &str) -> Self {
         Self {
-            schema_version: "0.1.0".to_string(),
+            schema_version: "0.2.0".to_string(),
             name: name.to_string(),
             log_level: "INFO".to_string(),
             service_whitelist: Vec::new(),

@@ -8,8 +8,7 @@ registry = "docker.io"
 [[service_whitelist]]
 path = "core/test"
 name = "test"
-version = "latest"                    # Roomservice Run in sync execution
-build = "./test/service/test-service"
+version = "latest" # Roomservice Run in sync execution
 
 [build.rooms.test]
 path = "./test/service/test-service"
