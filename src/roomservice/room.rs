@@ -70,7 +70,6 @@ impl RoomBuilder {
 
         for maybe_file in builder.build() {
             let file = maybe_file.unwrap();
-            println!("file: {:?}", file);
             match file.file_type() {
                 Some(entry) => {
                     if entry.is_file() {
