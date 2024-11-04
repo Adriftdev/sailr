@@ -164,11 +164,15 @@ impl TemplateManager {
                     ));
                     continue;
                 }
+
                 let path = Path::new(&template_name)
                     .join(&template_file)
                     .to_str()
                     .unwrap()
                     .to_string();
+
+                println!("{:?}", path);
+
                 let template = self.filemanager.read_file(&path, None)?;
                 templates.push(Template::new(
                     template_name.clone(),

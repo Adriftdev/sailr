@@ -15,7 +15,6 @@ pub struct RoomBuilder {
     pub should_build: bool,
     pub latest_hash: Option<String>,
     pub errored: bool,
-    pub ignore_file: Option<String>, // Store the path to the .roomignore file
 }
 
 #[derive(Debug)]
@@ -35,7 +34,6 @@ impl RoomBuilder {
         cache_dir: String,
         include: String,
         hooks: Hooks,
-        ignore_file: Option<String>, // Accept .roomignore file as an argument
     ) -> RoomBuilder {
         RoomBuilder {
             name,
@@ -46,7 +44,6 @@ impl RoomBuilder {
             errored: false,
             should_build: true,
             latest_hash: None,
-            ignore_file, // Initialize the ignore file path
         }
     }
 
@@ -55,18 +52,7 @@ impl RoomBuilder {
         let mut scope = String::new();
 
         // Use WalkBuilder to apply .roomignore if it exists
-        let mut builder = WalkBuilder::new(&self.path);
-
-        if let Some(ignore_file_path) = &self.ignore_file {
-            // read the ignore file content and split it by new line
-            // then add each line to the WalkBuilder ignore list
-            let ignore_file_content =
-                fs::read_to_string(ignore_file_path).expect("unable to read ignore file");
-            let ignore_list: Vec<&str> = ignore_file_content.split("\n").collect();
-            for ignore in ignore_list {
-                builder.add_ignore(ignore);
-            }
-        }
+        let builder = WalkBuilder::new(&self.path);
 
         for maybe_file in builder.build() {
             let file = maybe_file.unwrap();

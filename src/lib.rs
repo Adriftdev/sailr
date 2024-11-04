@@ -70,7 +70,13 @@ pub fn load_global_vars() -> Result<BTreeMap<String, String>, Box<dyn std::error
 
 pub fn generate(name: &str, env: &Environment) {
     let mut template_manager = TemplateManager::new();
-    let (templates, config_maps) = &template_manager.read_templates(Some(&env)).unwrap();
+    let (templates, config_maps) = match template_manager.read_templates(Some(&env)) {
+        Ok((templates, config_maps)) => (templates, config_maps),
+        Err(e) => {
+            println!("Error: {:?}", e);
+            return;
+        }
+    };
 
     let services = env.list_services();
 
@@ -78,7 +84,7 @@ pub fn generate(name: &str, env: &Environment) {
 
     for service in services {
         let variables = &env.get_variables(service);
-        for template in templates {
+        for template in &templates {
             if template.name != service.name
                 && template.name != service.path.clone().unwrap_or("".to_string())
             {
@@ -90,7 +96,7 @@ pub fn generate(name: &str, env: &Environment) {
 
             generator.add_template(&template, content)
         }
-        for config in config_maps {
+        for config in &config_maps {
             if config.name != service.name {
                 continue;
             }
