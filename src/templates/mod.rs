@@ -42,35 +42,35 @@ impl TemplateManager {
     // This is used to provide boilerplate resource definitions for generating Kubernetes resources.
     pub fn copy_base_templates(&mut self) -> Result<(), Box<dyn Error>> {
         self.templates.push((
-            "redis/deployment.yaml".to_string(),
+            "aux/redis/deployment.yaml".to_string(),
             include_str!("k8s/redis/deployment.yaml").to_string(),
         ));
         self.templates.push((
-            "redis/service.yaml".to_string(),
+            "aux/redis/service.yaml".to_string(),
             include_str!("k8s/redis/service.yaml").to_string(),
         ));
         self.templates.push((
-            "postgres/deployment.yaml".to_string(),
+            "aux/postgres/deployment.yaml".to_string(),
             include_str!("k8s/postgres/deployment.yaml").to_string(),
         ));
         self.templates.push((
-            "postgres/service.yaml".to_string(),
+            "aux/postgres/service.yaml".to_string(),
             include_str!("k8s/postgres/service.yaml").to_string(),
         ));
         self.templates.push((
-            "postgres/pvc.yaml".to_string(),
+            "aux/postgres/pvc.yaml".to_string(),
             include_str!("k8s/postgres/pvc.yaml").to_string(),
         ));
         self.templates.push((
-            "registry/deployment.yaml".to_string(),
+            "aux/registry/deployment.yaml".to_string(),
             include_str!("k8s/registry/deployment.yaml").to_string(),
         ));
         self.templates.push((
-            "registry/service.yaml".to_string(),
+            "aux/registry/service.yaml".to_string(),
             include_str!("k8s/registry/service.yaml").to_string(),
         ));
         self.templates.push((
-            "registry/pvc.yaml".to_string(),
+            "aux/registry/pvc.yaml".to_string(),
             include_str!("k8s/registry/pvc.yaml").to_string(),
         ));
 
@@ -149,17 +149,12 @@ impl TemplateManager {
 
             for template_file in template_dir {
                 if template_file == "config" {
-                    println!("config file");
                     let (config_name, config_map_content) =
                         self.read_config_files(&template_name)?;
                     config_maps.push(Config::new(
                         &template_name.clone(),
                         &config_map_content,
-                        &config_name
-                            .split("/")
-                            .last()
-                            .unwrap_or_default()
-                            .to_string(),
+                        &config_name,
                         &"./k8s/templates".to_string(),
                     ));
                     continue;
@@ -170,8 +165,6 @@ impl TemplateManager {
                     .to_str()
                     .unwrap()
                     .to_string();
-
-                println!("{:?}", path);
 
                 let template = self.filemanager.read_file(&path, None)?;
                 templates.push(Template::new(

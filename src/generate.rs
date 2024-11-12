@@ -47,6 +47,8 @@ impl Generator {
     pub fn generate(&mut self, name: &String) -> Result<(), GenerateError> {
         self.filemanager.delete_dir(name).unwrap();
 
+        println!("config_maps: {:?}", self.config_maps);
+
         for config_map in &self.config_maps {
             let path = Path::new(name)
                 .join(&config_map.name)

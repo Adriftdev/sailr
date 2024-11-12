@@ -97,7 +97,7 @@ pub fn generate(name: &str, env: &Environment) {
             generator.add_template(&template, content)
         }
         for config in &config_maps {
-            if config.name != service.name {
+            if config.name.split("/").last().unwrap() != service.name {
                 continue;
             }
 

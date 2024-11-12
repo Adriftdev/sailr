@@ -61,7 +61,13 @@ pub struct InitArgs {
     )]
     pub default_registry: Option<String>,
 
-    #[arg(help = "Provider to use", value_enum)]
+    #[arg(
+        help = "Provider to use",
+        value_enum,
+        short = 'p',
+        long = "provider",
+        help = "Provider to use"
+    )]
     pub provider: Option<Provider>,
 
     #[arg(
