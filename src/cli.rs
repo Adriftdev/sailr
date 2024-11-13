@@ -200,6 +200,12 @@ pub struct GenerateArgs {
         help = "Name of the environment"
     )]
     pub name: String,
+
+    #[arg(long, short)]
+    pub only: Option<String>,
+
+    #[arg(long, short)]
+    pub ignore: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -267,6 +273,9 @@ pub struct GoArgs {
         help = "rooms to ignore from the build of the environment"
     )]
     pub ignore: Option<String>,
+
+    #[arg(long, short)]
+    pub only: Option<String>,
 }
 
 #[derive(Debug, Args)]

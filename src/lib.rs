@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-use environment::Environment;
+use environment::{Environment, Service};
 use filesystem::FileSystemManager;
 use generate::Generator;
 use infra::Infra;
@@ -68,7 +68,7 @@ pub fn load_global_vars() -> Result<BTreeMap<String, String>, Box<dyn std::error
     Ok(vars)
 }
 
-pub fn generate(name: &str, env: &Environment) {
+pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
     let mut template_manager = TemplateManager::new();
     let (templates, config_maps) = match template_manager.read_templates(Some(&env)) {
         Ok((templates, config_maps)) => (templates, config_maps),
@@ -77,8 +77,6 @@ pub fn generate(name: &str, env: &Environment) {
             return;
         }
     };
-
-    let services = env.list_services();
 
     let mut generator = Generator::new();
 
@@ -104,7 +102,14 @@ pub fn generate(name: &str, env: &Environment) {
             generator.add_config_map(config);
         }
     }
-    let _ = generator.generate(&name.to_string());
+    let res = generator.generate(&name.to_string());
+    match res {
+        Ok(_) => (),
+        Err(e) => {
+            println!(": {:?}", e);
+            return;
+        }
+    }
 }
 
 pub fn create_default_env_config(

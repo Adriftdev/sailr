@@ -85,6 +85,7 @@ async fn main() -> Result<(), CliError> {
         },
         Commands::Deploy(arg) => {
             LOGGER.info(&format!("Deploying an environment"));
+
             sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }
         Commands::Generate(arg) => {
@@ -98,7 +99,23 @@ async fn main() -> Result<(), CliError> {
                 }
             };
 
-            generate(&arg.name, &env);
+            let mut services = env.list_services();
+
+            if let Some(only_services) = arg.only {
+                services = services
+                    .into_iter()
+                    .filter(|s| only_services.contains(&s.name))
+                    .collect();
+            }
+
+            if let Some(ignored_services) = arg.ignore {
+                services = services
+                    .into_iter()
+                    .filter(|s| !ignored_services.contains(&s.name))
+                    .collect();
+            }
+
+            generate(&arg.name, &env, services);
 
             LOGGER.info(&format!("Generation Complete"));
         }
@@ -142,15 +159,30 @@ async fn main() -> Result<(), CliError> {
                 }
             };
 
-            let services = env
-                .list_services()
-                .into_iter()
-                .filter(|s| s.build.is_some());
+            let mut services = env.list_services();
+
+            if let Some(only_services) = arg.only {
+                services = services
+                    .into_iter()
+                    .filter(|s| only_services.contains(&s.name))
+                    .collect();
+            }
+
+            if let Some(ref ignored_services) = arg.ignore {
+                services = services
+                    .into_iter()
+                    .filter(|s| !ignored_services.contains(&s.name))
+                    .collect();
+            }
 
             let mut builder = Builder::new(
                 ".roomservice".to_string(),
                 arg.force.unwrap_or(false),
-                services.into_iter().map(|s| s.name.clone()).collect(),
+                services
+                    .clone()
+                    .into_iter()
+                    .map(|s| s.name.clone())
+                    .collect(),
                 split_matches(arg.ignore),
             );
 
@@ -162,7 +194,7 @@ async fn main() -> Result<(), CliError> {
                 }
             };
 
-            generate(&arg.name, &env);
+            generate(&arg.name, &env, services);
 
             sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }

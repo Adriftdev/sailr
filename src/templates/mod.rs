@@ -223,8 +223,6 @@ impl TemplateManager {
             },
         );
 
-        println!("{:?}", config_map);
-
         Ok(config_map)
     }
 

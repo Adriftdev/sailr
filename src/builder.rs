@@ -1,12 +1,10 @@
 use crate::{
     environment::Environment,
     roomservice::{
-        config::RoomConfig,
         room::{Hooks, RoomBuilder},
-        util::{fail, Failable},
+        util::Failable,
     },
 };
-use std::collections::BTreeMap;
 
 use crate::roomservice::RoomserviceBuilder;
 
@@ -41,9 +39,9 @@ impl Builder {
             self.roomservice.add_after_all(&cfg.after_all.unwrap())
         }
 
-        check_room_provided_to_flag("only".to_string(), &self.only, &cfg.rooms);
+        //check_room_provided_to_flag("only".to_string(), &self.only, &cfg.rooms);
 
-        check_room_provided_to_flag("ignore".to_string(), &self.ignore, &cfg.rooms);
+        //check_room_provided_to_flag("ignore".to_string(), &self.ignore, &cfg.rooms);
 
         for (name, room_config) in cfg.rooms {
             let mut should_add = true;
@@ -86,23 +84,6 @@ impl Builder {
 
         self.roomservice.exec(false, false, false);
         Ok(())
-    }
-}
-
-fn check_room_provided_to_flag(
-    flag: String,
-    provided_to_flag: &Vec<String>,
-    rooms: &BTreeMap<String, RoomConfig>,
-) {
-    if provided_to_flag.len() > 0 {
-        for name in provided_to_flag {
-            if !rooms.keys().any(|room_name| room_name == name) {
-                fail(format!(
-                    "\"{}\" was provided to --{} and does not exist in config",
-                    name, flag
-                ))
-            }
-        }
     }
 }
 
