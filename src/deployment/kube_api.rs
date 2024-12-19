@@ -44,7 +44,7 @@ pub async fn get_all_deployments_with_config() -> Result<(), KubeError> {
     let config = Config::infer().await.map_err(|e| {
         KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
     })?;
-    let https = config.rustls_https_connector().map_err(|e| {
+    let https = config.openssl_https_connector().map_err(|e| {
         KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
     })?;
     let service = ServiceBuilder::new()
@@ -76,7 +76,7 @@ pub async fn create_client(context: String) -> Result<kube::Client, KubeError> {
     let config = Config::from_kubeconfig(&kubeconfig).await.map_err(|e| {
         KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
     })?;
-    let https = config.rustls_https_connector().map_err(|e| {
+    let https = config.openssl_https_connector().map_err(|e| {
         KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
     })?;
     let service = ServiceBuilder::new()
