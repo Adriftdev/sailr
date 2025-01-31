@@ -23,7 +23,7 @@ kube = { version = "~0.83", features = [
     "runtime",
     "derive",
     "client",
-    "rustls-tls",
+    "openssl-tls",
     "jsonpatch",
 ] }
 tower = { version = "0.4.13", features = ["buffer", "filter", "util"] }
