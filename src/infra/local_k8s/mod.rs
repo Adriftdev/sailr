@@ -19,8 +19,12 @@ impl LocalK8 {
                     include_str!("outputs.tf").to_string(),
                 ),
                 (
-                    "providers.tf".to_string(),
+                    "variables.tf".to_string(),
                     include_str!("variables.tf").to_string(),
+                ),
+                (
+                    "registries.tmpl".to_string(),
+                    include_str!("registries.tmpl").to_string(),
                 ),
             ],
             file_manager: FileSystemManager::new(
