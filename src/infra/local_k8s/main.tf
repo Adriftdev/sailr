@@ -43,3 +43,56 @@ resource "null_resource" "install_k3s" {
     when    = destroy # No quotes
   }
 }
+
+
+# Format the GCP credentials file to be a single line
+resource "local_file" "formatted_gcp_credentials" {
+  content = jsonencode(jsondecode(file(var.gcp_credentials_file)))
+  filename = "${path.module}/gcp_credentials_oneline.json"
+}
+
+# Create the registries.yaml file
+resource "local_file" "registries_yaml" {
+  content = templatefile("${path.module}/registries.tmpl", {
+    gcp_project_id = var.gcp_project_id
+    gcp_region     = var.gcp_region
+    gcp_credentials = local_file.formatted_gcp_credentials.content
+  })
+  filename = "${path.module}/registries.yaml"
+}
+
+# Copy the registries.yaml file to the k3s server
+resource "null_resource" "copy_registries_config" {
+  provisioner "local-exec" {
+    command = "sudo cp ${local_file.registries_yaml.filename} /etc/rancher/k3s/registries.yaml"
+
+    interpreter = ["bash", "-c"]
+    when = create
+  }
+
+  triggers = {
+    registries_yaml_content = local_file.registries_yaml.content
+  }
+
+  depends_on = [
+    null_resource.install_k3s
+  ]
+}
+
+# Restart k3s to pick up the new registries.yaml file
+resource "null_resource" "restart_k3s" {
+  provisioner "local-exec" {
+    command = "sudo systemctl restart k3s"
+
+    interpreter = ["bash", "-c"]
+    when = create
+  }
+
+  triggers = {
+    always_run = timestamp()
+  }
+
+  depends_on = [
+    null_resource.copy_registries_config
+  ]
+}
