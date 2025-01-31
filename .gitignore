@@ -5,3 +5,4 @@ target/*
 !src/k8s/*
 .kube
 netrc
+.roomservice/
