@@ -7,7 +7,7 @@ use sailr::{
     environment::Environment,
     errors::CliError,
     generate,
-    infra::{aws_eks::AwsEks, local_k8s::LocalK8, Infra},
+    infra::{local_k8s::LocalK8, Infra},
     templates::TemplateManager,
     LOGGER,
 };
@@ -37,10 +37,6 @@ async fn main() -> Result<(), CliError> {
             } else if let Some(provider) = arg.provider {
                 let infra = match provider {
                     Provider::Local => Infra::new(Box::new(LocalK8::new(arg.name.clone()))),
-                    Provider::Aws => Infra::new(Box::new(AwsEks::new(
-                        arg.name.clone(),
-                        arg.region.unwrap_or("eu-west-2".to_string()),
-                    ))),
                     _ => {
                         LOGGER.error(&format!("Provider {:?} not supported", provider));
                         std::process::exit(1);
@@ -65,10 +61,7 @@ async fn main() -> Result<(), CliError> {
                 } else if let Some(provider) = arg.provider {
                     let infra = match provider {
                         Provider::Local => Infra::new(Box::new(LocalK8::new(arg.name.clone()))),
-                        Provider::Aws => Infra::new(Box::new(AwsEks::new(
-                            arg.name.clone(),
-                            arg.region.unwrap_or("eu-west-2".to_string()),
-                        ))),
+
                         _ => {
                             LOGGER.error(&format!("Provider {:?} not supported", provider));
                             std::process::exit(1);

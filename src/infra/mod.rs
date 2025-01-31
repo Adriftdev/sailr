@@ -11,8 +11,6 @@ use std::{collections::BTreeMap, path::Path};
 
 use crate::{filesystem::FileSystemManager, load_global_vars, utils::ENV_DIR, LOGGER};
 
-pub mod aws_eks;
-
 pub mod local_k8s;
 
 pub struct ClusterConfig {

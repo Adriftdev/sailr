@@ -20,7 +20,7 @@ impl LocalK8 {
                 ),
                 (
                     "providers.tf".to_string(),
-                    include_str!("providers.tf").to_string(),
+                    include_str!("variables.tf").to_string(),
                 ),
             ],
             file_manager: FileSystemManager::new(
@@ -49,6 +49,7 @@ impl ClusterTargetBuilder for LocalK8 {
     fn build(&self, config: &ClusterConfig) {
         LOGGER.info("Building local kubernetes cluster");
         // execute system process `tofu apply` in the directory
+        //
         let handle = std::process::Command::new("tofu")
             .arg("init")
             .current_dir(Path::new(ENV_DIR).join(&config.cluster_name))
