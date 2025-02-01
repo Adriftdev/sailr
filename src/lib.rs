@@ -39,6 +39,10 @@ pub fn load_global_vars() -> Result<BTreeMap<String, String>, Box<dyn std::error
     let filemanager =
         filesystem::FileSystemManager::new(Path::new("./k8s").to_str().unwrap().to_string());
 
+    if !filemanager.file_exists(&"default.toml".to_string()) {
+        return Ok(BTreeMap::new());
+    }
+
     let contents = filemanager.read_file(&"default.toml".to_string(), None)?;
     let global_vars = toml::from_str::<GlobalVars>(&contents)?; // Use destructuring assignment
 

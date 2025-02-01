@@ -64,6 +64,11 @@ impl FileSystemManager {
         Ok(())
     }
 
+    pub fn file_exists(&self, file_name: &String) -> bool {
+        let path = Path::new(self.path.as_str()).join(file_name);
+        path.exists()
+    }
+
     pub fn create_dir(&self, dir_name: &String) -> Result<(), Box<dyn Error>> {
         let path = Path::new(self.path.as_str()).join(dir_name);
         create_dir_all(path)?;
