@@ -1,88 +1,44 @@
+pub mod configmaps;
+pub mod cronjobs;
+pub mod daemonsets;
+pub mod deployments;
+pub mod jobs;
+pub mod namespaces;
+pub mod pods;
+pub mod secrets;
+pub mod services;
+pub mod statefulsets;
+
 use std::path::PathBuf;
 
 use anyhow::Result;
 
+use diffy::{create_patch, PatchFormatter};
 use k8s_openapi::serde_json;
-use k8s_openapi::{self, api::apps::v1::Deployment};
+use k8s_openapi::{self};
 use kube::api::{Patch, PatchParams};
-use kube::client::ConfigExt;
 use kube::core::{DynamicObject, GroupVersionKind};
 use kube::discovery::{ApiCapabilities, ApiResource, Scope};
 use kube::{Api, Client, Discovery};
 
 use serde::Deserialize;
-use tower::ServiceBuilder;
+use serde_json::Value;
 
 use crate::errors::KubeError;
 use crate::LOGGER;
-use kube::config::Config;
-
-pub async fn get_all_deployments() -> Result<(), KubeError> {
-    let client = Client::try_default().await.map_err(|e| {
-        KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
-    })?;
-
-    let deployments: Api<Deployment> = Api::all(client);
-
-    let list = deployments.list(&Default::default()).await.map_err(|e| {
-        KubeError::ResourceRetrievalFailed(format!("Failed to retrieve Kubernetes resource: {}", e))
-    })?;
-
-    for deployment in list.items {
-        println!(
-            "Deployment {} in {} has {} replicas",
-            deployment.metadata.name.unwrap(),
-            deployment.metadata.namespace.unwrap(),
-            deployment.spec.unwrap().replicas.unwrap()
-        );
-    }
-
-    Ok(())
-}
-
-pub async fn get_all_deployments_with_config() -> Result<(), KubeError> {
-    let config = Config::infer().await.map_err(|e| {
-        KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
-    })?;
-    let https = config.openssl_https_connector().map_err(|e| {
-        KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
-    })?;
-    let service = ServiceBuilder::new()
-        .layer(config.base_uri_layer())
-        .service(hyper::Client::builder().build(https));
-    let client = Client::new(service, "default"); // TODO: make namespace configurable
-
-    let deployments: Api<Deployment> = Api::all(client);
-    let list = deployments.list(&Default::default()).await.map_err(|e| {
-        KubeError::ResourceRetrievalFailed(format!("Failed to retrieve Kubernetes resource: {}", e))
-    })?;
-
-    for deployment in list.items {
-        println!(
-            "Deployment {} in {} has {} replicas",
-            deployment.metadata.name.unwrap(),
-            deployment.metadata.namespace.unwrap(),
-            deployment.spec.unwrap().replicas.unwrap()
-        );
-    }
-
-    Ok(())
-}
+use kube::config::KubeConfigOptions;
 
 pub async fn create_client(context: String) -> Result<kube::Client, KubeError> {
-    let mut kubeconfig = kube::config::KubeConfigOptions::default();
-    kubeconfig.context = Some(context);
-
-    let config = Config::from_kubeconfig(&kubeconfig).await.map_err(|e| {
-        KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
-    })?;
-    let https = config.openssl_https_connector().map_err(|e| {
-        KubeError::ClientCreationFailed(format!("Failed to create Kubernetes client: {}", e))
-    })?;
-    let service = ServiceBuilder::new()
-        .layer(config.base_uri_layer())
-        .service(hyper::Client::builder().build(https));
-    let client = Client::new(service, "default"); // TODO: make namespace configurable (or infer from kubeconfig)
+    let options = KubeConfigOptions {
+        context: Some(context.clone()),
+        cluster: None,
+        user: None,
+    };
+    let config = kube::Config::from_kubeconfig(&options)
+        .await
+        .map_err(|e| KubeError::UnexpectedError(format!("Failed to create client: {}", e)))?;
+    let client = Client::try_from(config)
+        .map_err(|e| KubeError::UnexpectedError(format!("Failed to create client: {}", e)))?;
 
     Ok(client)
 }
@@ -151,6 +107,27 @@ pub async fn apply(
     }
 
     Ok((namespace, name))
+}
+
+/// Compares two JSON representations of Kubernetes resources and returns a diff string if they differ.
+/// Returns `None` if there are no differences.
+pub fn diff_resources(current: &Value, new: &Value) -> Option<String> {
+    // Convert both JSON values into pretty-printed strings
+    let current_str = serde_json::to_string_pretty(current).ok()?;
+    let new_str = serde_json::to_string_pretty(new).ok()?;
+
+    // If both representations are identical, no diff is needed
+    if current_str == new_str {
+        return None;
+    }
+
+    // Create a diff patch between the current and new states
+    let patch = create_patch(&current_str, &new_str);
+    let diff = PatchFormatter::new();
+
+    let res = diff.fmt_patch(&patch).to_string();
+
+    Some(res)
 }
 
 fn dynamic_api(

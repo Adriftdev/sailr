@@ -1,4 +1,4 @@
-pub mod kube_api;
+pub mod k8sm8;
 use anyhow::Result;
 
 use std::path::Path;
@@ -43,7 +43,7 @@ pub async fn apply_path_recursive(
         }
     } else {
         let path = path.to_path_buf();
-        let res = kube_api::apply(Some(path), client, discovery).await?;
+        let res = k8sm8::apply(Some(path), client, discovery).await?;
         manifest.push(res);
     }
 
@@ -52,7 +52,7 @@ pub async fn apply_path_recursive(
 
 pub async fn deploy(ctx: String, env_name: &str) -> Result<(), DeployError> {
     LOGGER.info(&format!("Deploying to {} for {}", ctx, env_name));
-    let client = kube_api::create_client(ctx).await?;
+    let client = k8sm8::create_client(ctx).await?;
     let discovery = kube::Discovery::new(client.clone())
         .run()
         .await

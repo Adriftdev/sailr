@@ -27,6 +27,8 @@ pub enum Commands {
     Build(BuildArgs),
     /// Generate and deploy an environment
     Go(GoArgs),
+    /// POD related commands
+    Pod(PodArgs),
 }
 
 #[derive(Debug, Args)]
@@ -280,3 +282,48 @@ pub struct GoArgs {
 
 #[derive(Debug, Args)]
 pub struct ArchiveArgs {}
+
+#[derive(Debug, Args)]
+pub struct PodArgs {
+    #[command(subcommand)]
+    pub command: PodCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PodCommands {
+    Delete(DeleteArgs),
+    Get(GetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DeleteArgs {
+    /// Kubernetes context to use
+    #[arg(
+        name = "context",
+        short = 'c',
+        long = "context",
+        help = "Kubernetes context to use"
+    )]
+    pub context: String,
+
+    /// Name of the environment
+    #[arg(
+        name = "name",
+        short = 'n',
+        long = "name",
+        help = "Name of the pod to delete"
+    )]
+    pub name: String,
+}
+
+#[derive(Debug, Args)]
+pub struct GetArgs {
+    /// Kubernetes context to use
+    #[arg(
+        name = "context",
+        short = 'c',
+        long = "context",
+        help = "Kubernetes context to use"
+    )]
+    pub context: String,
+}
