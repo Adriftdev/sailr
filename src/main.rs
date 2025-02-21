@@ -1,6 +1,6 @@
 use sailr::{
     builder::{split_matches, Builder},
-    cli::{Cli, Commands, InfraCommands, Provider},
+    cli::{Cli, Commands, DeploymentCommands, InfraCommands, Provider},
     create_default_env_config, create_default_env_infra,
     environment::Environment,
     errors::CliError,
