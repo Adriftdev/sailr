@@ -292,6 +292,8 @@ pub struct GoArgs {
     pub only: Option<String>,
 }
 
+#[derive(Debug, Args)]
+pub struct PodArgs {
     #[command(subcommand)]
     pub command: PodCommands,
 }
