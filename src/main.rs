@@ -1,5 +1,3 @@
-use std::io;
-
 use sailr::{
     builder::{split_matches, Builder},
     cli::{Cli, Commands, InfraCommands, Provider},
