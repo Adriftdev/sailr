@@ -40,8 +40,21 @@ pub struct K8sArgs {
 #[derive(Debug, Subcommand)]
 pub enum K8sCommands {
     Pod(PodArgs),
+    Deployment(DeploymentArgs),
 }
 
+#[derive(Debug, Args)]
+pub struct DeploymentArgs {
+    #[command(subcommand)]
+    pub command: DeploymentCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeploymentCommands {
+    Get(GetArgs),
+    Delete(DeleteArgs),
+    DeleteAll(DeleteAllArgs),
+}
 
 #[derive(Debug, Args)]
 pub struct CompletionsArgs {
@@ -302,6 +315,27 @@ pub struct PodArgs {
 pub enum PodCommands {
     Delete(DeleteArgs),
     Get(GetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DeleteAllArgs {
+    /// Kubernetes context to use
+    #[arg(
+        name = "context",
+        short = 'c',
+        long = "context",
+        help = "Kubernetes context to use"
+    )]
+    pub context: String,
+
+    /// Namespace to delete all deployments from
+    #[arg(
+        name = "namespace",
+        short = 'n',
+        long = "namespace",
+        help = "Namespace to delete all deployments from"
+    )]
+    pub namespace: String,
 }
 
 #[derive(Debug, Args)]
