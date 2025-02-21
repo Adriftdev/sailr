@@ -6,3 +6,4 @@ target/*
 .kube
 netrc
 .roomservice/
+.aider*

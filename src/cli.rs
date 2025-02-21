@@ -41,18 +41,18 @@ pub struct K8sArgs {
 #[derive(Debug, Subcommand)]
 pub enum K8sCommands {
     Pod(PodArgs),
-    Deployment(DeploymentArgs),
-    Service(ServiceArgs),
+    Deployment(ResourceArgs),
+    Service(ResourceArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct ServiceArgs {
+pub struct ResourceArgs {
     #[command(subcommand)]
-    pub command: DeploymentCommands,
+    pub command: ResourceCommands,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum DeploymentCommands {
+pub enum ResourceCommands {
     Get(GetArgs),
     Delete(DeleteArgs),
     DeleteAll(DeleteAllArgs),
@@ -303,7 +303,7 @@ pub struct GoArgs {
 #[derive(Debug, Args)]
 pub struct PodArgs {
     #[command(subcommand)]
-    pub command: ServiceCommands,
+    pub command: ResourceCommands,
 }
 
 #[derive(Debug, Subcommand)]
