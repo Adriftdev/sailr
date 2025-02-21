@@ -42,10 +42,11 @@ pub struct K8sArgs {
 pub enum K8sCommands {
     Pod(PodArgs),
     Deployment(DeploymentArgs),
+    Service(ServiceArgs),
 }
 
 #[derive(Debug, Args)]
-pub struct DeploymentArgs {
+pub struct ServiceArgs {
     #[command(subcommand)]
     pub command: DeploymentCommands,
 }
@@ -302,7 +303,7 @@ pub struct GoArgs {
 #[derive(Debug, Args)]
 pub struct PodArgs {
     #[command(subcommand)]
-    pub command: PodCommands,
+    pub command: ServiceCommands,
 }
 
 #[derive(Debug, Subcommand)]
