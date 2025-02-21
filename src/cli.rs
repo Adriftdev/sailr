@@ -27,9 +27,21 @@ pub enum Commands {
     Build(BuildArgs),
     /// Generate and deploy an environment
     Go(GoArgs),
-    /// POD related commands
+    /// Kubernetes resources commands
+    K8s(K8sArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct K8sArgs {
+    #[command(subcommand)]
+    pub command: K8sCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum K8sCommands {
     Pod(PodArgs),
 }
+
 
 #[derive(Debug, Args)]
 pub struct CompletionsArgs {
@@ -280,11 +292,6 @@ pub struct GoArgs {
     pub only: Option<String>,
 }
 
-#[derive(Debug, Args)]
-pub struct ArchiveArgs {}
-
-#[derive(Debug, Args)]
-pub struct PodArgs {
     #[command(subcommand)]
     pub command: PodCommands,
 }
