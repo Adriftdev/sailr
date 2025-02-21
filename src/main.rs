@@ -251,9 +251,24 @@ async fn main() -> Result<(), CliError> {
                                                 .and_then(|s| s.terminated.as_ref())
                                             {
                                                 println!("  Container {}: Terminated - Reason: {:?}, Exit Code: {}", container_name, terminated.reason, terminated.exit_code);
+                                                        },
+                                                        sailr::cli::DeploymentCommands::DeleteAll(args) => {
+                                                            LOGGER.info(&format!("Deleting all deployments"));
+
+                                                            let client = sailr::deployment::k8sm8::create_client(args.context.to_string())
+                                                                .await
+                                                                .map_err(|e| {
+                                                                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
+                                                                })?;
+
+                                                            sailr::deployment::k8sm8::delete_all_deployments(client, &args.namespace)
+                                                                .await
+                                                                .map_err(|e| CliError::Other(format!("Failed to delete all deployments: {}", e)))?;
+                                                        },
+                                                    }
+                                                },
                                             }
                                         }
-                                    }
 
                                     if let Some(conditions) = &status.conditions {
                                         if !conditions
