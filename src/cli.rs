@@ -18,7 +18,8 @@ pub enum Commands {
     /// Generate shell completions
     Completions(CompletionsArgs),
     /// Manage environments
-    Infra(InfraArgs),
+    #[command(subcommand)]
+    Infra(InfraCommands),
     /// Deploy an environment
     Deploy(DeployArgs),
     /// Generate an environment
@@ -112,12 +113,6 @@ pub struct InitArgs {
         help = "Region to use for the provider"
     )]
     pub region: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct InfraArgs {
-    #[command(subcommand)]
-    pub command: InfraCommands,
 }
 
 #[derive(Debug, Subcommand)]
