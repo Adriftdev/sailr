@@ -191,12 +191,15 @@ async fn main() -> Result<(), CliError> {
 
             sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }
-        Commands::Infra(command) => match command {
+        Commands::Infra(args) => match args.command {
             sailr::cli::InfraCommands::Up(up_args) => {
                 println!("Bringing up infrastructure: {:?}", up_args);
             }
             sailr::cli::InfraCommands::Down(down_args) => {
                 println!("Bringing down infrastructure: {:?}", down_args);
+            }
+            _ => {
+                println!("Not implemented");
             }
         },
         Commands::K8s(args) => {
