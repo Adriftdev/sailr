@@ -117,9 +117,8 @@ pub struct InitArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum InfraCommands {
-    Create(CreateArgs),
-    Apply(ApplyArgs),
-    Destroy(DestroyArgs),
+    Up(CreateArgs),
+    Down(DestroyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -352,6 +351,14 @@ pub struct DeleteArgs {
         help = "Name of the pod to delete"
     )]
     pub name: String,
+
+    #[arg(
+        name = "namespace",
+        short = 'n',
+        long = "namespace",
+        help = "Namespace of the pod to delete"
+    )]
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, Args)]

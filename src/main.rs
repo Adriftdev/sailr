@@ -53,8 +53,8 @@ async fn main() -> Result<(), CliError> {
         Commands::Completions(arg) => {
             clap_complete::generate(arg.shell, &mut Cli::command(), "sailr", &mut io::stdout());
         }
-        Commands::Infra(a) => match a.command {
-            InfraCommands::Create(arg) => {
+        Commands::Infra(a) => match a {
+            InfraCommands::Up(arg) => {
                 LOGGER.info(&format!("Creating a new environment"));
                 if let Some(template_path) = arg.infra_template_path {
                     create_default_env_infra(arg.name, Some(template_path), arg.default_registry);
@@ -73,8 +73,7 @@ async fn main() -> Result<(), CliError> {
                     infra.generate(Infra::read_config(arg.name.clone()));
                 }
             }
-            InfraCommands::Apply(arg) => Infra::apply(Infra::read_config(arg.name)),
-            InfraCommands::Destroy(arg) => Infra::destroy(Infra::read_config(arg.name)),
+            InfraCommands::Down(arg) => Infra::destroy(Infra::read_config(arg.name)),
         },
         Commands::Deploy(arg) => {
             LOGGER.info(&format!("Deploying an environment"));
@@ -191,17 +190,6 @@ async fn main() -> Result<(), CliError> {
 
             sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }
-        Commands::Infra(args) => match args.command {
-            sailr::cli::InfraCommands::Up(up_args) => {
-                println!("Bringing up infrastructure: {:?}", up_args);
-            }
-            sailr::cli::InfraCommands::Down(down_args) => {
-                println!("Bringing down infrastructure: {:?}", down_args);
-            }
-            _ => {
-                println!("Not implemented");
-            }
-        },
         Commands::K8s(args) => {
             match args.command {
                 K8sCommands::Pod(pod_args) => {
@@ -355,8 +343,10 @@ async fn main() -> Result<(), CliError> {
                                 })?;
 
                         sailr::deployment::k8sm8::delete_deployment(
-                            client,
-                            &args.namespace,
+                            client.clone(),
+                            &args
+                                .namespace
+                                .unwrap_or(client.default_namespace().to_string()),
                             &args.name,
                         )
                         .await
