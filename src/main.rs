@@ -191,91 +191,95 @@ async fn main() -> Result<(), CliError> {
 
             sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
         }
-        Commands::Pod(args) => {
+        Commands::K8s(args) => {
             match args.command {
-                sailr::cli::PodCommands::Delete(arg) => {
-                    LOGGER.info(&format!("Deleting a pod"));
+                sailr::cli::K8sCommands::Pod(pod_args) => {
+                    match pod_args.command {
+                        sailr::cli::PodCommands::Delete(arg) => {
+                            LOGGER.info(&format!("Deleting a pod"));
 
-                    let client = sailr::deployment::k8sm8::create_client(arg.context.to_string())
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                        })?;
+                            let client = sailr::deployment::k8sm8::create_client(arg.context.to_string())
+                                .await
+                                .map_err(|e| {
+                                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
+                                })?;
 
-                    sailr::deployment::k8sm8::pods::delete_pod(client, "default", &arg.name)
-                        .await
-                        .map_err(|e| CliError::Other(format!("Failed to delete pod: {}", e)))?;
-                }
-                sailr::cli::PodCommands::Get(arg) => {
-                    let client = sailr::deployment::k8sm8::create_client(arg.context.to_string())
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                        })?;
+                            sailr::deployment::k8sm8::pods::delete_pod(client, "default", &arg.name)
+                                .await
+                                .map_err(|e| CliError::Other(format!("Failed to delete pod: {}", e)))?;
+                        }
+                        sailr::cli::PodCommands::Get(arg) => {
+                            let client = sailr::deployment::k8sm8::create_client(arg.context.to_string())
+                                .await
+                                .map_err(|e| {
+                                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
+                                })?;
 
-                    let pods = sailr::deployment::k8sm8::pods::get_all_pods(
-                        client.clone(),
-                        client.clone().default_namespace(),
-                    )
-                    .await
-                    .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
+                            let pods = sailr::deployment::k8sm8::pods::get_all_pods(
+                                client.clone(),
+                                client.clone().default_namespace(),
+                            )
+                            .await
+                            .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
 
-                    for pod in pods {
-                        let pod_name = pod.metadata.name.clone().unwrap_or_default();
-                        let namespace = pod.metadata.namespace.clone().unwrap_or_default();
+                            for pod in pods {
+                                let pod_name = pod.metadata.name.clone().unwrap_or_default();
+                                let namespace = pod.metadata.namespace.clone().unwrap_or_default();
 
-                        let phase = pod
-                            .status
-                            .as_ref()
-                            .and_then(|s| s.phase.clone())
-                            .unwrap_or_else(|| "Unknown".into());
+                                let phase = pod
+                                    .status
+                                    .as_ref()
+                                    .and_then(|s| s.phase.clone())
+                                    .unwrap_or_else(|| "Unknown".into());
 
-                        println!("{}, Namespace: {}, Phase: {}", pod_name, namespace, phase);
+                                println!("{}, Namespace: {}, Phase: {}", pod_name, namespace, phase);
 
-                        if let Some(status) = pod.status.as_ref() {
-                            if let Some(container_statuses) = status.container_statuses.as_ref() {
-                                for container_status in container_statuses {
-                                    let container_name = &container_status.name;
-                                    if let Some(waiting) = container_status
-                                        .state
-                                        .as_ref()
-                                        .and_then(|s| s.waiting.as_ref())
-                                    {
-                                        println!(
-                                            "  Container {}: Waiting - Reason: {:?}",
-                                            container_name, waiting.reason
-                                        );
-                                    } else if let Some(terminated) = container_status
-                                        .state
-                                        .as_ref()
-                                        .and_then(|s| s.terminated.as_ref())
-                                    {
-                                        println!("  Container {}: Terminated - Reason: {:?}, Exit Code: {}", container_name, terminated.reason, terminated.exit_code);
+                                if let Some(status) = pod.status.as_ref() {
+                                    if let Some(container_statuses) = status.container_statuses.as_ref() {
+                                        for container_status in container_statuses {
+                                            let container_name = &container_status.name;
+                                            if let Some(waiting) = container_status
+                                                .state
+                                                .as_ref()
+                                                .and_then(|s| s.waiting.as_ref())
+                                            {
+                                                println!(
+                                                    "  Container {}: Waiting - Reason: {:?}",
+                                                    container_name, waiting.reason
+                                                );
+                                            } else if let Some(terminated) = container_status
+                                                .state
+                                                .as_ref()
+                                                .and_then(|s| s.terminated.as_ref())
+                                            {
+                                                println!("  Container {}: Terminated - Reason: {:?}, Exit Code: {}", container_name, terminated.reason, terminated.exit_code);
+                                            }
+                                        }
                                     }
-                                }
-                            }
 
-                            if let Some(conditions) = &status.conditions {
-                                if !conditions
-                                    .iter()
-                                    .any(|c| c.type_ == "Ready" && c.status == "True")
-                                    || conditions.iter().any(|c| c.status != "True")
-                                {
-                                    println!("  Conditions:");
-                                    for condition in conditions {
-                                        if condition.status != "True" || condition.type_ != "Ready"
+                                    if let Some(conditions) = &status.conditions {
+                                        if !conditions
+                                            .iter()
+                                            .any(|c| c.type_ == "Ready" && c.status == "True")
+                                            || conditions.iter().any(|c| c.status != "True")
                                         {
-                                            // Only show non-ready or non-true conditions
-                                            println!(
-                                                "    Type: {}, Status: {}",
-                                                condition.type_, condition.status
-                                            );
+                                            println!("  Conditions:");
+                                            for condition in conditions {
+                                                if condition.status != "True" || condition.type_ != "Ready"
+                                                {
+                                                    // Only show non-ready or non-true conditions
+                                                    println!(
+                                                        "    Type: {}, Status: {}",
+                                                        condition.type_, condition.status
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
                                 }
+                                println!("--------------------");
                             }
                         }
-                        println!("--------------------");
                     }
                 }
             }
