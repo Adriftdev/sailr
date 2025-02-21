@@ -24,6 +24,9 @@ use kube::{Api, Client, Discovery};
 use serde::Deserialize;
 use serde_json::Value;
 
+pub use deployments::delete_all_deployments;
+pub use deployments::delete_deployment;
+pub use deployments::get_all_deployments;
 use crate::errors::KubeError;
 use crate::LOGGER;
 use kube::config::KubeConfigOptions;
