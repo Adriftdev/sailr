@@ -130,20 +130,16 @@ async fn main() -> Result<(), CliError> {
             let env_name = arg.name.clone();
             match Environment::load_from_file(&env_name) {
                 Ok(mut env) => {
-                    let sample_service_entry = Service {
-                        name: sample_service_name.clone(),
-                        namespace: Some("default".to_string()),
-                        path: Some(sample_service_name.clone()),
-                        version: Some("latest".to_string()),
-                        build: None,
-                        major_version: None,
-                        minor_version: None,
-                        patch_version: None,
-                        tag: Some("latest".to_string()),
-                        chart: None,
-                        chart_version: None,
-                        repo: None,
-                    };
+                    let sample_service_entry = Service::new(
+                        "sample-app",
+                        "default",
+                        Some("sample-app"),
+                        None, // build
+                        None, // major_version
+                        None, // minor_version
+                        None, // patch_version
+                        Some("latest".to_string()), // tag
+                    );
 
                     if env
                         .service_whitelist
@@ -730,20 +726,16 @@ async fn main() -> Result<(), CliError> {
             let env_name = "develop".to_string(); // Fixed environment name for now
             match Environment::load_from_file(&env_name) {
                 Ok(mut env) => {
-                    let new_service = Service {
-                        name: args.service_name.clone(),
-                        namespace: Some("default".to_string()),
-                        path: Some(args.service_name.clone()), // Path to the templates
-                        version: Some("latest".to_string()),
-                        build: None,
-                        major_version: None,
-                        minor_version: None,
-                        patch_version: None,
-                        tag: Some("latest".to_string()),
-                        chart: None, 
-                        chart_version: None,
-                        repo: None,
-                    };
+                    let new_service = Service::new(
+                        &args.service_name,
+                        "default",
+                        Some(args.service_name.as_str()), // path
+                        None, // build
+                        None, // major_version
+                        None, // minor_version
+                        None, // patch_version
+                        Some("latest".to_string()), // tag
+                    );
 
                     // Check if service already exists to prevent duplicates
                     if env
