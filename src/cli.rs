@@ -381,6 +381,13 @@ pub struct AddServiceArgs {
     #[arg(help = "Name of the service")]
     pub service_name: String,
 
-    #[arg(short = 't', long = "type", help = "Type of the application (e.g., web-app, worker)")]
+    #[arg(
+        short = 't',
+        long = "type",
+        help = "Type of the application (e.g., web-app, worker)"
+    )]
     pub app_type: String,
+
+    #[arg(short = 'n', long = "name", help = "Environment name")]
+    pub env_name: String,
 }
