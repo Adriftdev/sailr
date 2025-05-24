@@ -31,15 +31,14 @@ This is the easiest way to install Sailr. The script will:
 To install using this method:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/YOUR_ORG/sailr/main/install.sh | sh -s -- -b $HOME/bin
+curl -sfL https://raw.githubusercontent.com/Adriftdev/sailr/main/install.sh | sh -s -- -b $HOME/bin
 ```
-*(Remember to replace `YOUR_ORG/sailr` with the actual repository path if different)*
 
 **Note:**
 *   The script will inform you where `sailr` is installed. Ensure this location is in your `$PATH`. If `$HOME/bin` is not in your path, add `export PATH="$HOME/bin:$PATH"` to your shell configuration file (e.g., `~/.bashrc`, `~/.zshrc`).
 *   The `install.sh` script itself can be inspected before running if you have security concerns:
     ```bash
-    curl -sfL https://raw.githubusercontent.com/YOUR_ORG/sailr/main/install.sh -o install-sailr.sh
+    curl -sfL https://raw.githubusercontent.com/Adriftdev/sailr/main/install.sh -o install-sailr.sh
     # Review install-sailr.sh
     sh ./install-sailr.sh -b $HOME/bin
     # rm ./install-sailr.sh # Optional: remove after use
@@ -49,7 +48,7 @@ curl -sfL https://raw.githubusercontent.com/YOUR_ORG/sailr/main/install.sh | sh 
 
 If you prefer not to use the script or are on a different OS (e.g., Windows, though official Windows binaries may not yet be available), you can install Sailr manually:
 
-1.  **Go to the [Sailr GitHub Releases page](https://github.com/YOUR_ORG/sailr/releases).** (Replace `YOUR_ORG/sailr` with the actual repository path)
+1.  **Go to the [Sailr GitHub Releases page](https://github.com/Adriftdev/sailr/releases).** (Replace `YOUR_ORG/sailr` with the actual repository path)
 2.  **Download the appropriate binary** for your operating system and architecture (e.g., `sailr-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz` or `sailr-vX.Y.Z-aarch64-apple-darwin.tar.gz`).
 3.  **(Security Recommended)** Download the checksum file (e.g., `sha256sums.txt` or `sailr-vX.Y.Z_checksums.txt`) for the release and verify the integrity of your downloaded archive.
     ```bash

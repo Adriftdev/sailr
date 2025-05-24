@@ -26,9 +26,8 @@ Before you begin, ensure you have the following prerequisites installed:
 The easiest way to install Sailr on Linux and macOS is by using our `install.sh` script. This script will attempt to install `sailr` to `$HOME/bin` and can also help install dependencies.
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/YOUR_ORG/sailr/main/install.sh | sh -s -- -b $HOME/bin
+curl -sfL https://raw.githubusercontent.com/Adriftdev/sailr/main/install.sh | sh -s -- -b $HOME/bin
 ```
-*(Please replace `YOUR_ORG/sailr` with the actual repository path once known.)*
 
 For more detailed instructions, including manual installation, setting up shell completions, and further details on dependencies, please see our [Full Installation Guide](docs/docs/getting-started/installation.md).
 
