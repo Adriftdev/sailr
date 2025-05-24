@@ -4,6 +4,8 @@ use scribe_rust::{log, Color};
 
 use crate::{config::Config, environment::Environment, filesystem::FileSystemManager};
 
+pub mod scaffolding;
+
 #[derive(Clone, Debug)]
 pub struct Template {
     pub name: String,

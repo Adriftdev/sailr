@@ -30,6 +30,8 @@ pub enum Commands {
     Go(GoArgs),
     /// Kubernetes resources commands
     K8s(K8sArgs),
+    /// Add a new service to the project
+    AddService(AddServiceArgs),
 }
 
 #[derive(Debug, Args)]
@@ -372,4 +374,13 @@ pub struct GetArgs {
         help = "Kubernetes context to use"
     )]
     pub context: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AddServiceArgs {
+    #[arg(help = "Name of the service")]
+    pub service_name: String,
+
+    #[arg(short = 't', long = "type", help = "Type of the application (e.g., web-app, worker)")]
+    pub app_type: String,
 }
