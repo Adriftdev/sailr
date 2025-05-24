@@ -46,10 +46,18 @@ minikube start --driver=docker --download-only
 
 ### Initialization
 
-Initializes a new environment named <environment_name>. Creates a directory structure and a default configuration file.
+Initializes a new environment named <environment_name>. Creates a directory structure, a default configuration file, and a "sample-app" service to get you started quickly.
 
 ```bash 
 sailr init <environment_name> 
+```
+
+### Add Service
+
+Adds a new service to your project. This creates boilerplate Kubernetes templates (`deployment.yaml`, `service.yaml`, `configmap.yaml`) in `k8s/templates/<service_name>/` and adds the service to the `develop` environment's configuration.
+
+```bash
+sailr add service <service_name> --type <app_type>
 ```
 
 ### Completions
@@ -89,16 +97,18 @@ sailr build <environment_name> [--ignore <service1,service2,...>]
 Combines generation and deployment in a single command for the <environment_name> environment.
 
 ```bash 
-sailr go <environment_name>: 
+sailr go <environment_name>
 ```
 
 ### Additional Notes
 
 - Use the --force flag with build to rebuild all service images regardless of the cache.
+- For a full list of commands and their detailed options, please see the [CLI Command Reference](docs/docs/cli-usage.md).
 
 ### Getting Help
 
-- Consult the Sailr project documentation [here](docs/docs/intro.md).
+- Consult the main Sailr project documentation [here](docs/docs/intro.md).
+- For detailed CLI command information, refer to the [CLI Command Reference](docs/docs/cli-usage.md).
 
 ## Sailr Configuration File
 
