@@ -25,7 +25,7 @@ const sidebars = {
 			label: 'Getting Started',
 			items: [
 				'getting-started/installation',
-				// 'getting-started/tutorial', // Placeholder for future tutorial page
+				'getting-started/tutorial',
 			],
 		},
 		'cli-usage',
