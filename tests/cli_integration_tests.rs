@@ -1,13 +1,13 @@
 // tests/cli_integration_tests.rs
 
-use sailr::cli::{Cli, Commands, InitArgs, AddServiceArgs, Provider}; // Assuming Provider might be needed for InitArgs
+use sailr::cli::{Commands, InitArgs, AddServiceArgs, Provider}; // Cli removed
 use sailr::environment::Environment;
 use sailr::errors::CliError;
 use sailr::templates::scaffolding::{generate_config_map, generate_deployment, generate_service};
 use sailr::{create_default_env_config, create_default_env_infra, LOGGER}; // Access to main's logic handlers
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::io::Write; // For creating dummy files if needed
+// std::io::Write removed
 
 // Helper function to simulate parts of main's command handling.
 // This will need to be adapted based on how `main.rs` is structured or refactored.
@@ -102,20 +102,16 @@ async fn handle_command(command: Commands, _test_workspace_root: &Path) -> Resul
             let env_name = args.name.clone();
             match Environment::load_from_file(&env_name) {
                 Ok(mut env) => {
-                    let sample_service_entry = sailr::environment::Service {
-                        name: sample_service_name.clone(),
-                        namespace: Some("default".to_string()),
-                        path: Some(sample_service_name.clone()),
-                        version: Some("latest".to_string()),
-                        build: None,
-                        major_version: None,
-                        minor_version: None,
-                        patch_version: None,
-                        tag: Some("latest".to_string()),
-                        chart: None,
-                        chart_version: None,
-                        repo: None,
-                    };
+                    let sample_service_entry = sailr::environment::Service::new(
+                        &sample_service_name, // name: &str
+                        "default",            // namespace: &str
+                        Some(&sample_service_name), // path: Option<&str>
+                        None,                 // build: Option<String>
+                        None,                 // major_version: Option<u32>
+                        None,                 // minor_version: Option<u32>
+                        None,                 // patch_version: Option<u32>
+                        Some("latest".to_string()), // tag: Option<String>
+                    );
 
                     if !env.service_whitelist.iter().any(|s| s.name == sample_service_entry.name) {
                         env.service_whitelist.push(sample_service_entry);
@@ -173,20 +169,16 @@ async fn handle_command(command: Commands, _test_workspace_root: &Path) -> Resul
             let env_name = "develop".to_string();
             match Environment::load_from_file(&env_name) {
                 Ok(mut env) => {
-                    let new_service = sailr::environment::Service {
-                        name: args.service_name.clone(),
-                        namespace: Some("default".to_string()),
-                        path: Some(args.service_name.clone()),
-                        version: Some("latest".to_string()),
-                        build: None,
-                        major_version: None,
-                        minor_version: None,
-                        patch_version: None,
-                        tag: Some("latest".to_string()),
-                        chart: None,
-                        chart_version: None,
-                        repo: None,
-                    };
+                    let new_service = sailr::environment::Service::new(
+                        &args.service_name, // name: &str
+                        "default",          // namespace: &str
+                        Some(&args.service_name), // path: Option<&str>
+                        None,               // build: Option<String>
+                        None,               // major_version: Option<u32>
+                        None,               // minor_version: Option<u32>
+                        None,               // patch_version: Option<u32>
+                        Some("latest".to_string()), // tag: Option<String>
+                    );
                     if !env.service_whitelist.iter().any(|s| s.name == new_service.name) {
                         env.service_whitelist.push(new_service);
                         env.save_to_file().map_err(|e| CliError::Other(format!("Failed to save env for new service: {}", e)))?;
@@ -264,8 +256,9 @@ async fn test_init_creates_sample_app() {
     let config_path = workspace_root.join("k8s/environments/testenv/config.toml");
     assert!(config_path.exists(), "Config.toml was not created at {:?}", config_path);
 
-    let env = Environment::load_from_file(&PathBuf::from("k8s/environments/testenv")) // Relative to workspace root
-        .expect("Failed to load config.toml");
+    let env_name_for_load = "testenv".to_string();
+    let env = Environment::load_from_file(&env_name_for_load) // Pass the environment name as &String
+        .expect("Failed to load config.toml for testenv");
     assert!(
         env.service_whitelist.iter().any(|s| s.name == "sample-app"),
         "sample-app service not found in config.toml's service_whitelist"
@@ -322,7 +315,8 @@ async fn test_add_service_creates_service_files_and_updates_config() {
     let config_path_develop = workspace_root.join("k8s/environments/develop/config.toml");
     assert!(config_path_develop.exists(), "Develop config.toml missing after add service");
 
-    let env_develop = Environment::load_from_file(&PathBuf::from("k8s/environments/develop")) // Relative to workspace root
+    let develop_env_name_for_load = "develop".to_string();
+    let env_develop = Environment::load_from_file(&develop_env_name_for_load) // Pass the environment name as &String
         .expect("Failed to load develop config.toml after adding service");
     assert!(
         env_develop.service_whitelist.iter().any(|s| s.name == "new-service"),

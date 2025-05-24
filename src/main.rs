@@ -3,8 +3,7 @@ use std::io;
 use sailr::{
     builder::{split_matches, Builder},
     cli::{Cli, Commands, InfraCommands, K8sCommands, Provider},
-    create_default_env_config,
-    create_default_env_infra,
+    create_default_env_config, create_default_env_infra,
     environment::{Environment, Service}, // Added Service
     errors::CliError,
     generate,
@@ -40,11 +39,7 @@ async fn main() -> Result<(), CliError> {
             );
 
             if let Some(template_path) = arg.infra_template_path {
-                create_default_env_infra(
-                    arg.name.clone(),
-                    Some(template_path),
-                    arg.default_registry,
-                )
+                create_default_env_infra(arg.name, Some(template_path), arg.default_registry)
             } else if let Some(provider) = arg.provider {
                 let infra = match provider {
                     Provider::Local => Infra::new(Box::new(LocalK8::new(arg.name.clone()))),
@@ -68,7 +63,8 @@ async fn main() -> Result<(), CliError> {
             let sample_replicas = 1;
             let sample_port = 80;
 
-            let sample_service_template_path_str = format!("k8s/templates/{}", sample_service_name);
+            let sample_service_template_path_str =
+                format!("k8s/templates/{}", sample_service_name);
             let sample_service_template_path = Path::new(&sample_service_template_path_str);
 
             match fs::create_dir_all(sample_service_template_path) {
@@ -97,11 +93,14 @@ async fn main() -> Result<(), CliError> {
             );
             let service_content =
                 generate_service(&sample_service_name, &sample_app_type, sample_port);
-            let config_map_content = generate_config_map(&sample_service_name, &sample_app_type);
+            let config_map_content =
+                generate_config_map(&sample_service_name, &sample_app_type);
 
-            let deployment_file_path = sample_service_template_path.join("deployment.yaml");
+            let deployment_file_path =
+                sample_service_template_path.join("deployment.yaml");
             let service_file_path = sample_service_template_path.join("service.yaml");
-            let config_map_file_path = sample_service_template_path.join("configmap.yaml");
+            let config_map_file_path =
+                sample_service_template_path.join("configmap.yaml");
 
             for (path, content) in &[
                 (&deployment_file_path, deployment_content),
@@ -109,9 +108,10 @@ async fn main() -> Result<(), CliError> {
                 (&config_map_file_path, config_map_content),
             ] {
                 match fs::write(path, content) {
-                    Ok(_) => {
-                        LOGGER.info(&format!("Created sample-app manifest: {}", path.display()))
-                    }
+                    Ok(_) => LOGGER.info(&format!(
+                        "Created sample-app manifest: {}",
+                        path.display()
+                    )),
                     Err(e) => {
                         LOGGER.error(&format!(
                             "Failed to write sample-app manifest {}: {}",
@@ -134,10 +134,10 @@ async fn main() -> Result<(), CliError> {
                         "sample-app",
                         "default",
                         Some("sample-app"),
-                        None,                       // build
-                        None,                       // major_version
-                        None,                       // minor_version
-                        None,                       // patch_version
+                        None, // build
+                        None, // major_version
+                        None, // minor_version
+                        None, // patch_version
                         Some("latest".to_string()), // tag
                     );
 
@@ -651,14 +651,22 @@ async fn main() -> Result<(), CliError> {
             let replicas = 1; // Default replicas
             let port = 80; // Default port
 
-            let deployment_content =
-                generate_deployment(&args.service_name, &args.app_type, image, replicas);
-            let service_content = generate_service(&args.service_name, &args.app_type, port);
-            let config_map_content = generate_config_map(&args.service_name, &args.app_type);
+            let deployment_content = generate_deployment(
+                &args.service_name,
+                &args.app_type,
+                image,
+                replicas,
+            );
+            let service_content =
+                generate_service(&args.service_name, &args.app_type, port);
+            let config_map_content =
+                generate_config_map(&args.service_name, &args.app_type);
 
-            let deployment_file_path = service_template_path.join("deployment.yaml");
+            let deployment_file_path =
+                service_template_path.join("deployment.yaml");
             let service_file_path = service_template_path.join("service.yaml");
-            let config_map_file_path = service_template_path.join("configmap.yaml");
+            let config_map_file_path =
+                service_template_path.join("configmap.yaml");
 
             match fs::write(&deployment_file_path, deployment_content) {
                 Ok(_) => LOGGER.info(&format!(
@@ -715,18 +723,18 @@ async fn main() -> Result<(), CliError> {
             }
 
             // config.toml update
-            let env_name = args.env_name.to_string(); // Fixed environment name for now
+            let env_name = "develop".to_string(); // Fixed environment name for now
             match Environment::load_from_file(&env_name) {
                 Ok(mut env) => {
                     let new_service = Service::new(
                         &args.service_name,
                         "default",
                         Some(args.service_name.as_str()), // path
-                        None,                             // build
-                        None,                             // major_version
-                        None,                             // minor_version
-                        None,                             // patch_version
-                        Some("latest".to_string()),       // tag
+                        None, // build
+                        None, // major_version
+                        None, // minor_version
+                        None, // patch_version
+                        Some("latest".to_string()), // tag
                     );
 
                     // Check if service already exists to prevent duplicates
