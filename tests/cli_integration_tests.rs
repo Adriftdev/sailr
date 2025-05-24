@@ -47,9 +47,8 @@ async fn handle_command(command: Commands, _test_workspace_root: &Path) -> Resul
                 infra.generate(sailr::infra::Infra::read_config(args.name.clone()));
                 infra.build(sailr::infra::Infra::read_config(args.name.clone()));
             } else {
-                let infra = sailr::infra::Infra::new(Box::new(sailr::infra::local_k8s::LocalK8::new(args.name.clone())));
-                infra.generate(sailr::infra::Infra::read_config(args.name.clone()));
-                infra.build(sailr::infra::Infra::read_config(args.name.clone()));
+                // Reflects the updated logic in main.rs: no default infra provisioning
+                LOGGER.info("No infrastructure provider specified in test, skipping default infrastructure setup.");
             }
 
             // Add default "sample-app" service (logic copied from main.rs)
@@ -238,7 +237,7 @@ async fn test_init_creates_sample_app() {
         name: "testenv".to_string(),
         config_template_path: None,
         default_registry: None,
-        provider: Some(Provider::Local), // Assuming Local is a sensible default for tests
+        provider: None, // Test the case where no provider is specified
         infra_template_path: None,
         region: None,
     };

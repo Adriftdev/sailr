@@ -51,9 +51,10 @@ async fn main() -> Result<(), CliError> {
                 infra.generate(Infra::read_config(arg.name.clone()));
                 infra.build(Infra::read_config(arg.name.clone()));
             } else {
-                let infra = Infra::new(Box::new(LocalK8::new(arg.name.clone())));
-                infra.generate(Infra::read_config(arg.name.clone()));
-                infra.build(Infra::read_config(arg.name.clone()));
+                // No default infrastructure provisioning.
+                // Infrastructure will only be set up if explicitly requested
+                // via --provider or --infra-templates options, or later using 'sailr infra up'.
+                LOGGER.info("No infrastructure provider specified, skipping default infrastructure setup. Use 'sailr infra up' to provision later if needed.");
             }
 
             // Add default "sample-app" service
