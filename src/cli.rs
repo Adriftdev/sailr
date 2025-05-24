@@ -381,6 +381,27 @@ pub struct AddServiceArgs {
     #[arg(help = "Name of the service")]
     pub service_name: String,
 
-    #[arg(short = 't', long = "type", help = "Type of the application (e.g., web-app, worker)")]
+    #[arg(
+        short = 't',
+        long = "type",
+        help = "Type of the application (e.g., web-app, worker)"
+    )]
     pub app_type: String,
+
+    #[arg(
+        short = 'p',
+        long = "port",
+        help = "Port for the service (default is 80)"
+    )]
+    pub port: Option<u16>,
+
+    #[arg(
+        short = 'i',
+        long = "image",
+        help = "Docker image for the service (default is 'nginx:latest')"
+    )]
+    pub image: Option<String>,
+
+    #[arg(short = 'n', long = "name", help = "Environment to add the service to")]
+    pub env_name: String,
 }

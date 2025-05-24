@@ -1,0 +1,63 @@
+schema_version = "0.2.0" # here for cli compatability check. leave as this, unless sailr specifies.
+# schema_version changes could indicate breaking changes or new features or patches to sailr config spec.
+
+# Global config, all can be reference in templates as their name ie {{domain}} will be replaced with the domain value. 
+
+name = "dev"
+log_level = "INFO"
+domain = "example.com" # Replace this with the domain
+default_replicas = 1
+registry = "docker.io" # Replace this with the container registry to use if not usign docker.io
+
+
+#----------------------- SERVICES ----------------------------#
+
+# Example service whitelist
+# Service whitelist defines the services that will be
+# generated and deployed to the kubernetes cluster. 
+
+# minimal config required for service definition
+[[service_whitelist]]
+name = "test" # avaliable as `service_name`, name is used to pull the images in the default templates, can be what ever.
+version = "latest" # accepts semver versions or tags, avaliable in service templates as `service_version`
+
+# Defining a service with a set version, and will live in the test-namespace
+[[service_whitelist]]
+path = "core/test2" # change the template directory relative to the k8s/templates dir
+name = "test2" # avaliable as `service_name`
+version = "1.2.0" # accepts semver versions or tags, avaliable in service templates as `service_version`
+namespace = "test-namespace" # avaliabel as `service_namespace`
+build = "./test" # src dir to build code, optional as some service don't 
+             # need to build because they just use remote images.  
+
+
+#-------------------------- ENV ------------------------------#
+
+# Example Environment Variable Definitions
+# these will be used when generating the service definitions
+# and will be swapped out in the template files on generation.
+
+[[environment_variables]]
+name = "REDIS_HOST"  
+value = "redis" # this will be injected into templates where ever {{REDIS_HOST}} appears.
+
+[[environment_variables]]
+name = "REDIS_PORT"
+value = "6379" # this will be injected into templates where ever {{REDIS_HOST}} appears.
+
+
+#-----------------------   BUILD   --------------------------#
+
+# Example Roomservice config
+[build]
+beforeAll = "echo 'do something before'" # executes before all build steps (globally) from project root
+
+[build.rooms.test]
+path = "./test" # build path, will use this to build the service
+run_parallel = "docker build -t test:latest ."  # actions to run in parallel across all builds
+after = "docker push test:latest" # actions  to run after the build step
+
+[build.rooms.test2] # test2 is the name of the build
+path = "./test2"
+before = "docker build -t docker.io/test2:latest ." # actions to run before build step, using the default vars
+after = "docker push docker.io/test2:latest" # actions to run after the build step, using the default vars

@@ -1,6 +1,12 @@
 // src/templates/scaffolding.rs
 
-pub fn generate_deployment(service_name: &str, _app_type: &str, image: &str, replicas: u8) -> String {
+pub fn generate_deployment(
+    service_name: &str,
+    _app_type: &str,
+    image: &str,
+    replicas: u8,
+    port: u16,
+) -> String {
     format!(
         r#"apiVersion: apps/v1
 kind: Deployment
@@ -22,11 +28,12 @@ spec:
       - name: {service_name}
         image: {image}
         ports:
-        - containerPort: 80 # Default, consider making this configurable later
+        - containerPort: {port} # Default, consider making this configurable later
 "#,
         service_name = service_name,
         replicas = replicas,
-        image = image
+        image = image,
+        port = port
     )
 }
 
@@ -42,7 +49,7 @@ spec:
   ports:
     - protocol: TCP
       port: {port}
-      targetPort: 80 # Default, should ideally match containerPort
+      targetPort: {port} # Default, should ideally match containerPort
 "#,
         service_name = service_name,
         port = port

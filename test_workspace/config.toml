@@ -1,0 +1,44 @@
+schema_version = "0.2.0"
+name = "testenv"
+log_level = "INFO"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
+
+[[service_whitelist]]
+path = ""
+version = "latest"
+name = "default/test"
+
+[[service_whitelist]]
+name = "test-namespace/test2"
+path = "core/test2"
+version = "1.2.0"
+build = "./test"
+
+[[service_whitelist]]
+path = "sample-app"
+version = "latest"
+name = "default/sample-app"
+
+[build]
+beforeAll = "echo 'do something before'"
+
+[build.rooms.test]
+path = "./test"
+include = "./**/*.*"
+after = "docker push test:latest"
+
+[build.rooms.test2]
+path = "./test2"
+include = "./**/*.*"
+before = "docker build -t docker.io/test2:latest ."
+after = "docker push docker.io/test2:latest"
+
+[[environment_variables]]
+name = "REDIS_HOST"
+value = "redis"
+
+[[environment_variables]]
+name = "REDIS_PORT"
+value = "6379"
