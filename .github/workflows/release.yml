@@ -51,11 +51,34 @@ jobs:
           target: ${{ matrix.platform.target }}
           override: true
 
+      - name: Install Perl (Windows for vendored OpenSSL)
+        if: runner.os == 'Windows'
+        run: choco install strawberryperl --no-progress
+
       - name: Install dependencies for Linux ARM64 cross-compilation
         if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev pkg-config
+
+      - name: Install OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix openssl@3)/include" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Verify OpenSSL Env Vars (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "OPENSSL_ROOT_DIR is: $OPENSSL_ROOT_DIR"
+          echo "OPENSSL_LIB_DIR is: $OPENSSL_LIB_DIR"
+          echo "LDFLAGS is: $LDFLAGS"
+          echo "CPPFLAGS is: $CPPFLAGS"
+          echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
 
       - name: Build binary
         run: cargo build --release --locked --target ${{ matrix.platform.target }}
