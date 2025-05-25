@@ -26,7 +26,7 @@ jobs:
             binary_ext: ""
             archive_ext: ".tar.gz"
           - os_name: macOS
-            os_runner: macos-latest # This should provide x86_64 (via Rosetta)
+            os_runner: macos-latest # This should provide x86_64 or arm64, handled by logic
             target: x86_64-apple-darwin
             binary_ext: ""
             archive_ext: ".tar.gz"
@@ -61,14 +61,13 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev pkg-config
 
       - name: Install OpenSSL and Set Vars (macOS)
-        # This step runs only for macOS builds
         if: runner.os == 'macOS'
         run: |
           OPENSSL_VERSION="openssl@3" # Or openssl@1.1 if needed
           TARGET_ARCH_TUPLE="${{ matrix.platform.target }}" # e.g., x86_64-apple-darwin or aarch64-apple-darwin
 
           echo "Target architecture for OpenSSL: $TARGET_ARCH_TUPLE"
-          echo "Runner architecture: $(uname -m)" # This will be 'arm64' on macos-latest
+          echo "Runner architecture: $(uname -m)"
 
           BREW_EXECUTABLE=""
           ARCH_PREFIX=""
@@ -76,52 +75,43 @@ jobs:
 
           if [[ "$TARGET_ARCH_TUPLE" == "x86_64-apple-darwin" ]]; then
             echo "Configuring for x86_64 OpenSSL build."
-            # Ensure Rosetta is installed for x86_64 emulation on ARM64 runners
-            echo "Installing Rosetta 2..."
-            sudo softwareupdate --install-rosetta --agree-to-license || true # Add || true to prevent job failure if Rosetta is already installed or command fails benignly
+            # Ensure Rosetta 2 is installed for x86_64 emulation
+            sudo softwareupdate --install-rosetta --agree-to-license || true
 
-            # Install x86_64 Homebrew if it's not already present.
-            # This installs to /usr/local/homebrew for x86_64 on ARM.
-            # Use a specific prefix to avoid conflicts with ARM Homebrew.
-            X86_64_BREW_PATH="/usr/local/homebrew/bin" # A common location for x86_64 Homebrew
-            if [ ! -f "$X86_64_BREW_PATH/brew" ]; then
-              echo "Installing x86_64 Homebrew to $X86_64_BREW_PATH..."
-              # Use the official Homebrew installation script but force x86_64 architecture
-              # and specify the install prefix.
-              arch -x86_64 /bin/bash -c "NONINTERACTIVE=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\" --prefix=$X86_64_BREW_PATH/../.."
+            # Install x86_64 Homebrew if it's not already there
+            # This installs Homebrew to /usr/local for x86_64 binaries
+            if [ ! -f "/usr/local/bin/brew" ]; then
+              echo "Installing x86_64 Homebrew to /usr/local..."
+              # Pipe curl output directly to bash running under x86_64 architecture
+              curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh | arch -x86_64 /bin/bash
+              # Add /usr/local/bin to PATH for subsequent commands in this shell
+              export PATH="/usr/local/bin:$PATH"
             fi
-            
-            BREW_EXECUTABLE="$X86_64_BREW_PATH/brew"
             ARCH_PREFIX="arch -x86_64"
+            BREW_EXECUTABLE="/usr/local/bin/brew"
 
-            # Check if x86_64 brew is now available
-            if ! $ARCH_PREFIX $BREW_EXECUTABLE --version > /dev/null 2>&1; then
-              echo "::error::Failed to find or install x86_64 Homebrew at $BREW_EXECUTABLE."
-              exit 1
-            fi
             echo "Using Homebrew executable for x86_64: $BREW_EXECUTABLE"
-
-            # Install/update OpenSSL for x86_64
-            $ARCH_PREFIX $BREW_EXECUTABLE update || echo "Brew update failed for x86_64, proceeding with install..."
-            $ARCH_PREFIX $BREW_EXECUTABLE install $OPENSSL_VERSION
-            OPENSSL_PREFIX=$($ARCH_PREFIX $BREW_EXECUTABLE --prefix $OPENSSL_VERSION)
+            # Install/update OpenSSL for x86_64, ensuring /usr/local/bin is in PATH
+            PATH="/usr/local/bin:$PATH" $ARCH_PREFIX $BREW_EXECUTABLE update || echo "Brew update failed, proceeding with install..."
+            PATH="/usr/local/bin:$PATH" $ARCH_PREFIX $BREW_EXECUTABLE install $OPENSSL_VERSION
+            OPENSSL_PREFIX=$(PATH="/usr/local/bin:$PATH" $ARCH_PREFIX $BREW_EXECUTABLE --prefix $OPENSSL_VERSION)
 
           else # aarch64-apple-darwin
             echo "Configuring for aarch64 OpenSSL build."
-            # Standard path for ARM64 Homebrew
+            # Standard path for ARM64 Homebrew on Apple Silicon
             if /opt/homebrew/bin/brew --version > /dev/null 2>&1; then
               BREW_EXECUTABLE="/opt/homebrew/bin/brew"
-            elif command -v brew > /dev/null 2>&1; then # Fallback to brew in PATH (less reliable in GHA)
+            elif command -v brew > /dev/null 2>&1; then # Fallback to brew in PATH
               BREW_EXECUTABLE="brew"
               echo "Using brew from PATH for aarch64, assuming it's the native ARM Homebrew."
             else
               echo "::error::ARM64 Homebrew not found in /opt/homebrew/bin/brew or PATH."
               exit 1
             fi
-            
+
             echo "Using Homebrew executable for aarch64: $BREW_EXECUTABLE"
             # Install/update OpenSSL for aarch64
-            $BREW_EXECUTABLE update || echo "Brew update failed for aarch64, proceeding with install..."
+            $BREW_EXECUTABLE update || echo "Brew update failed, proceeding with install..."
             $BREW_EXECUTABLE install $OPENSSL_VERSION
             OPENSSL_PREFIX=$($BREW_EXECUTABLE --prefix $OPENSSL_VERSION)
           fi
@@ -132,17 +122,13 @@ jobs:
             exit 1
           fi
 
-          # Export environment variables for the build
           echo "OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
-          # These target-specific vars are less commonly used by Cargo but good for completeness
           TARGET_ARCH_ENV_PREFIX=$(echo "$TARGET_ARCH_TUPLE" | tr '[:lower:]-' '[:upper:]_')
           echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
           echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
           echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include" >> $GITHUB_ENV
-          
-          # Also set generic OpenSSL variables for convenience
           echo "OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include" >> $GITHUB_ENV
 
@@ -169,24 +155,19 @@ jobs:
         env:
           # For aarch64-unknown-linux-gnu, specify the linker
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.platform.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
-          # For macOS, explicitly specify OPENSSL_DIR to link correctly, especially for x86_64
-          # Cargo often picks up PKG_CONFIG_PATH, but explicit definition can help
-          # OPENSSL_DIR: ${{ runner.os == 'macOS' && env.OPENSSL_DIR || '' }}
-          # PKG_CONFIG_PATH: ${{ runner.os == 'macOS' && env.PKG_CONFIG_PATH || '' }}
-          # The above are usually sufficient if set in GITHUB_ENV, but can be added here if needed.
 
       - name: Prepare artifact name and staging directory
         id: prep_artifact
         run: |
           VERSION=$(echo "${{ github.ref_name }}" | sed 's/v//') # Remove 'v' prefix if present
           ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${VERSION}-${{ matrix.platform.target }}"
-          
-          # Determine correct binary extension (e.g., .exe for Windows)
+
+          # Handle binary extension for Windows correctly
           BINARY_EXT="${{ matrix.platform.binary_ext }}"
           if [[ "${{ runner.os }}" == "Windows" && "$BINARY_EXT" == "" ]]; then
             BINARY_EXT=".exe"
           fi
-
+          
           ARTIFACT_PATH_SUFFIX="target/${{ matrix.platform.target }}/release/${{ env.PROJECT_NAME }}${BINARY_EXT}"
           
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
