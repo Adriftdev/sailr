@@ -3,14 +3,21 @@ use std::io;
 use sailr::{
     builder::{split_matches, Builder},
     cli::{Cli, Commands, InfraCommands, K8sCommands, Provider},
-    create_default_env_config, create_default_env_infra,
-    environment::Environment,
+    create_default_env_config,
+    create_default_env_infra,
+    environment::{Environment, Service}, // Added Service
     errors::CliError,
     generate,
     infra::{local_k8s::LocalK8, Infra},
-    templates::TemplateManager,
+    templates::{
+        scaffolding::{generate_config_map, generate_deployment, generate_service}, // Added scaffolding functions
+        TemplateManager,
+    },
     LOGGER,
+    // filesystem::FileSystemManager, // FileSystemManager is not directly used here, fs is used.
 };
+use std::fs;
+use std::path::Path; // Path was already here
 
 use anyhow::Result;
 
@@ -33,7 +40,11 @@ async fn main() -> Result<(), CliError> {
             );
 
             if let Some(template_path) = arg.infra_template_path {
-                create_default_env_infra(arg.name, Some(template_path), arg.default_registry)
+                create_default_env_infra(
+                    arg.name.clone(),
+                    Some(template_path),
+                    arg.default_registry,
+                )
             } else if let Some(provider) = arg.provider {
                 let infra = match provider {
                     Provider::Local => Infra::new(Box::new(LocalK8::new(arg.name.clone()))),
@@ -45,9 +56,132 @@ async fn main() -> Result<(), CliError> {
                 infra.generate(Infra::read_config(arg.name.clone()));
                 infra.build(Infra::read_config(arg.name.clone()));
             } else {
-                let infra = Infra::new(Box::new(LocalK8::new(arg.name.clone())));
-                infra.generate(Infra::read_config(arg.name.clone()));
-                infra.build(Infra::read_config(arg.name.clone()));
+                // No default infrastructure provisioning.
+                // Infrastructure will only be set up if explicitly requested
+                // via --provider or --infra-templates options, or later using 'sailr infra up'.
+                LOGGER.info("No infrastructure provider specified, skipping default infrastructure setup. Use 'sailr infra up' to provision later if needed.");
+            }
+
+            // Add default "sample-app" service
+            let sample_service_name = "sample-app".to_string();
+            let sample_app_type = "web-app".to_string();
+            let sample_image = "nginx:latest".to_string();
+            let sample_replicas = 1;
+            let sample_port = 80;
+
+            let sample_service_template_path_str = format!("k8s/templates/{}", sample_service_name);
+            let sample_service_template_path = Path::new(&sample_service_template_path_str);
+
+            match fs::create_dir_all(sample_service_template_path) {
+                Ok(_) => LOGGER.info(&format!(
+                    "Created directory for sample-app: {}",
+                    sample_service_template_path.display()
+                )),
+                Err(e) => {
+                    LOGGER.error(&format!(
+                        "Failed to create directory for sample-app {}: {}",
+                        sample_service_template_path.display(),
+                        e
+                    ));
+                    return Err(CliError::Other(format!(
+                        "Failed to create directory for sample-app: {}",
+                        e
+                    )));
+                }
+            }
+
+            let deployment_content = generate_deployment(
+                &sample_service_name,
+                &sample_app_type,
+                &sample_image,
+                sample_replicas,
+                sample_port,
+            );
+            let service_content =
+                generate_service(&sample_service_name, &sample_app_type, sample_port);
+            let config_map_content = generate_config_map(&sample_service_name, &sample_app_type);
+
+            let deployment_file_path = sample_service_template_path.join("deployment.yaml");
+            let service_file_path = sample_service_template_path.join("service.yaml");
+            let config_map_file_path = sample_service_template_path.join("configmap.yaml");
+
+            for (path, content) in &[
+                (&deployment_file_path, deployment_content),
+                (&service_file_path, service_content),
+                (&config_map_file_path, config_map_content),
+            ] {
+                match fs::write(path, content) {
+                    Ok(_) => {
+                        LOGGER.info(&format!("Created sample-app manifest: {}", path.display()))
+                    }
+                    Err(e) => {
+                        LOGGER.error(&format!(
+                            "Failed to write sample-app manifest {}: {}",
+                            path.display(),
+                            e
+                        ));
+                        return Err(CliError::Other(format!(
+                            "Failed to write sample-app manifest: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+
+            // Update the new environment's config.toml with sample-app
+            let env_name = arg.name.clone();
+            match Environment::load_from_file(&env_name) {
+                Ok(mut env) => {
+                    let sample_service_entry = Service::new(
+                        "sample-app",
+                        "default",
+                        Some("sample-app"),
+                        None,                       // build
+                        None,                       // major_version
+                        None,                       // minor_version
+                        None,                       // patch_version
+                        Some("latest".to_string()), // tag
+                    );
+
+                    if env
+                        .service_whitelist
+                        .iter()
+                        .any(|s| s.name == sample_service_entry.name)
+                    {
+                        LOGGER.warn(&format!(
+                            "Sample service {} already exists in environment {}, skipping addition.",
+                            sample_service_name, env_name
+                        ));
+                    } else {
+                        env.service_whitelist.push(sample_service_entry);
+                        match env.save_to_file() {
+                            Ok(_) => LOGGER.info(&format!(
+                                "Added sample-app service to environment {} config.",
+                                env_name
+                            )),
+                            Err(e) => {
+                                LOGGER.error(&format!(
+                                    "Failed to save updated config for environment {}: {}",
+                                    env_name, e
+                                ));
+                                return Err(CliError::Other(format!(
+                                    "Failed to save config for sample-app: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    LOGGER.error(&format!(
+                        "Failed to load environment {} to add sample-app: {}",
+                        env_name, e
+                    ));
+                    return Err(CliError::Other(format!(
+                        "Failed to load environment config for sample-app: {}",
+                        e
+                    )));
+                }
             }
         }
         Commands::Completions(arg) => {
@@ -472,6 +606,173 @@ async fn main() -> Result<(), CliError> {
                             })?;
                     }
                 },
+            }
+        }
+        Commands::AddService(args) => {
+            LOGGER.info(&format!(
+                "Adding new service: {} of type {}",
+                args.service_name, args.app_type
+            ));
+
+            let service_template_path_str = format!("k8s/templates/{}", args.service_name);
+            let service_template_path = Path::new(&service_template_path_str);
+
+            match fs::create_dir_all(service_template_path) {
+                Ok(_) => {
+                    if service_template_path.exists() {
+                        LOGGER.info(&format!(
+                            "Directory {} already existed or was created successfully.",
+                            service_template_path.display()
+                        ));
+                    } else {
+                        // This case should ideally not be reached if create_dir_all is successful
+                        // but fs::create_dir_all doesn't error if path already exists.
+                        // We log it just in case.
+                        LOGGER.info(&format!(
+                            "Directory {} created successfully.",
+                            service_template_path.display()
+                        ));
+                    }
+                }
+                Err(e) => {
+                    LOGGER.error(&format!(
+                        "Failed to create directory {}: {}",
+                        service_template_path.display(),
+                        e
+                    ));
+                    return Err(CliError::Other(format!(
+                        "Failed to create directory {}: {}",
+                        service_template_path.display(),
+                        e
+                    )));
+                }
+            }
+
+            // Template Generation
+            let image = args.image.unwrap_or("nginx".to_string()); // Default image
+            let replicas = 1; // Default replicas
+            let port = args.port.unwrap_or(80); // Default port
+
+            let deployment_content =
+                generate_deployment(&args.service_name, &args.app_type, &image, replicas, port);
+            let service_content = generate_service(&args.service_name, &args.app_type, port);
+            let config_map_content = generate_config_map(&args.service_name, &args.app_type);
+
+            let deployment_file_path = service_template_path.join("deployment.yaml");
+            let service_file_path = service_template_path.join("service.yaml");
+            let config_map_file_path = service_template_path.join("configmap.yaml");
+
+            match fs::write(&deployment_file_path, deployment_content) {
+                Ok(_) => LOGGER.info(&format!(
+                    "Created deployment manifest: {}",
+                    deployment_file_path.display()
+                )),
+                Err(e) => {
+                    LOGGER.error(&format!(
+                        "Failed to write deployment manifest {}: {}",
+                        deployment_file_path.display(),
+                        e
+                    ));
+                    return Err(CliError::Other(format!(
+                        "Failed to write deployment manifest: {}",
+                        e
+                    )));
+                }
+            }
+
+            match fs::write(&service_file_path, service_content) {
+                Ok(_) => LOGGER.info(&format!(
+                    "Created service manifest: {}",
+                    service_file_path.display()
+                )),
+                Err(e) => {
+                    LOGGER.error(&format!(
+                        "Failed to write service manifest {}: {}",
+                        service_file_path.display(),
+                        e
+                    ));
+                    return Err(CliError::Other(format!(
+                        "Failed to write service manifest: {}",
+                        e
+                    )));
+                }
+            }
+
+            match fs::write(&config_map_file_path, config_map_content) {
+                Ok(_) => LOGGER.info(&format!(
+                    "Created configmap manifest: {}",
+                    config_map_file_path.display()
+                )),
+                Err(e) => {
+                    LOGGER.error(&format!(
+                        "Failed to write configmap manifest {}: {}",
+                        config_map_file_path.display(),
+                        e
+                    ));
+                    return Err(CliError::Other(format!(
+                        "Failed to write configmap manifest: {}",
+                        e
+                    )));
+                }
+            }
+
+            // config.toml update
+            let env_name = args.env_name.to_string(); // Fixed environment name for now
+            match Environment::load_from_file(&env_name) {
+                Ok(mut env) => {
+                    let new_service = Service::new(
+                        &args.service_name,
+                        "default",
+                        Some(args.service_name.as_str()), // path
+                        None,                             // build
+                        None,                             // major_version
+                        None,                             // minor_version
+                        None,                             // patch_version
+                        Some("latest".to_string()),       // tag
+                    );
+
+                    // Check if service already exists to prevent duplicates
+                    if env
+                        .service_whitelist
+                        .iter()
+                        .any(|s| s.name == new_service.name)
+                    {
+                        LOGGER.warn(&format!(
+                            "Service {} already exists in environment {}, skipping addition to config.toml.",
+                            args.service_name, env_name
+                        ));
+                    } else {
+                        env.service_whitelist.push(new_service);
+                        match env.save_to_file() {
+                            Ok(_) => LOGGER.info(&format!(
+                                "Updated config.toml for environment {} with new service {}.",
+                                env_name, args.service_name
+                            )),
+                            Err(e) => {
+                                LOGGER.error(&format!(
+                                    "Failed to save updated config.toml for environment {}: {}",
+                                    env_name, e
+                                ));
+                                return Err(CliError::Other(format!(
+                                    "Failed to save config.toml: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    // If the develop.toml doesn't exist, we might want to create it
+                    // or instruct the user. For now, just error out.
+                    LOGGER.error(&format!(
+                        "Failed to load environment {}.toml: {}. Please ensure it exists or run 'sailr init {}' first.",
+                        env_name, e, env_name
+                    ));
+                    return Err(CliError::Other(format!(
+                        "Failed to load environment {}.toml: {}",
+                        env_name, e
+                    )));
+                }
             }
         }
     }

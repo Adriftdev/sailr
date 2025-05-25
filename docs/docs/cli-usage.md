@@ -39,6 +39,30 @@ Initializes a new Sailr environment, creating its directory structure (e.g., `./
     # Initialize with a custom registry and AWS provider settings
     sailr init --name staging --registry quay.io/my-company --provider Aws --region us-east-1
     ```
+*   **Note on Default Service:** The `sailr init` command also creates a default "sample-app" service. This includes generating basic Kubernetes manifest templates (Deployment, Service, ConfigMap) in `k8s/templates/sample-app/` and adding a corresponding service entry to the new environment's `config.toml`. This makes the newly initialized environment immediately runnable and provides a quick way to demonstrate Sailr's capabilities.
+
+---
+
+### `sailr add service`
+
+Adds a new service to your Sailr project. This involves generating boilerplate Kubernetes manifest templates and updating the environment configuration.
+
+*   **Usage:** `sailr add service <SERVICE_NAME> --type <APP_TYPE>`
+*   **Arguments & Options:**
+    *   `<SERVICE_NAME>`: (Required) The name for the new service (e.g., `my-api`, `frontend-app`). This name will be used for the template directory and in the service configuration.
+    *   `-t, --type <APP_TYPE>`: (Required) Specifies the type of application (e.g., `web-app`, `worker`, `database`). This can influence the structure and content of the generated templates.
+*   **Actions Performed:**
+    *   Creates a new directory `k8s/templates/<SERVICE_NAME>/`.
+    *   Generates the following Kubernetes manifest template files within this directory:
+        *   `deployment.yaml`
+        *   `service.yaml`
+        *   `configmap.yaml`
+    *   Adds a new service entry to the `k8s/environments/develop/config.toml` file (assuming "develop" is the current or default environment for this operation). This entry allows Sailr to manage and deploy the new service.
+*   **Example:**
+    ```bash
+    # Add a new web application service named "user-api"
+    sailr add service user-api --type web-app
+    ```
 
 ---
 

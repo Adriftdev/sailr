@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{service_name}}
+  namespace: {{service_namespace}}
+  annotations:
+    date: {{deployment_date}}
+spec:
+  replicas: {{default_replicas}}
+  selector:
+    matchLabels:
+      app: {{service_name}}
+  template:
+    metadata:
+      labels:
+        app: {{service_name}}
+    spec:
+      volumes:
+        - name: {{service_name}}-pvc
+          persistentVolumeClaim:
+            claimName: {{service_name}}-pvc
+      containers:
+        - name: {{service_name}}-container
+          image: postgres:{{service_version}}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-password
+                  key: db-password
+            - name: DOMAIN
+              value: {{domain}}
+            - name: LOG_LEVEL
+              value: {{log_level}}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/db-files/
+          ports:
+            - containerPort: 5432
+              hostPort: 5432
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - mountPath: "/var/lib/postgresql/data"
+              name: {{service_name}}-pvc
