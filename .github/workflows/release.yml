@@ -58,7 +58,27 @@ jobs:
         if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev pkg-config
+          # Enable multi-arch for arm64
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          # Install cross-compilation tools and ARM64 specific OpenSSL development libraries
+          sudo apt-get install -y \
+             gcc-aarch64-linux-gnu \
+             pkg-config \
+             libssl-dev:arm64 \
+             libssl-dev # Keep host libssl-dev for pkg-config on host as well if needed
+
+          # Set environment variables for pkg-config to find ARM64 libraries
+          # PKG_CONFIG_SYSROOT_DIR should point to the root of the sysroot. On typical
+          # multi-arch setups, the root is simply '/'
+          echo "PKG_CONFIG_SYSROOT_DIR=/" >> $GITHUB_ENV
+          # PKG_CONFIG_PATH needs to point to the pkgconfig directory for the target architecture
+          # For aarch64 on Ubuntu, this is usually /usr/lib/aarch64-linux-gnu/pkgconfig
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+
+          # Verify paths (for debugging)
+          echo "Verifying PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+          ls -l /usr/lib/aarch64-linux-gnu/pkgconfig/openssl.pc || echo "openssl.pc for aarch64 not found in standard path!"
 
       - name: Install OpenSSL and Set Vars (macOS)
         if: runner.os == 'macOS'
@@ -155,6 +175,11 @@ jobs:
         env:
           # For aarch64-unknown-linux-gnu, specify the linker
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.platform.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
+          # Explicitly set OPENSSL_DIR and PKG_CONFIG_PATH for Linux ARM64 in case it wasn't picked up
+          # This ensures these variables are available for the 'cargo build' command
+          # The earlier `>> $GITHUB_ENV` should set them, but this adds robustness.
+          OPENSSL_DIR: ${{ (runner.os == 'Linux' && matrix.platform.target == 'aarch64-unknown-linux-gnu') && '/usr' || '' }}
+          PKG_CONFIG_PATH: ${{ (runner.os == 'Linux' && matrix.platform.target == 'aarch64-unknown-linux-gnu') && '/usr/lib/aarch64-linux-gnu/pkgconfig' || env.PKG_CONFIG_PATH }}
 
       - name: Prepare artifact name and staging directory
         id: prep_artifact
