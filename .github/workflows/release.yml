@@ -41,6 +41,10 @@ jobs:
             binary_ext: ".exe"
             archive_ext: ".zip"
     steps:
+      - name: Configure Git for long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
       - name: Checkout code
         uses: actions/checkout@v4
 
