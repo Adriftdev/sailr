@@ -65,75 +65,59 @@ jobs:
         run: |
           OPENSSL_VERSION="openssl@3" # Or openssl@1.1 if needed
           TARGET_ARCH_TUPLE="${{ matrix.platform.target }}" # e.g., x86_64-apple-darwin or aarch64-apple-darwin
-          
+
           echo "Target architecture for OpenSSL: $TARGET_ARCH_TUPLE"
-          
-          # Determine Homebrew path and arch command based on GITHUB_RUNNER_ARCH and TARGET_ARCH_TUPLE
-          # GITHUB_RUNNER_ARCH will be X64 or ARM64
-          # TARGET_ARCH_TUPLE is x86_64-apple-darwin or aarch64-apple-darwin
-          
-          BREW_CMD=""
-          ARCH_CMD=""
-          
+          echo "Runner architecture: $(uname -m)"
+
+          BREW_EXECUTABLE=""
+          ARCH_PREFIX=""
+
           if [[ "$TARGET_ARCH_TUPLE" == "x86_64-apple-darwin" ]]; then
             echo "Configuring for x86_64 OpenSSL build."
-            # If runner is ARM, we need to use arch -x86_64 for an x86_64 brew.
-            # If runner is Intel, arch -x86_64 is benign.
-            ARCH_CMD="arch -x86_64"
-            # Standard Homebrew path for Intel installations, even on ARM runners under Rosetta
-            BREW_CMD="$ARCH_CMD /usr/local/bin/brew"
-            # Fallback for older setups or if /usr/local/bin/brew isn't the x86_64 one on an ARM machine.
-            # However, /usr/local/bin/brew *should* be the Rosetta one on Apple Silicon.
-            if ! $BREW_CMD --prefix $OPENSSL_VERSION > /dev/null 2>&1; then
-               # On an ARM runner, an x86_64 brew might also be found via a direct path if it was installed by a user script
-               # but the standard is /usr/local for Rosetta.
-               # Let's assume /usr/local/bin/brew invoked with arch -x86_64 is correct.
-               echo "Attempting to install OpenSSL for x86_64 via $BREW_CMD"
+            ARCH_PREFIX="arch -x86_64"
+            # Try standard paths for Homebrew under Rosetta
+            if $ARCH_PREFIX /usr/local/bin/brew --version > /dev/null 2>&1; then
+              BREW_EXECUTABLE="/usr/local/bin/brew"
+            elif $ARCH_PREFIX /usr/local/homebrew/bin/brew --version > /dev/null 2>&1; then # Less common but possible
+              BREW_EXECUTABLE="/usr/local/homebrew/bin/brew"
+            else
+              echo "::error::x86_64 Homebrew not found in /usr/local/bin/brew or /usr/local/homebrew/bin/brew using 'arch -x86_64'."
+              exit 1
             fi
           else # aarch64-apple-darwin
             echo "Configuring for aarch64 OpenSSL build."
-            # If runner is ARM, use native brew.
-            # If runner is Intel, this target cannot be built (cross-compilation aarch64-apple-darwin from Intel macOS is not standard).
-            # However, matrix.platform.target is aarch64-apple-darwin, so runner should be ARM macos-latest.
-            ARCH_CMD="" # Native architecture
-            BREW_CMD="/opt/homebrew/bin/brew" # Standard for ARM64 Homebrew
-            if ! command -v $BREW_CMD > /dev/null 2>&1; then
-                # Fallback if /opt/homebrew/bin/brew is not found (e.g. Intel runner, though matrix should prevent this)
-                BREW_CMD="brew"
+            # Standard path for ARM64 Homebrew
+            if /opt/homebrew/bin/brew --version > /dev/null 2>&1; then
+              BREW_EXECUTABLE="/opt/homebrew/bin/brew"
+            elif command -v brew > /dev/null 2>&1; then # Fallback to brew in PATH
+              BREW_EXECUTABLE="brew" 
+              echo "Using brew from PATH for aarch64, assuming it's the native ARM Homebrew."
+            else
+              echo "::error::ARM64 Homebrew not found in /opt/homebrew/bin/brew or PATH."
+              exit 1
             fi
-            echo "Attempting to install OpenSSL for aarch64 via $BREW_CMD"
           fi
 
-          $ARCH_CMD $BREW_CMD install $OPENSSL_VERSION
-          OPENSSL_PREFIX=$($ARCH_CMD $BREW_CMD --prefix $OPENSSL_VERSION)
-          
+          echo "Using Homebrew executable: $BREW_EXECUTABLE with prefix: '$ARCH_PREFIX'"
+
+          # Install/update OpenSSL
+          $ARCH_PREFIX $BREW_EXECUTABLE update || echo "Brew update failed, proceeding with install..."
+          $ARCH_PREFIX $BREW_EXECUTABLE install $OPENSSL_VERSION
+          OPENSSL_PREFIX=$($ARCH_PREFIX $BREW_EXECUTABLE --prefix $OPENSSL_VERSION)
+
           echo "OpenSSL prefix: $OPENSSL_PREFIX"
           if [ -z "$OPENSSL_PREFIX" ] || [ ! -d "$OPENSSL_PREFIX/lib" ]; then
-            echo "::error::Failed to get Homebrew prefix or lib directory for $OPENSSL_VERSION with target $TARGET_ARCH_TUPLE using $BREW_CMD"
-            echo "Attempting to find openssl installation path manually..."
-            # Common paths
-            if [[ "$TARGET_ARCH_TUPLE" == "x86_64-apple-darwin" ]]; then
-                if [ -d "/usr/local/opt/$OPENSSL_VERSION" ]; then OPENSSL_PREFIX="/usr/local/opt/$OPENSSL_VERSION"; fi
-            else # aarch64
-                if [ -d "/opt/homebrew/opt/$OPENSSL_VERSION" ]; then OPENSSL_PREFIX="/opt/homebrew/opt/$OPENSSL_VERSION"; fi
-            fi
-            echo "Manual OpenSSL prefix: $OPENSSL_PREFIX"
-            if [ -z "$OPENSSL_PREFIX" ] || [ ! -d "$OPENSSL_PREFIX/lib" ]; then
-                echo "::error::Still could not find OpenSSL prefix. Please check Homebrew setup and OpenSSL installation for $TARGET_ARCH_TUPLE."
-                exit 1
-            fi
+            echo "::error::Failed to get Homebrew prefix or lib directory for $OPENSSL_VERSION with target $TARGET_ARCH_TUPLE."
+            exit 1
           fi
-          
+
           echo "OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV # Prepend to existing
-          
-          # Set target-specific variables that openssl-sys crate checks
-          # (e.g., X86_64_APPLE_DARWIN_OPENSSL_DIR)
+          echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+
           TARGET_ARCH_ENV_PREFIX=$(echo "$TARGET_ARCH_TUPLE" | tr '[:lower:]-' '[:upper:]_')
           echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
           echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
           echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include" >> $GITHUB_ENV
-          # Also set the generic ones as a fallback
           echo "OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include" >> $GITHUB_ENV
 
