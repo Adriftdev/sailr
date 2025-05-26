@@ -6,12 +6,15 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  PROJECT_NAME: sailr # Assuming 'sailr' from completion/sailr.bash
+  PROJECT_NAME: sailr
 
 jobs:
   build_and_upload_release_assets:
     name: Build and Upload for ${{ matrix.platform.os_name }} (${{ matrix.platform.target }})
     runs-on: ${{ matrix.platform.os_runner }}
+    # Add the permissions block here
+    permissions:
+      contents: write # This allows the job to write to contents, including releases
     strategy:
       matrix:
         platform:
@@ -36,21 +39,19 @@ jobs:
 
       - name: Build binary
         run: cargo build --release --locked --target ${{ matrix.platform.target }}
-        # For standard Linux x86_64 builds with libssl-dev and pkg-config installed,
-        # explicit OpenSSL env vars are usually not needed as pkg-config should find it.
 
       - name: Prepare artifact name and staging directory
         id: prep_artifact
         run: |
-          VERSION=$(echo "${{ github.ref_name }}" | sed 's/v//') # Remove 'v' prefix if present
+          VERSION=$(echo "${{ github.ref_name }}" | sed 's/v//')
           ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${VERSION}-${{ matrix.platform.target }}"
-          BINARY_EXT="${{ matrix.platform.binary_ext }}" # Will be "" for Linux
+          BINARY_EXT="${{ matrix.platform.binary_ext }}"
           
           ARTIFACT_PATH_SUFFIX="target/${{ matrix.platform.target }}/release/${{ env.PROJECT_NAME }}${BINARY_EXT}"
           
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
-          echo "ARTIFACT_PATH=./${ARTIFACT_NAME}" >> $GITHUB_ENV # Staging directory path
+          echo "ARTIFACT_PATH=./${ARTIFACT_NAME}" >> $GITHUB_ENV
           echo "ARTIFACT_SOURCE_BINARY_PATH=${ARTIFACT_PATH_SUFFIX}" >> $GITHUB_ENV
 
           mkdir -p "./${ARTIFACT_NAME}"
@@ -66,10 +67,9 @@ jobs:
       - name: Copy files to staging directory
         run: |
           cp "${{ env.ARTIFACT_SOURCE_BINARY_PATH }}" "./${{ env.ARTIFACT_NAME }}/"
-          # Attempt to copy LICENSE and README.md, ignore if they don't exist at the root
           cp LICENSE "./${{ env.ARTIFACT_NAME }}/" || echo "LICENSE file not found, skipping."
           cp README.md "./${{ env.ARTIFACT_NAME }}/" || echo "README.md file not found, skipping."
-        shell: bash # Use bash for `||` operator
+        shell: bash
 
       - name: Package artifact (Linux)
         run: |
@@ -79,8 +79,13 @@ jobs:
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
+        # The GITHUB_TOKEN is automatically used by the action.
+        # The env vars you showed in the error (CARGO_TERM_COLOR, PROJECT_NAME, etc.)
+        # are available in the step's environment but are not direct inputs to `with:`.
+        # The critical part is that GITHUB_TOKEN (which the action uses implicitly)
+        # has the right permissions.
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ${{ env.ARCHIVE_PATH }}
+          asset_path: ${{ env.ARCHIVE_PATH }} # This comes from the 'Package artifact' step
           asset_name: ${{ env.ARTIFACT_NAME }}${{ matrix.platform.archive_ext }}
-          asset_content_type: application/gzip # Changed to application/gzip for .tar.gz
+          asset_content_type: application/gzip
