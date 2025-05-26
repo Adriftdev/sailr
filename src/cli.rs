@@ -134,6 +134,9 @@ pub struct ApplyArgs {
         help = "Name of the environment"
     )]
     pub name: String,
+
+    #[arg(long = "strategy", help = "Deployment strategy to use", default_value_t = DeploymentStrategy::Restart, value_enum)]
+    pub strategy: DeploymentStrategy,
 }
 
 #[derive(Debug, Args)]
@@ -187,6 +190,12 @@ pub enum Provider {
     Local,
     Aws,
     Gcp,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum DeploymentStrategy {
+    Restart,
+    Rolling,
 }
 
 pub fn print_completions<G: Generator>(gen: G, cmd: &mut Command) {
@@ -300,6 +309,9 @@ pub struct GoArgs {
 
     #[arg(long, short)]
     pub only: Option<String>,
+
+    #[arg(long = "strategy", help = "Deployment strategy to use for the deploy step", default_value_t = DeploymentStrategy::Restart, value_enum)]
+    pub strategy: DeploymentStrategy,
 }
 
 #[derive(Debug, Args)]
@@ -404,4 +416,175 @@ pub struct AddServiceArgs {
 
     #[arg(short = 'n', long = "name", help = "Environment to add the service to")]
     pub env_name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deploy_args_strategy_restart() {
+        let cli = Cli::try_parse_from(&[
+            "sailr",
+            "deploy",
+            "--context",
+            "test-context",
+            "--name",
+            "test-env",
+            "--strategy",
+            "Restart",
+        ])
+        .unwrap();
+        match cli.commands {
+            Commands::Deploy(args) => {
+                assert_eq!(args.strategy, DeploymentStrategy::Restart);
+                assert_eq!(args.context, "test-context");
+                assert_eq!(args.name, "test-env");
+            }
+            _ => panic!("Expected Deploy command"),
+        }
+    }
+
+    #[test]
+    fn test_deploy_args_strategy_rolling() {
+        let cli = Cli::try_parse_from(&[
+            "sailr",
+            "deploy",
+            "--context",
+            "test-context",
+            "--name",
+            "test-env",
+            "--strategy",
+            "Rolling",
+        ])
+        .unwrap();
+        match cli.commands {
+            Commands::Deploy(args) => {
+                assert_eq!(args.strategy, DeploymentStrategy::Rolling);
+                assert_eq!(args.context, "test-context");
+                assert_eq!(args.name, "test-env");
+            }
+            _ => panic!("Expected Deploy command"),
+        }
+    }
+
+    #[test]
+    fn test_deploy_args_strategy_default() {
+        // Assumes DeploymentStrategy::Restart is the default
+        let cli = Cli::try_parse_from(&[
+            "sailr",
+            "deploy",
+            "--context",
+            "test-context",
+            "--name",
+            "test-env",
+        ])
+        .unwrap();
+        match cli.commands {
+            Commands::Deploy(args) => {
+                assert_eq!(args.strategy, DeploymentStrategy::Restart);
+                assert_eq!(args.context, "test-context");
+                assert_eq!(args.name, "test-env");
+            }
+            _ => panic!("Expected Deploy command"),
+        }
+    }
+
+    #[test]
+    fn test_deploy_args_strategy_invalid() {
+        let result = Cli::try_parse_from(&[
+            "sailr",
+            "deploy",
+            "--context",
+            "test-context",
+            "--name",
+            "test-env",
+            "--strategy",
+            "InvalidStrategy",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_go_args_strategy_restart() {
+        let cli = Cli::try_parse_from(&[
+            "sailr",
+            "go",
+            "--context",
+            "test-context",
+            "--name",
+            "test-env",
+            "--strategy",
+            "Restart",
+        ])
+        .unwrap();
+        match cli.commands {
+            Commands::Go(args) => {
+                assert_eq!(args.strategy, DeploymentStrategy::Restart);
+                assert_eq!(args.context, "test-context");
+                assert_eq!(args.name, "test-env");
+            }
+            _ => panic!("Expected Go command"),
+        }
+    }
+
+    #[test]
+    fn test_go_args_strategy_rolling() {
+        let cli = Cli::try_parse_from(&[
+            "sailr",
+            "go",
+            "--context",
+            "test-context",
+            "--name",
+            "test-env",
+            "--strategy",
+            "Rolling",
+        ])
+        .unwrap();
+        match cli.commands {
+            Commands::Go(args) => {
+                assert_eq!(args.strategy, DeploymentStrategy::Rolling);
+                assert_eq!(args.context, "test-context");
+                assert_eq!(args.name, "test-env");
+            }
+            _ => panic!("Expected Go command"),
+        }
+    }
+
+    #[test]
+    fn test_go_args_strategy_default() {
+        // Assumes DeploymentStrategy::Restart is the default
+        let cli = Cli::try_parse_from(&[
+            "sailr",
+            "go",
+            "--context",
+            "test-context",
+            "--name",
+            "test-env",
+        ])
+        .unwrap();
+        match cli.commands {
+            Commands::Go(args) => {
+                assert_eq!(args.strategy, DeploymentStrategy::Restart);
+                assert_eq!(args.context, "test-context");
+                assert_eq!(args.name, "test-env");
+            }
+            _ => panic!("Expected Go command"),
+        }
+    }
+
+    #[test]
+    fn test_go_args_strategy_invalid() {
+        let result = Cli::try_parse_from(&[
+            "sailr",
+            "go",
+            "--context",
+            "test-context",
+            "--name",
+            "test-env",
+            "--strategy",
+            "InvalidStrategy",
+        ]);
+        assert!(result.is_err());
+    }
 }
