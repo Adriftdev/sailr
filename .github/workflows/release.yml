@@ -20,21 +20,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary_ext: ""
             archive_ext: ".tar.gz"
-          - os_name: Linux_ARM64
-            os_runner: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            binary_ext: ""
-            archive_ext: ".tar.gz"
-          - os_name: macOS
-            os_runner: macos-latest # This should provide x86_64 or arm64, handled by logic
-            target: x86_64-apple-darwin
-            binary_ext: ""
-            archive_ext: ".tar.gz"
-          - os_name: macOS_ARM64
-            os_runner: macos-latest # newer macos-latest M1 runners can build for arm64
-            target: aarch64-apple-darwin
-            binary_ext: ""
-            archive_ext: ".tar.gz"
     steps:
       - name: Install OpenSSL
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
