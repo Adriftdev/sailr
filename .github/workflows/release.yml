@@ -23,9 +23,6 @@ jobs:
     steps:
       - name: Install OpenSSL
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-      - name: Configure Git for long paths (Windows)
-        if: runner.os == 'Windows'
-        run: git config --system core.longpaths true
 
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,190 +34,48 @@ jobs:
           target: ${{ matrix.platform.target }}
           override: true
 
-      - name: Install Perl (Windows for vendored OpenSSL)
-        if: runner.os == 'Windows'
-        run: choco install strawberryperl --no-progress
-
-      - name: Install dependencies for Linux ARM64 cross-compilation
-        if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          # Set a valid Ubuntu release name explicitly (e.g., jammy)
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
-          
-          # Update and install packages
-          sudo apt-get update
-          sudo apt-get install -y \
-              gcc-aarch64-linux-gnu \
-              pkg-config \
-              libssl-dev:arm64 \
-              libssl-dev
-
-
-          # Set environment variables for pkg-config to find ARM64 libraries
-          # PKG_CONFIG_SYSROOT_DIR should point to the root of the sysroot. On typical
-          # multi-arch setups, the root is simply '/'
-          echo "PKG_CONFIG_SYSROOT_DIR=/" >> $GITHUB_ENV
-          # PKG_CONFIG_PATH needs to point to the pkgconfig directory for the target architecture
-          # For aarch64 on Ubuntu, this is usually /usr/lib/aarch64-linux-gnu/pkgconfig
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
-
-          # Verify paths (for debugging)
-          echo "Verifying PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-          ls -l /usr/lib/aarch64-linux-gnu/pkgconfig/openssl.pc || echo "openssl.pc for aarch64 not found in standard path!"
-
-      - name: Install OpenSSL and Set Vars (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          OPENSSL_VERSION="openssl@3" # Or openssl@1.1 if needed
-          TARGET_ARCH_TUPLE="${{ matrix.platform.target }}" # e.g., x86_64-apple-darwin or aarch64-apple-darwin
-
-          echo "Target architecture for OpenSSL: $TARGET_ARCH_TUPLE"
-          echo "Runner architecture: $(uname -m)"
-
-          BREW_EXECUTABLE=""
-          ARCH_PREFIX=""
-          OPENSSL_PREFIX=""
-
-          if [[ "$TARGET_ARCH_TUPLE" == "x86_64-apple-darwin" ]]; then
-            echo "Configuring for x86_64 OpenSSL build."
-            # Ensure Rosetta 2 is installed for x86_64 emulation
-            sudo softwareupdate --install-rosetta --agree-to-license || true
-
-            # Install x86_64 Homebrew if it's not already there
-            # This installs Homebrew to /usr/local for x86_64 binaries
-            if [ ! -f "/usr/local/bin/brew" ]; then
-              echo "Installing x86_64 Homebrew to /usr/local..."
-              # Pipe curl output directly to bash running under x86_64 architecture
-              curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh | arch -x86_64 /bin/bash
-              # Add /usr/local/bin to PATH for subsequent commands in this shell
-              export PATH="/usr/local/bin:$PATH"
-            fi
-            ARCH_PREFIX="arch -x86_64"
-            BREW_EXECUTABLE="/usr/local/bin/brew"
-
-            echo "Using Homebrew executable for x86_64: $BREW_EXECUTABLE"
-            # Install/update OpenSSL for x86_64, ensuring /usr/local/bin is in PATH
-            PATH="/usr/local/bin:$PATH" $ARCH_PREFIX $BREW_EXECUTABLE update || echo "Brew update failed, proceeding with install..."
-            PATH="/usr/local/bin:$PATH" $ARCH_PREFIX $BREW_EXECUTABLE install $OPENSSL_VERSION
-            OPENSSL_PREFIX=$(PATH="/usr/local/bin:$PATH" $ARCH_PREFIX $BREW_EXECUTABLE --prefix $OPENSSL_VERSION)
-
-          else # aarch64-apple-darwin
-            echo "Configuring for aarch64 OpenSSL build."
-            # Standard path for ARM64 Homebrew on Apple Silicon
-            if /opt/homebrew/bin/brew --version > /dev/null 2>&1; then
-              BREW_EXECUTABLE="/opt/homebrew/bin/brew"
-            elif command -v brew > /dev/null 2>&1; then # Fallback to brew in PATH
-              BREW_EXECUTABLE="brew"
-              echo "Using brew from PATH for aarch64, assuming it's the native ARM Homebrew."
-            else
-              echo "::error::ARM64 Homebrew not found in /opt/homebrew/bin/brew or PATH."
-              exit 1
-            fi
-
-            echo "Using Homebrew executable for aarch64: $BREW_EXECUTABLE"
-            # Install/update OpenSSL for aarch64
-            $BREW_EXECUTABLE update || echo "Brew update failed, proceeding with install..."
-            $BREW_EXECUTABLE install $OPENSSL_VERSION
-            OPENSSL_PREFIX=$($BREW_EXECUTABLE --prefix $OPENSSL_VERSION)
-          fi
-
-          echo "OpenSSL prefix: $OPENSSL_PREFIX"
-          if [ -z "$OPENSSL_PREFIX" ] || [ ! -d "$OPENSSL_PREFIX/lib" ]; then
-            echo "::error::Failed to get Homebrew prefix or lib directory for $OPENSSL_VERSION with target $TARGET_ARCH_TUPLE."
-            exit 1
-          fi
-
-          echo "OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$OPENSSL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-
-          TARGET_ARCH_ENV_PREFIX=$(echo "$TARGET_ARCH_TUPLE" | tr '[:lower:]-' '[:upper:]_')
-          echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
-          echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
-          echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include" >> $GITHUB_ENV
-
-
-      - name: Verify OpenSSL Env Vars (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          echo "OPENSSL_DIR is: $OPENSSL_DIR"
-          echo "OPENSSL_LIB_DIR is: $OPENSSL_LIB_DIR"
-          echo "OPENSSL_INCLUDE_DIR is: $OPENSSL_INCLUDE_DIR"
-          echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
-          TARGET_ARCH_TUPLE="${{ matrix.platform.target }}"
-          TARGET_ARCH_ENV_PREFIX=$(echo "$TARGET_ARCH_TUPLE" | tr '[:lower:]-' '[:upper:]_')
-          echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_DIR is: $(printenv ${TARGET_ARCH_ENV_PREFIX}_OPENSSL_DIR)"
-          echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_LIB_DIR is: $(printenv ${TARGET_ARCH_ENV_PREFIX}_OPENSSL_LIB_DIR)"
-          echo "${TARGET_ARCH_ENV_PREFIX}_OPENSSL_INCLUDE_DIR is: $(printenv ${TARGET_ARCH_ENV_PREFIX}_OPENSSL_INCLUDE_DIR)"
-          echo "Listing $OPENSSL_DIR/lib/pkgconfig:"
-          ls -l "$OPENSSL_DIR/lib/pkgconfig" || echo "pkgconfig directory not found or OpenSSL_DIR not set."
-          echo "Contents of openssl.pc (if found):"
-          cat "$OPENSSL_DIR/lib/pkgconfig/openssl.pc" || echo "openssl.pc not found."
-
       - name: Build binary
         run: cargo build --release --locked --target ${{ matrix.platform.target }}
-        env:
-          # For aarch64-unknown-linux-gnu, specify the linker
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.platform.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
-          # Explicitly set OPENSSL_DIR and PKG_CONFIG_PATH for Linux ARM64 in case it wasn't picked up
-          # This ensures these variables are available for the 'cargo build' command
-          # The earlier `>> $GITHUB_ENV` should set them, but this adds robustness.
-          OPENSSL_DIR: ${{ (runner.os == 'Linux' && matrix.platform.target == 'aarch64-unknown-linux-gnu') && '/usr' || '/usr/lib/ssl' }}
-          PKG_CONFIG_PATH: ${{ (runner.os == 'Linux' && matrix.platform.target == 'aarch64-unknown-linux-gnu') && '/usr/lib/aarch64-linux-gnu/pkgconfig' || env.PKG_CONFIG_PATH }}
-          OPENSSL_INCLUDE_DIR: /usr/include/openssl
-          OPENSSL_LIB_DIR: /usr/lib
+        # For standard Linux x86_64 builds with libssl-dev and pkg-config installed,
+        # explicit OpenSSL env vars are usually not needed as pkg-config should find it.
 
       - name: Prepare artifact name and staging directory
         id: prep_artifact
         run: |
           VERSION=$(echo "${{ github.ref_name }}" | sed 's/v//') # Remove 'v' prefix if present
           ARTIFACT_NAME="${{ env.PROJECT_NAME }}-${VERSION}-${{ matrix.platform.target }}"
-
-          # Handle binary extension for Windows correctly
-          BINARY_EXT="${{ matrix.platform.binary_ext }}"
-          if [[ "${{ runner.os }}" == "Windows" && "$BINARY_EXT" == "" ]]; then
-            BINARY_EXT=".exe"
-          fi
+          BINARY_EXT="${{ matrix.platform.binary_ext }}" # Will be "" for Linux
           
           ARTIFACT_PATH_SUFFIX="target/${{ matrix.platform.target }}/release/${{ env.PROJECT_NAME }}${BINARY_EXT}"
           
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
-          echo "ARTIFACT_PATH=./${ARTIFACT_NAME}" >> $GITHUB_ENV
+          echo "ARTIFACT_PATH=./${ARTIFACT_NAME}" >> $GITHUB_ENV # Staging directory path
           echo "ARTIFACT_SOURCE_BINARY_PATH=${ARTIFACT_PATH_SUFFIX}" >> $GITHUB_ENV
 
-          mkdir -p ./${ARTIFACT_NAME}
+          mkdir -p "./${ARTIFACT_NAME}"
           echo "Created staging directory: ./${ARTIFACT_NAME}"
+        shell: bash
 
       - name: List files in target directory (for debugging)
         run: |
           ls -R target/${{ matrix.platform.target }}/release/
           echo "Expected binary path: ${{ env.ARTIFACT_SOURCE_BINARY_PATH }}"
         shell: bash
-          
+            
       - name: Copy files to staging directory
         run: |
           cp "${{ env.ARTIFACT_SOURCE_BINARY_PATH }}" "./${{ env.ARTIFACT_NAME }}/"
           # Attempt to copy LICENSE and README.md, ignore if they don't exist at the root
-          # In a real scenario, these paths might need to be adjusted if they are not in the repo root
           cp LICENSE "./${{ env.ARTIFACT_NAME }}/" || echo "LICENSE file not found, skipping."
           cp README.md "./${{ env.ARTIFACT_NAME }}/" || echo "README.md file not found, skipping."
         shell: bash # Use bash for `||` operator
 
-      - name: Package artifact (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          Compress-Archive -Path "./${{ env.ARTIFACT_NAME }}/*" -DestinationPath "./${{ env.ARTIFACT_NAME }}${{ matrix.platform.archive_ext }}"
-          echo "ARCHIVE_PATH=./${{ env.ARTIFACT_NAME }}${{ matrix.platform.archive_ext }}" >> $GITHUB_ENV
-
-      - name: Package artifact (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Package artifact (Linux)
         run: |
           tar -czvf "./${{ env.ARTIFACT_NAME }}${{ matrix.platform.archive_ext }}" -C "./${{ env.ARTIFACT_NAME }}" .
           echo "ARCHIVE_PATH=./${{ env.ARTIFACT_NAME }}${{ matrix.platform.archive_ext }}" >> $GITHUB_ENV
+        shell: bash
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
@@ -228,4 +83,4 @@ jobs:
           upload_url: ${{ github.event.release.upload_url }}
           asset_path: ${{ env.ARCHIVE_PATH }}
           asset_name: ${{ env.ARTIFACT_NAME }}${{ matrix.platform.archive_ext }}
-          asset_content_type: application/octet-stream
+          asset_content_type: application/gzip # Changed to application/gzip for .tar.gz
