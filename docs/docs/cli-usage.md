@@ -127,13 +127,22 @@ Tears down the infrastructure for an environment.
 
 Deploys an existing, generated environment to a Kubernetes cluster. This command applies the manifests found in `./k8s/generated/<NAME>/`.
 
-*   **Usage:** `sailr deploy --name <NAME> --context <CONTEXT>`
+*   **Usage:** `sailr deploy --name <NAME> --context <CONTEXT> [--strategy <STRATEGY>]`
 *   **Options:**
     *   `-n, --name <NAME>`: (Required) Name of the environment to deploy.
     *   `-c, --context <CONTEXT>`: (Required) The Kubernetes cluster context to deploy to (as listed in your kubeconfig).
+    *   `--strategy <STRATEGY>`: Specifies the deployment strategy to use.
+        *   Possible values: `Restart`, `Rolling`.
+        *   Defaults to `Rolling`.
+        *   `Restart`: Before applying new manifests, this strategy first deletes any existing Kubernetes Deployments that are defined in the environment's generated files. This ensures that associated pods are cleanly restarted with the new version.
+        *   `Rolling`: This strategy applies the new manifests and relies on Kubernetes to perform a standard rolling update if the Deployment resources are configured for it (this is the default update strategy for Kubernetes Deployments). Sailr does not perform any explicit deletions of resources with this strategy.
 *   **Example:**
     ```bash
+    # Deploy with the default Restart strategy
     sailr deploy --name production --context prod-cluster
+
+    # Deploy using a Rolling update strategy
+    sailr deploy --name staging --context stage-cluster --strategy Rolling
     ```
 
 ---
@@ -186,18 +195,27 @@ Builds container images for services defined in an environment's `config.toml` t
 A comprehensive command that performs a sequence of actions:
 1.  Builds container images for services (respecting `--force`, `--ignore`, `--only`).
 2.  Generates Kubernetes manifests (respecting `--only`, `--ignore` based on the services selected for building/processing).
-3.  Deploys the generated manifests to the specified Kubernetes cluster.
+3.  Deploys the generated manifests to the specified Kubernetes cluster using the chosen deployment strategy.
 
-*   **Usage:** `sailr go [OPTIONS] --name <NAME> --context <CONTEXT>`
+*   **Usage:** `sailr go [OPTIONS] --name <NAME> --context <CONTEXT> [--strategy <STRATEGY>]`
 *   **Options:**
     *   `-n, --name <NAME>`: (Required) Name of the environment.
     *   `-c, --context <CONTEXT>`: (Required) The Kubernetes cluster context to deploy to.
     *   `-f, --force`: Force rebuild of all images during the build phase.
     *   `-i, --ignore <SERVICES>`: Comma-separated list of service names to ignore for build and manifest generation phases.
     *   `--only <SERVICES>`: Comma-separated list of service names to process for build and manifest generation phases.
+    *   `--strategy <STRATEGY>`: Specifies the deployment strategy to use for the deployment phase.
+        *   Possible values: `Restart`, `Rolling`.
+        *   Defaults to `Rolling`.
+        *   `Restart`: Ensures a clean redeployment by first deleting existing Kubernetes Deployments (managed by Sailr for this environment, based on generated manifests) before applying the new ones.
+        *   `Rolling`: Relies on Kubernetes' standard rolling update mechanism based on the manifest configurations.
 *   **Example:**
     ```bash
+    # Run 'go' with the default Restart strategy for deployment, processing only api and frontend
     sailr go --name staging --context stage-cluster --force --only api,frontend
+
+    # Run 'go' using a Rolling update strategy for deployment
+    sailr go --name production --context prod-cluster --strategy Rolling
     ```
 
 ---

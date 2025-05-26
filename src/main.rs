@@ -212,7 +212,7 @@ async fn main() -> Result<(), CliError> {
         Commands::Deploy(arg) => {
             LOGGER.info(&format!("Deploying an environment"));
 
-            sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
+            sailr::deployment::deploy(arg.context.to_string(), &arg.name, arg.strategy).await?;
         }
         Commands::Generate(arg) => {
             LOGGER.info(&format!("Generating an environment"));
@@ -322,7 +322,7 @@ async fn main() -> Result<(), CliError> {
 
             generate(&arg.name, &env, services);
 
-            sailr::deployment::deploy(arg.context.to_string(), &arg.name).await?;
+            sailr::deployment::deploy(arg.context.to_string(), &arg.name, arg.strategy).await?;
         }
         Commands::K8s(args) => {
             match args.command {
