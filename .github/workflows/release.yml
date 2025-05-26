@@ -57,16 +57,19 @@ jobs:
       - name: Install dependencies for Linux ARM64 cross-compilation
         if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
         run: |
+          # Set a valid Ubuntu release name explicitly (e.g., jammy)
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          
+          # Update and install packages
           sudo apt-get update
-          # Enable multi-arch for arm64
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          # Install cross-compilation tools and ARM64 specific OpenSSL development libraries
           sudo apt-get install -y \
-             gcc-aarch64-linux-gnu \
-             pkg-config \
-             libssl-dev:arm64 \
-             libssl-dev # Keep host libssl-dev for pkg-config on host as well if needed
+              gcc-aarch64-linux-gnu \
+              pkg-config \
+              libssl-dev:arm64 \
+              libssl-dev
+
 
           # Set environment variables for pkg-config to find ARM64 libraries
           # PKG_CONFIG_SYSROOT_DIR should point to the root of the sysroot. On typical
