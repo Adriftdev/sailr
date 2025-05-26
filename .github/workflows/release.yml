@@ -79,11 +79,8 @@ jobs:
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
-        # The GITHUB_TOKEN is automatically used by the action.
-        # The env vars you showed in the error (CARGO_TERM_COLOR, PROJECT_NAME, etc.)
-        # are available in the step's environment but are not direct inputs to `with:`.
-        # The critical part is that GITHUB_TOKEN (which the action uses implicitly)
-        # has the right permissions.
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT }}
         with:
           upload_url: ${{ github.event.release.upload_url }}
           asset_path: ${{ env.ARCHIVE_PATH }} # This comes from the 'Package artifact' step
