@@ -1,5 +1,7 @@
 ## Sailr: A Kubernetes Management CLI for Smooth Sailing
 
+[![Release Build and Deploy](https://github.com/Adriftdev/sailr/actions/workflows/release.yml/badge.svg)](https://github.com/Adriftdev/sailr/actions/workflows/release.yml)
+
 ### Sailr: The Calming Force in the Choppy Waters of Kubernetes
 
 Kubernetes is a powerful tool for managing containerized applications, but it can also be complex and challenging to use. If you're feeling overwhelmed by Kubernetes, Sailr can help. Sailr is an environment management CLI that makes it easy to deploy, manage, and troubleshoot Kubernetes applications. With Sailr, you can:
