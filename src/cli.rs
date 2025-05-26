@@ -134,9 +134,6 @@ pub struct ApplyArgs {
         help = "Name of the environment"
     )]
     pub name: String,
-
-    #[arg(long = "strategy", help = "Deployment strategy to use", default_value_t = DeploymentStrategy::Restart, value_enum)]
-    pub strategy: DeploymentStrategy,
 }
 
 #[derive(Debug, Args)]
@@ -221,6 +218,9 @@ pub struct DeployArgs {
         help = "Name of the environment"
     )]
     pub name: String,
+
+    #[arg(long = "strategy", help = "Deployment strategy to use", default_value_t = DeploymentStrategy::Rolling, value_enum)]
+    pub strategy: DeploymentStrategy,
 }
 
 #[derive(Debug, Args)]
@@ -310,7 +310,7 @@ pub struct GoArgs {
     #[arg(long, short)]
     pub only: Option<String>,
 
-    #[arg(long = "strategy", help = "Deployment strategy to use for the deploy step", default_value_t = DeploymentStrategy::Restart, value_enum)]
+    #[arg(long = "strategy", help = "Deployment strategy to use for the deploy step", default_value_t = DeploymentStrategy::Rolling, value_enum)]
     pub strategy: DeploymentStrategy,
 }
 

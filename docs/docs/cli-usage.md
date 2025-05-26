@@ -133,7 +133,7 @@ Deploys an existing, generated environment to a Kubernetes cluster. This command
     *   `-c, --context <CONTEXT>`: (Required) The Kubernetes cluster context to deploy to (as listed in your kubeconfig).
     *   `--strategy <STRATEGY>`: Specifies the deployment strategy to use.
         *   Possible values: `Restart`, `Rolling`.
-        *   Defaults to `Restart`.
+        *   Defaults to `Rolling`.
         *   `Restart`: Before applying new manifests, this strategy first deletes any existing Kubernetes Deployments that are defined in the environment's generated files. This ensures that associated pods are cleanly restarted with the new version.
         *   `Rolling`: This strategy applies the new manifests and relies on Kubernetes to perform a standard rolling update if the Deployment resources are configured for it (this is the default update strategy for Kubernetes Deployments). Sailr does not perform any explicit deletions of resources with this strategy.
 *   **Example:**
@@ -206,7 +206,7 @@ A comprehensive command that performs a sequence of actions:
     *   `--only <SERVICES>`: Comma-separated list of service names to process for build and manifest generation phases.
     *   `--strategy <STRATEGY>`: Specifies the deployment strategy to use for the deployment phase.
         *   Possible values: `Restart`, `Rolling`.
-        *   Defaults to `Restart`.
+        *   Defaults to `Rolling`.
         *   `Restart`: Ensures a clean redeployment by first deleting existing Kubernetes Deployments (managed by Sailr for this environment, based on generated manifests) before applying the new ones.
         *   `Rolling`: Relies on Kubernetes' standard rolling update mechanism based on the manifest configurations.
 *   **Example:**
