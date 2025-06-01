@@ -44,24 +44,17 @@ impl Builder {
         //check_room_provided_to_flag("ignore".to_string(), &self.ignore, &cfg.rooms);
 
         for (name, room_config) in cfg.rooms {
+            // Determine if the room should be added based on `only` and `ignore` lists.
+            // `only` acts as a whitelist while `ignore` acts as a blacklist that
+            // overrides `only` when conflicts occur.
             let mut should_add = true;
 
-            // @Note Check to see if it's in the only array
-            if self.only.len() > 0 {
-                if self.only.contains(&name) {
-                    should_add = true
-                } else {
-                    should_add = false
-                }
+            if !self.only.is_empty() {
+                should_add = self.only.contains(&name);
             }
 
-            // @Note Check to see if it's in the ignore array
-            if self.ignore.len() > 0 {
-                if self.ignore.contains(&name) {
-                    should_add = false
-                } else {
-                    should_add = true
-                }
+            if !self.ignore.is_empty() && self.ignore.contains(&name) {
+                should_add = false;
             }
 
             if should_add {
