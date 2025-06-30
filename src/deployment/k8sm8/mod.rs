@@ -3,12 +3,13 @@ pub mod cronjobs;
 pub mod daemonsets;
 pub mod deployments;
 pub mod jobs;
+pub mod logs;
 pub mod namespaces;
 pub mod pods;
+pub mod processing;
 pub mod secrets;
 pub mod services;
 pub mod statefulsets;
-
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -24,11 +25,11 @@ use kube::{Api, Client, Discovery};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::errors::KubeError;
+use crate::LOGGER;
 pub use deployments::delete_all_deployments;
 pub use deployments::delete_deployment;
 pub use deployments::get_all_deployments;
-use crate::errors::KubeError;
-use crate::LOGGER;
 use kube::config::KubeConfigOptions;
 
 pub async fn create_client(context: String) -> Result<kube::Client, KubeError> {

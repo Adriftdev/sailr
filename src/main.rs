@@ -1,11 +1,12 @@
-use std::io;
+use std::{io, process::exit};
 
 use sailr::{
     builder::{split_matches, Builder},
     cli::{Cli, Commands, InfraCommands, K8sCommands, Provider},
     create_default_env_config,
     create_default_env_infra,
-    environment::{Environment, Service}, // Added Service
+    deployment::k8sm8::{logs::log_streamer, pods::get_all_pods},
+    environment::{Environment, Service},
     errors::CliError,
     generate,
     infra::{local_k8s::LocalK8, Infra},
@@ -13,8 +14,7 @@ use sailr::{
         scaffolding::{generate_config_map, generate_deployment, generate_service}, // Added scaffolding functions
         TemplateManager,
     },
-    LOGGER,
-    // filesystem::FileSystemManager, // FileSystemManager is not directly used here, fs is used.
+    LOGGER, // filesystem::FileSystemManager, // FileSystemManager is not directly used here, fs is used.
 };
 use std::fs;
 use std::path::Path; // Path was already here
@@ -774,6 +774,48 @@ async fn main() -> Result<(), CliError> {
                     )));
                 }
             }
+        }
+        Commands::Interactive(args) => {
+            use inquire::{MultiSelect, Select};
+
+            let selection = Select::new("Select the command", vec!["Log Streamer", "Exit"]);
+
+            let selected_command = selection
+                .prompt()
+                .map_err(|e| CliError::Other(format!("Failed to select command: {}", e)))
+                .unwrap();
+
+            match selected_command {
+                "Log Streamer" => {
+                    let client = sailr::deployment::k8sm8::create_client(args.context.to_string())
+                        .await
+                        .map_err(|e| {
+                            CliError::Other(format!("Failed to create Kubernetes client: {}", e))
+                        })?;
+
+                    let pods = get_all_pods(client.clone(), "default")
+                        .await
+                        .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
+
+                    let selected_pods = MultiSelect::new(
+                        "Select pods to stream logs from",
+                        pods.iter()
+                            .map(|p| p.metadata.name.clone().unwrap_or_default())
+                            .collect::<Vec<_>>(),
+                    )
+                    .prompt()
+                    .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
+
+                    log_streamer(client.clone(), "default", selected_pods)
+                        .await
+                        .map_err(|e| CliError::Other(format!("Failed to stream logs: {}", e)))?;
+                }
+                "Exit" => println!("Exiting..."),
+
+                &_ => todo!(),
+            };
+
+            exit(0)
         }
     }
 

@@ -32,6 +32,21 @@ pub enum Commands {
     K8s(K8sArgs),
     /// Add a new service to the project
     AddService(AddServiceArgs),
+
+    /// Enter interactive terminal interface cli mode
+    Interactive(InteractiveArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InteractiveArgs {
+    /// Kubernetes context to use
+    #[arg(
+        name = "context",
+        short = 'c',
+        long = "context",
+        help = "Kubernetes context to use"
+    )]
+    pub context: String,
 }
 
 #[derive(Debug, Args)]
