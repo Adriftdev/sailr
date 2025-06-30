@@ -5,7 +5,10 @@ use sailr::{
     cli::{Cli, Commands, InfraCommands, K8sCommands, Provider},
     create_default_env_config,
     create_default_env_infra,
-    deployment::k8sm8::{logs::log_streamer, pods::get_all_pods},
+    deployment::k8sm8::{
+        logs::{log_merger, log_streamer},
+        pods::get_all_pods,
+    },
     environment::{Environment, Service},
     errors::CliError,
     generate,
@@ -778,7 +781,10 @@ async fn main() -> Result<(), CliError> {
         Commands::Interactive(args) => {
             use inquire::{MultiSelect, Select};
 
-            let selection = Select::new("Select the command", vec!["Log Streamer", "Exit"]);
+            let selection = Select::new(
+                "Select the command",
+                vec!["Log Merger", "Log Streamer", "Exit"],
+            );
 
             let selected_command = selection
                 .prompt()
@@ -786,6 +792,30 @@ async fn main() -> Result<(), CliError> {
                 .unwrap();
 
             match selected_command {
+                "Log Merger" => {
+                    let client = sailr::deployment::k8sm8::create_client(args.context.to_string())
+                        .await
+                        .map_err(|e| {
+                            CliError::Other(format!("Failed to create Kubernetes client: {}", e))
+                        })?;
+
+                    let pods = get_all_pods(client.clone(), "default")
+                        .await
+                        .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
+
+                    let selected_pods = MultiSelect::new(
+                        "Select pods to stream logs from",
+                        pods.iter()
+                            .map(|p| p.metadata.name.clone().unwrap_or_default())
+                            .collect::<Vec<_>>(),
+                    )
+                    .prompt()
+                    .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
+
+                    log_merger(client.clone(), "default", selected_pods)
+                        .await
+                        .map_err(|e| CliError::Other(format!("Failed to merge logs: {}", e)))?;
+                }
                 "Log Streamer" => {
                     let client = sailr::deployment::k8sm8::create_client(args.context.to_string())
                         .await
