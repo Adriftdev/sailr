@@ -20,8 +20,6 @@ pub struct Environment {
     pub registry: String,
     pub build: Option<Config>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
-    #[serde(skip)]
-    file_manager: filesystem::FileSystemManager,
 }
 
 impl Environment {
@@ -40,13 +38,6 @@ impl Environment {
             registry: "docker.io".to_string(),
             build: None,
             environment_variables: Some(Vec::new()),
-            file_manager: filesystem::FileSystemManager::new(
-                Path::new("./k8s/environments")
-                    .join(name)
-                    .to_str()
-                    .unwrap()
-                    .to_string(),
-            ),
         }
     }
 
@@ -121,8 +112,16 @@ impl Environment {
 
     pub fn save_to_file(&self) -> Result<(), Box<dyn std::error::Error>> {
         let contents = toml::to_string(&self)?;
-        self.file_manager
-            .create_file(&"config.toml".to_string(), &contents)?;
+
+        let filemanager = filesystem::FileSystemManager::new(
+            Path::new("./k8s/environments")
+                .join(self.name.to_string())
+                .to_str()
+                .unwrap()
+                .to_string(),
+        );
+
+        filemanager.create_file(&format!("config.toml"), &contents)?;
         Ok(())
     }
 
@@ -424,7 +423,11 @@ impl Service {
     }
 
     pub fn get_path(&self) -> String {
-        self.path.clone().unwrap_or("".to_string())
+        self.path
+            .clone()
+            .unwrap_or("".to_string())
+            .replace("./", "")
+            .to_string()
     }
 
     pub fn get_full_name(&self) -> String {

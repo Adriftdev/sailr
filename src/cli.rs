@@ -131,6 +131,27 @@ pub struct InitArgs {
         help = "Region to use for the provider"
     )]
     pub region: Option<String>,
+
+    #[arg(
+        long = "with-sample",
+        help = "Include a sample service for immediate testing (default: true)",
+        default_value = "true"
+    )]
+    pub with_sample: bool,
+
+    #[arg(
+        long = "no-sample",
+        help = "Skip creating sample service",
+        conflicts_with = "with_sample"
+    )]
+    pub no_sample: bool,
+
+    #[arg(
+        long = "env-type",
+        help = "Environment type template to use",
+        value_enum
+    )]
+    pub env_type: Option<EnvType>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -204,6 +225,13 @@ pub enum Provider {
     Gcp,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum EnvType {
+    Development,
+    Staging,
+    Production,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum DeploymentStrategy {
     Restart,
@@ -236,6 +264,12 @@ pub struct DeployArgs {
 
     #[arg(long = "strategy", help = "Deployment strategy to use", default_value_t = DeploymentStrategy::Rolling, value_enum)]
     pub strategy: DeploymentStrategy,
+
+    #[arg(
+        long = "plan",
+        help = "Show what would be deployed without actually deploying (dry-run mode)"
+    )]
+    pub plan: bool,
 }
 
 #[derive(Debug, Args)]
@@ -306,12 +340,20 @@ pub struct GoArgs {
     pub name: String,
 
     #[arg(
+        name = "skip build",
+        short = 's',
+        long = "skip-build",
+        help = "Skip the build step and run only generate and deploy steps"
+    )]
+    pub skip_build: bool,
+
+    #[arg(
         name = "force",
         short = 'f',
         long = "force",
         help = "Force all rooms to build, ignore the cache"
     )]
-    pub force: Option<bool>,
+    pub force: bool,
 
     /// Name of the environment
     #[arg(
@@ -327,6 +369,12 @@ pub struct GoArgs {
 
     #[arg(long = "strategy", help = "Deployment strategy to use for the deploy step", default_value_t = DeploymentStrategy::Rolling, value_enum)]
     pub strategy: DeploymentStrategy,
+
+    #[arg(
+        long = "plan",
+        help = "Show what would be deployed without actually deploying (dry-run mode)"
+    )]
+    pub plan: bool,
 }
 
 #[derive(Debug, Args)]

@@ -37,6 +37,9 @@ impl FileSystemManager {
         content: &String,
     ) -> Result<(), FileSystemManagerError> {
         let path = Path::new(self.path.as_str()).join(file_name);
+
+        println!("Creating file at: {}", path.display());
+
         match ensure_dir(path.parent().unwrap().to_str().unwrap()) {
             Ok(_) => (),
             Err(_) => {

@@ -2,4 +2,4 @@ default_registry = "docker.io"
 default_domain = "example.com"
 
 [custom_vars]
-"version_tag"="latest" # Can define custom variables using this method and they will be injected in the config template initilisation.
+"version_tag" = "latest" # Can define custom variables using this method and they will be injected in the config template initilisation.
