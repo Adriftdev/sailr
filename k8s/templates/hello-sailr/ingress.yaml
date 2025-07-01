@@ -9,7 +9,7 @@ metadata:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   rules:
-  - host: hello-sailr.local
+  - host: {{domain}}
     http:
       paths:
       - path: /

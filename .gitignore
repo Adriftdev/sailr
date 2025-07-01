@@ -3,7 +3,7 @@ target/*
 .DS_Store
 
 !src/k8s/*
+k8s/environments/dev
 .kube
 netrc
 .roomservice/
-.aider*

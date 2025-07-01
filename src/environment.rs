@@ -224,10 +224,7 @@ impl Service {
 impl Serialize for Service {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut service = std::collections::HashMap::new();
-        service.insert(
-            "name".to_string(),
-            format!("{}/{}", self.namespace, self.name),
-        );
+        service.insert("name".to_string(), self.name.to_string());
         if self.path.is_some() {
             service.insert("path".to_string(), self.path.clone().unwrap());
         }

@@ -132,7 +132,7 @@ metadata:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   rules:
-  - host: {service_name}.local
+  - host: {{{{domain}}}}
     http:
       paths:
       - path: /
