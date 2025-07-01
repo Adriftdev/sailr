@@ -783,7 +783,20 @@ async fn main() -> Result<(), CliError> {
 
             let selection = Select::new(
                 "Select the command",
-                vec!["Log Merger", "Log Streamer", "Exit"],
+                vec![
+                    "Log Merger",
+                    "Log Streamer",
+                    "Display ConfigMaps",       // TODO: Implement this
+                    "Display Events",           // TODO: Implement this
+                    "Display Node Allocations", // TODO: Implement this
+                    "Display Secrets",          // TODO: Implement this
+                    "Delete ConfigMaps",        // TODO: Implement this
+                    "Delete Deployments",       // TODO: Implement this
+                    "Delete Pods",
+                    "Delete Services", // TODO: Implement this
+                    "Delete Secrets",  // TODO: Implement this
+                    "Exit",
+                ],
             );
 
             let selected_command = selection
@@ -839,6 +852,38 @@ async fn main() -> Result<(), CliError> {
                     log_streamer(client.clone(), "default", selected_pods)
                         .await
                         .map_err(|e| CliError::Other(format!("Failed to stream logs: {}", e)))?;
+                }
+                "Delete Pods" => {
+                    let client = sailr::deployment::k8sm8::create_client(args.context.to_string())
+                        .await
+                        .map_err(|e| {
+                            CliError::Other(format!("Failed to create Kubernetes client: {}", e))
+                        })?;
+
+                    let pods = get_all_pods(client.clone(), "default")
+                        .await
+                        .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
+
+                    let selected_pods = MultiSelect::new(
+                        "Select pods to delete",
+                        pods.iter()
+                            .map(|p| p.metadata.name.clone().unwrap_or_default())
+                            .collect::<Vec<_>>(),
+                    )
+                    .prompt()
+                    .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
+
+                    for pod_name in selected_pods {
+                        sailr::deployment::k8sm8::pods::delete_pod(
+                            client.clone(),
+                            "default",
+                            &pod_name,
+                        )
+                        .await
+                        .map_err(|e| {
+                            CliError::Other(format!("Failed to delete pod {}: {}", pod_name, e))
+                        })?;
+                    }
                 }
                 "Exit" => println!("Exiting..."),
 
