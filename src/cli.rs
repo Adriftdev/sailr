@@ -5,6 +5,10 @@ use clap_complete::{generate, Generator, Shell};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
+#[command(
+    name = "sailr",
+    about = "A CLI tool for managing environments and deployments"
+)]
 #[command(propagate_version = true)]
 pub struct Cli {
     #[command(subcommand)]
@@ -28,16 +32,13 @@ pub enum Commands {
     Build(BuildArgs),
     /// Generate and deploy an environment
     Go(GoArgs),
-    /// Kubernetes resources commands
-    K8s(K8sArgs),
     /// Add a new service to the project
     AddService(AddServiceArgs),
-
     /// Enter interactive terminal interface cli mode
     Interactive(InteractiveArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct InteractiveArgs {
     /// Kubernetes context to use
     #[arg(
@@ -47,32 +48,6 @@ pub struct InteractiveArgs {
         help = "Kubernetes context to use"
     )]
     pub context: String,
-}
-
-#[derive(Debug, Args)]
-pub struct K8sArgs {
-    #[command(subcommand)]
-    pub command: K8sCommands,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum K8sCommands {
-    Pod(PodArgs),
-    Deployment(ResourceArgs),
-    Service(ResourceArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct ResourceArgs {
-    #[command(subcommand)]
-    pub command: ResourceCommands,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ResourceCommands {
-    Get(GetArgs),
-    Delete(DeleteArgs),
-    DeleteAll(DeleteAllArgs),
 }
 
 #[derive(Debug, Args)]
@@ -265,11 +240,8 @@ pub struct DeployArgs {
     #[arg(long = "strategy", help = "Deployment strategy to use", default_value_t = DeploymentStrategy::Rolling, value_enum)]
     pub strategy: DeploymentStrategy,
 
-    #[arg(
-        long = "plan",
-        help = "Show what would be deployed without actually deploying (dry-run mode)"
-    )]
-    pub plan: bool,
+    #[arg(long = "apply", help = "Apply the deployment without planning first")]
+    pub apply: bool,
 }
 
 #[derive(Debug, Args)]
@@ -370,85 +342,9 @@ pub struct GoArgs {
     #[arg(long = "strategy", help = "Deployment strategy to use for the deploy step", default_value_t = DeploymentStrategy::Rolling, value_enum)]
     pub strategy: DeploymentStrategy,
 
-    #[arg(
-        long = "plan",
-        help = "Show what would be deployed without actually deploying (dry-run mode)"
-    )]
-    pub plan: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct PodArgs {
-    #[command(subcommand)]
-    pub command: ResourceCommands,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum PodCommands {
-    Delete(DeleteArgs),
-    Get(GetArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct DeleteAllArgs {
-    /// Kubernetes context to use
-    #[arg(
-        name = "context",
-        short = 'c',
-        long = "context",
-        help = "Kubernetes context to use"
-    )]
-    pub context: String,
-
-    /// Namespace to delete all deployments from
-    #[arg(
-        name = "namespace",
-        short = 'n',
-        long = "namespace",
-        help = "Namespace to delete all deployments from"
-    )]
-    pub namespace: String,
-}
-
-#[derive(Debug, Args)]
-pub struct DeleteArgs {
-    /// Kubernetes context to use
-    #[arg(
-        name = "context",
-        short = 'c',
-        long = "context",
-        help = "Kubernetes context to use"
-    )]
-    pub context: String,
-
-    /// Name of the environment
-    #[arg(
-        name = "name",
-        short = 'n',
-        long = "name",
-        help = "Name of the pod to delete"
-    )]
-    pub name: String,
-
-    #[arg(
-        name = "namespace",
-        short = 'n',
-        long = "namespace",
-        help = "Namespace of the pod to delete"
-    )]
-    pub namespace: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct GetArgs {
-    /// Kubernetes context to use
-    #[arg(
-        name = "context",
-        short = 'c',
-        long = "context",
-        help = "Kubernetes context to use"
-    )]
-    pub context: String,
+    /// Skip plan step
+    #[arg(long = "apply", help = "Apply the deployment without planning first")]
+    pub apply: bool,
 }
 
 #[derive(Debug, Args)]

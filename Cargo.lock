@@ -2083,6 +2083,7 @@ version = "1.10.0"
 dependencies = [
  "anyhow",
  "async-recursion",
+ "base64 0.22.1",
  "checksums",
  "chrono",
  "clap 4.5.21",

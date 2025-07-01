@@ -40,6 +40,7 @@ walkdir = "2.5.0"
 inquire = "0.7.5"
 tokio-stream = "0.1.17"
 term = "1.0.2"
+base64 = "0.22.1"
 
 [profile.release]
 opt-level = 3

@@ -5,6 +5,20 @@ use kube::{Api, Client};
 
 use crate::errors::KubeError;
 
+pub async fn get_configmap(
+    client: Client,
+    namespace: &str,
+    name: &str,
+) -> Result<ConfigMap, KubeError> {
+    let api: Api<ConfigMap> = Api::namespaced(client, namespace);
+
+    let configmap = api.get(name).await.map_err(|e| {
+        KubeError::ResourceRetrievalFailed(format!("Failed to retrieve resource: {}", e))
+    })?;
+
+    Ok(configmap)
+}
+
 pub async fn get_all_configmaps(
     client: Client,
     namespace: &str,

@@ -4,8 +4,11 @@ use kube::{Api, Client};
 
 use crate::errors::KubeError;
 
-pub async fn get_all_deployments(client: Client) -> Result<Vec<Deployment>, KubeError> {
-    let deployments: Api<Deployment> = Api::all(client);
+pub async fn get_all_deployments(
+    client: Client,
+    namespace: &str,
+) -> Result<Vec<Deployment>, KubeError> {
+    let deployments: Api<Deployment> = Api::namespaced(client, namespace);
 
     let list = deployments.list(&Default::default()).await.map_err(|e| {
         KubeError::ResourceRetrievalFailed(format!("Failed to retrieve Kubernetes resource: {}", e))

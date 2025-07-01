@@ -2,7 +2,7 @@ use std::{io, process::exit};
 
 use sailr::{
     builder::{split_matches, Builder},
-    cli::{Cli, Commands, EnvType, InfraCommands, K8sCommands, Provider},
+    cli::{Cli, Commands, EnvType, InfraCommands, Provider},
     create_default_env_config,
     create_default_env_infra,
     deployment::k8sm8::{
@@ -298,10 +298,10 @@ async fn main() -> Result<(), CliError> {
             InfraCommands::Down(arg) => Infra::destroy(Infra::read_config(arg.name)),
         },
         Commands::Deploy(arg) => {
-            if arg.plan {
+            if !arg.apply {
                 LOGGER.info("🔍 Generating deployment plan...");
 
-                match generate_deployment_plan(&arg.name, &arg.context) {
+                match generate_deployment_plan(&arg.name, &arg.context).await {
                     Ok(plan) => {
                         validate_plan_safety(&plan).map_err(|e| {
                             CliError::Other(format!("Plan validation failed: {}", e))
@@ -431,10 +431,10 @@ async fn main() -> Result<(), CliError> {
 
             generate(&arg.name, &env, services);
 
-            if arg.plan {
+            if !arg.apply {
                 LOGGER.info("🔍 Generating deployment plan for build-generate-deploy workflow...");
 
-                match generate_deployment_plan(&arg.name, &arg.context) {
+                match generate_deployment_plan(&arg.name, &arg.context).await {
                     Ok(plan) => {
                         validate_plan_safety(&plan).map_err(|e| {
                             CliError::Other(format!("Plan validation failed: {}", e))
@@ -464,290 +464,6 @@ async fn main() -> Result<(), CliError> {
             }
 
             sailr::deployment::deploy(arg.context.to_string(), &arg.name, arg.strategy).await?;
-        }
-        Commands::K8s(args) => {
-            match args.command {
-                K8sCommands::Pod(pod_args) => {
-                    match pod_args.command {
-                        sailr::cli::ResourceCommands::Delete(arg) => {
-                            LOGGER.info(&format!("Deleting a pod"));
-
-                            let client =
-                                sailr::deployment::k8sm8::create_client(arg.context.to_string())
-                                    .await
-                                    .map_err(|e| {
-                                        CliError::Other(format!(
-                                            "Failed to create Kubernetes client: {}",
-                                            e
-                                        ))
-                                    })?;
-
-                            sailr::deployment::k8sm8::pods::delete_pod(
-                                client,
-                                arg.namespace.as_deref().unwrap_or("default"),
-                                &arg.name,
-                            )
-                            .await
-                            .map_err(|e| CliError::Other(format!("Failed to delete pod: {}", e)))?;
-                        }
-                        sailr::cli::ResourceCommands::Get(arg) => {
-                            let client =
-                                sailr::deployment::k8sm8::create_client(arg.context.to_string())
-                                    .await
-                                    .map_err(|e| {
-                                        CliError::Other(format!(
-                                            "Failed to create Kubernetes client: {}",
-                                            e
-                                        ))
-                                    })?;
-
-                            let pods = sailr::deployment::k8sm8::pods::get_all_pods(
-                                client.clone(),
-                                client.clone().default_namespace(),
-                            )
-                            .await
-                            .map_err(|e| {
-                                CliError::Other(format!("Failed to get all pods: {}", e))
-                            })?;
-
-                            for pod in pods {
-                                let pod_name = pod.metadata.name.clone().unwrap_or_default();
-                                let namespace = pod.metadata.namespace.clone().unwrap_or_default();
-
-                                let phase = pod
-                                    .status
-                                    .as_ref()
-                                    .and_then(|s| s.phase.clone())
-                                    .unwrap_or_else(|| "Unknown".into());
-
-                                println!(
-                                    "{}, Namespace: {}, Phase: {}",
-                                    pod_name, namespace, phase
-                                );
-
-                                if let Some(status) = pod.status.as_ref() {
-                                    if let Some(container_statuses) =
-                                        status.container_statuses.as_ref()
-                                    {
-                                        for container_status in container_statuses {
-                                            let container_name = &container_status.name;
-                                            if let Some(waiting) = container_status
-                                                .state
-                                                .as_ref()
-                                                .and_then(|s| s.waiting.as_ref())
-                                            {
-                                                println!(
-                                                    "  Container {}: Waiting - Reason: {:?}",
-                                                    container_name, waiting.reason
-                                                );
-                                            } else if let Some(terminated) = container_status
-                                                .state
-                                                .as_ref()
-                                                .and_then(|s| s.terminated.as_ref())
-                                            {
-                                                println!("  Container {}: Terminated - Reason: {:?}, Exit Code: {}", container_name, terminated.reason, terminated.exit_code);
-                                            }
-                                        }
-                                    }
-
-                                    if let Some(conditions) = &status.conditions {
-                                        if !conditions
-                                            .iter()
-                                            .any(|c| c.type_ == "Ready" && c.status == "True")
-                                            || conditions.iter().any(|c| c.status != "True")
-                                        {
-                                            println!("  Conditions:");
-                                            for condition in conditions {
-                                                if condition.status != "True"
-                                                    || condition.type_ != "Ready"
-                                                {
-                                                    // Only show non-ready or non-true conditions
-                                                    println!(
-                                                        "    Type: {}, Status: {}",
-                                                        condition.type_, condition.status
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                println!("--------------------");
-                            }
-                        }
-                        sailr::cli::ResourceCommands::DeleteAll(arg) => {
-                            LOGGER.info(&format!("Deleting all pods"));
-
-                            let client =
-                                sailr::deployment::k8sm8::create_client(arg.context.to_string())
-                                    .await
-                                    .map_err(|e| {
-                                        CliError::Other(format!(
-                                            "Failed to create Kubernetes client: {}",
-                                            e
-                                        ))
-                                    })?;
-
-                            sailr::deployment::k8sm8::pods::delete_all_pods(client, &arg.namespace)
-                                .await
-                                .map_err(|e| {
-                                    CliError::Other(format!("Failed to delete all pods: {}", e))
-                                })?;
-                        }
-                    }
-                }
-                K8sCommands::Service(service_args) => match service_args.command {
-                    sailr::cli::ResourceCommands::Get(args) => {
-                        LOGGER.info(&format!("Getting all services"));
-
-                        let client =
-                            sailr::deployment::k8sm8::create_client(args.context.to_string())
-                                .await
-                                .map_err(|e| {
-                                    CliError::Other(format!(
-                                        "Failed to create Kubernetes client: {}",
-                                        e
-                                    ))
-                                })?;
-
-                        let services = sailr::deployment::k8sm8::services::get_all_services(
-                            client.clone(),
-                            client.clone().default_namespace(),
-                        )
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to get all services: {}", e))
-                        })?;
-
-                        for service in services {
-                            let service_name = service.metadata.name.clone().unwrap_or_default();
-                            let namespace = service.metadata.namespace.clone().unwrap_or_default();
-
-                            println!("{}, Namespace: {}", service_name, namespace);
-                            println!("--------------------");
-                        }
-                    }
-                    sailr::cli::ResourceCommands::Delete(args) => {
-                        LOGGER.info(&format!("Deleting a service"));
-
-                        let client =
-                            sailr::deployment::k8sm8::create_client(args.context.to_string())
-                                .await
-                                .map_err(|e| {
-                                    CliError::Other(format!(
-                                        "Failed to create Kubernetes client: {}",
-                                        e
-                                    ))
-                                })?;
-
-                        sailr::deployment::k8sm8::services::delete_service(
-                            client.clone(),
-                            args.namespace
-                                .as_deref()
-                                .unwrap_or(&client.default_namespace()),
-                            &args.name,
-                        )
-                        .await
-                        .map_err(|e| CliError::Other(format!("Failed to delete service: {}", e)))?;
-                    }
-                    sailr::cli::ResourceCommands::DeleteAll(args) => {
-                        LOGGER.info(&format!("Deleting all services"));
-
-                        let client =
-                            sailr::deployment::k8sm8::create_client(args.context.to_string())
-                                .await
-                                .map_err(|e| {
-                                    CliError::Other(format!(
-                                        "Failed to create Kubernetes client: {}",
-                                        e
-                                    ))
-                                })?;
-
-                        sailr::deployment::k8sm8::services::delete_all_services(
-                            client,
-                            &args.namespace,
-                        )
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to delete all services: {}", e))
-                        })?;
-                    }
-                },
-                K8sCommands::Deployment(deployment_args) => match deployment_args.command {
-                    sailr::cli::ResourceCommands::Get(args) => {
-                        LOGGER.info(&format!("Getting all deployments"));
-
-                        let client =
-                            sailr::deployment::k8sm8::create_client(args.context.to_string())
-                                .await
-                                .map_err(|e| {
-                                    CliError::Other(format!(
-                                        "Failed to create Kubernetes client: {}",
-                                        e
-                                    ))
-                                })?;
-
-                        let deployments = sailr::deployment::k8sm8::get_all_deployments(client)
-                            .await
-                            .map_err(|e| {
-                                CliError::Other(format!("Failed to get all deployments: {}", e))
-                            })?;
-
-                        for deployment in deployments {
-                            let deployment_name =
-                                deployment.metadata.name.clone().unwrap_or_default();
-                            let namespace =
-                                deployment.metadata.namespace.clone().unwrap_or_default();
-
-                            println!("{}, Namespace: {}", deployment_name, namespace);
-                            println!("--------------------");
-                        }
-                    }
-                    sailr::cli::ResourceCommands::Delete(args) => {
-                        LOGGER.info(&format!("Deleting a deployment"));
-
-                        let client =
-                            sailr::deployment::k8sm8::create_client(args.context.to_string())
-                                .await
-                                .map_err(|e| {
-                                    CliError::Other(format!(
-                                        "Failed to create Kubernetes client: {}",
-                                        e
-                                    ))
-                                })?;
-
-                        sailr::deployment::k8sm8::delete_deployment(
-                            client.clone(),
-                            &args
-                                .namespace
-                                .unwrap_or(client.default_namespace().to_string()),
-                            &args.name,
-                        )
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to delete deployment: {}", e))
-                        })?;
-                    }
-                    sailr::cli::ResourceCommands::DeleteAll(args) => {
-                        LOGGER.info(&format!("Deleting all deployments"));
-
-                        let client =
-                            sailr::deployment::k8sm8::create_client(args.context.to_string())
-                                .await
-                                .map_err(|e| {
-                                    CliError::Other(format!(
-                                        "Failed to create Kubernetes client: {}",
-                                        e
-                                    ))
-                                })?;
-
-                        sailr::deployment::k8sm8::delete_all_deployments(client, &args.namespace)
-                            .await
-                            .map_err(|e| {
-                                CliError::Other(format!("Failed to delete all deployments: {}", e))
-                            })?;
-                    }
-                },
-            }
         }
         Commands::AddService(args) => {
             LOGGER.info(&format!(
@@ -990,117 +706,10 @@ async fn main() -> Result<(), CliError> {
             }
         }
         Commands::Interactive(args) => {
-            use inquire::{MultiSelect, Select};
-
-            let selection = Select::new(
-                "Select the command",
-                vec![
-                    "Log Merger",
-                    "Log Streamer",
-                    "Display ConfigMaps",       // TODO: Implement this
-                    "Display Events",           // TODO: Implement this
-                    "Display Node Allocations", // TODO: Implement this
-                    "Display Secrets",          // TODO: Implement this
-                    "Delete ConfigMaps",        // TODO: Implement this
-                    "Delete Deployments",       // TODO: Implement this
-                    "Delete Pods",
-                    "Delete Services", // TODO: Implement this
-                    "Delete Secrets",  // TODO: Implement this
-                    "Exit",
-                ],
-            );
-
-            let selected_command = selection
-                .prompt()
-                .map_err(|e| CliError::Other(format!("Failed to select command: {}", e)))
-                .unwrap();
-
-            match selected_command {
-                "Log Merger" => {
-                    let client = sailr::deployment::k8sm8::create_client(args.context.to_string())
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                        })?;
-
-                    let pods = get_all_pods(client.clone(), "default")
-                        .await
-                        .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-                    let selected_pods = MultiSelect::new(
-                        "Select pods to stream logs from",
-                        pods.iter()
-                            .map(|p| p.metadata.name.clone().unwrap_or_default())
-                            .collect::<Vec<_>>(),
-                    )
-                    .prompt()
-                    .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
-
-                    log_merger(client.clone(), "default", selected_pods)
-                        .await
-                        .map_err(|e| CliError::Other(format!("Failed to merge logs: {}", e)))?;
-                }
-                "Log Streamer" => {
-                    let client = sailr::deployment::k8sm8::create_client(args.context.to_string())
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                        })?;
-
-                    let pods = get_all_pods(client.clone(), "default")
-                        .await
-                        .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-                    let selected_pods = MultiSelect::new(
-                        "Select pods to stream logs from",
-                        pods.iter()
-                            .map(|p| p.metadata.name.clone().unwrap_or_default())
-                            .collect::<Vec<_>>(),
-                    )
-                    .prompt()
-                    .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
-
-                    log_streamer(client.clone(), "default", selected_pods)
-                        .await
-                        .map_err(|e| CliError::Other(format!("Failed to stream logs: {}", e)))?;
-                }
-                "Delete Pods" => {
-                    let client = sailr::deployment::k8sm8::create_client(args.context.to_string())
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                        })?;
-
-                    let pods = get_all_pods(client.clone(), "default")
-                        .await
-                        .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-                    let selected_pods = MultiSelect::new(
-                        "Select pods to delete",
-                        pods.iter()
-                            .map(|p| p.metadata.name.clone().unwrap_or_default())
-                            .collect::<Vec<_>>(),
-                    )
-                    .prompt()
-                    .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
-
-                    for pod_name in selected_pods {
-                        sailr::deployment::k8sm8::pods::delete_pod(
-                            client.clone(),
-                            "default",
-                            &pod_name,
-                        )
-                        .await
-                        .map_err(|e| {
-                            CliError::Other(format!("Failed to delete pod {}: {}", pod_name, e))
-                        })?;
-                    }
-                }
-                "Exit" => println!("Exiting..."),
-
-                &_ => todo!(),
-            };
-
+            // Handle interactive commands
+            sailr::interactive::main_menu(args)
+                .await
+                .map_err(|e| CliError::Other(format!("Interactive mode failed: {}", e)))?;
             exit(0)
         }
     }

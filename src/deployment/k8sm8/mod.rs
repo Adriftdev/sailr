@@ -2,14 +2,17 @@ pub mod configmaps;
 pub mod cronjobs;
 pub mod daemonsets;
 pub mod deployments;
+pub mod events;
 pub mod jobs;
 pub mod logs;
 pub mod namespaces;
+pub mod nodes;
 pub mod pods;
 pub mod processing;
 pub mod secrets;
 pub mod services;
 pub mod statefulsets;
+
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -17,7 +20,7 @@ use anyhow::Result;
 use diffy::{create_patch, PatchFormatter};
 use k8s_openapi::serde_json;
 use k8s_openapi::{self};
-use kube::api::{Patch, PatchParams};
+use kube::api::{ListParams, Patch, PatchParams};
 use kube::core::{DynamicObject, GroupVersionKind};
 use kube::discovery::{ApiCapabilities, ApiResource, Scope};
 use kube::{Api, Client, Discovery};
@@ -45,6 +48,69 @@ pub async fn create_client(context: String) -> Result<kube::Client, KubeError> {
         .map_err(|e| KubeError::UnexpectedError(format!("Failed to create client: {}", e)))?;
 
     Ok(client)
+}
+
+pub async fn get_cluster_resources(
+    context: &str,
+    resource_type: &DynamicObject,
+) -> Result<Vec<Value>> {
+    // Use the existing client creation logic from this module.
+    let client = create_client(context.to_string()).await?;
+
+    // Discover the available API resources from the cluster.
+    let discovery = Discovery::new(client.clone())
+        .run()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to discover API resources: {}", e))?;
+
+    let gvk = if let Some(tm) = resource_type.types.clone() {
+        GroupVersionKind::try_from(tm).map_err(|e| {
+            KubeError::ManifestApplicationFailed(format!(
+                "Failed to read or apply Kubernetes manifest: {}",
+                e
+            ))
+        })?
+    } else {
+        return Err(anyhow::anyhow!(
+            "Resource type must have valid TypeMeta (apiVersion and kind)"
+        ));
+    };
+
+    // Find the specific ApiResource and its capabilities based on the plural name provided.
+    // For example, "deployments" will resolve to the ApiResource for apps/v1/Deployment.
+    let (ar, caps) = match discovery.resolve_gvk(&gvk) {
+        Some((ar, caps)) => (ar, caps),
+        None => {
+            return Err(anyhow::anyhow!(
+                "Resource type '{}' not found in the cluster",
+                resource_type.metadata.name.as_deref().unwrap_or("unknown")
+            ));
+        }
+    };
+    // Use the existing dynamic_api helper to create an API client.
+    // By passing `all = true`, this will fetch resources from all namespaces
+    // if the resource type is namespaced, which is a common requirement.
+    let api = dynamic_api(ar, caps, client, None, true);
+
+    // List all resources of the specified type using default parameters.
+    let list = api
+        .list(&ListParams::default())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to list resources: {}", e))?;
+
+    // The result of the list operation is an `ObjectList<DynamicObject>`.
+    // We iterate through the `items`, serialize each `DynamicObject` into a `serde_json::Value`,
+    // and collect them into a Vec.
+    let resources: Result<Vec<Value>> = list
+        .items
+        .into_iter()
+        .map(|item| {
+            serde_json::to_value(item)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize resource to JSON: {}", e))
+        })
+        .collect();
+
+    resources
 }
 
 pub async fn apply(
