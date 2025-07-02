@@ -237,6 +237,15 @@ pub struct DeployArgs {
     )]
     pub name: String,
 
+    ///namespace to deploy to
+    #[arg(
+        name = "namespace",
+        short = 'N',
+        long = "namespace",
+        help = "Namespace to deploy to"
+    )]
+    pub namespace: Option<String>,
+
     #[arg(long = "strategy", help = "Deployment strategy to use", default_value_t = DeploymentStrategy::Rolling, value_enum)]
     pub strategy: DeploymentStrategy,
 
@@ -310,6 +319,15 @@ pub struct GoArgs {
         help = "Name of the environment"
     )]
     pub name: String,
+
+    ///namespace to deploy to
+    #[arg(
+        name = "namespace",
+        short = 'N',
+        long = "namespace",
+        help = "Namespace to deploy to"
+    )]
+    pub namespace: Option<String>,
 
     #[arg(
         name = "skip build",

@@ -5,10 +5,6 @@ use sailr::{
     cli::{Cli, Commands, EnvType, InfraCommands, Provider},
     create_default_env_config,
     create_default_env_infra,
-    deployment::k8sm8::{
-        logs::{log_merger, log_streamer},
-        pods::get_all_pods,
-    },
     environment::{Environment, Service},
     errors::CliError,
     generate,
@@ -301,7 +297,13 @@ async fn main() -> Result<(), CliError> {
             if !arg.apply {
                 LOGGER.info("🔍 Generating deployment plan...");
 
-                match generate_deployment_plan(&arg.name, &arg.context).await {
+                match generate_deployment_plan(
+                    &arg.name,
+                    &arg.context,
+                    &arg.namespace.unwrap_or("default".to_string()),
+                )
+                .await
+                {
                     Ok(plan) => {
                         validate_plan_safety(&plan).map_err(|e| {
                             CliError::Other(format!("Plan validation failed: {}", e))
@@ -434,7 +436,13 @@ async fn main() -> Result<(), CliError> {
             if !arg.apply {
                 LOGGER.info("🔍 Generating deployment plan for build-generate-deploy workflow...");
 
-                match generate_deployment_plan(&arg.name, &arg.context).await {
+                match generate_deployment_plan(
+                    &arg.name,
+                    &arg.context,
+                    &arg.namespace.unwrap_or("default".to_string()),
+                )
+                .await
+                {
                     Ok(plan) => {
                         validate_plan_safety(&plan).map_err(|e| {
                             CliError::Other(format!("Plan validation failed: {}", e))

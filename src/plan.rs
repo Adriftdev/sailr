@@ -171,7 +171,11 @@ impl DeploymentPlan {
     }
 }
 
-pub async fn generate_deployment_plan(env_name: &str, context: &str) -> Result<DeploymentPlan> {
+pub async fn generate_deployment_plan(
+    env_name: &str,
+    context: &str,
+    namespace: &str,
+) -> Result<DeploymentPlan> {
     let mut plan = DeploymentPlan::new();
 
     LOGGER.info(&format!(
@@ -184,7 +188,7 @@ pub async fn generate_deployment_plan(env_name: &str, context: &str) -> Result<D
         .map_err(|e| anyhow::anyhow!("Failed to load environment: {}", e))?;
 
     // Get current cluster state from actual Kubernetes cluster
-    let current_resources = get_current_cluster_resources(context).await?;
+    let current_resources = get_current_cluster_resources(context, namespace).await?;
 
     // Generate manifests and compare with cluster state
     for service in &env.service_whitelist {
@@ -210,7 +214,10 @@ pub async fn generate_deployment_plan(env_name: &str, context: &str) -> Result<D
     Ok(plan)
 }
 
-async fn get_current_cluster_resources(context: &str) -> Result<HashMap<String, Value>> {
+async fn get_current_cluster_resources(
+    context: &str,
+    namespace: &str,
+) -> Result<HashMap<String, Value>> {
     let mut resources = HashMap::new();
 
     LOGGER.info(&format!(
@@ -221,6 +228,7 @@ async fn get_current_cluster_resources(context: &str) -> Result<HashMap<String, 
     // Get all deployments
     if let Ok(deployments) = get_cluster_resources(
         context,
+        namespace,
         &DynamicObject::new(
             "deployment",
             &kube::api::ApiResource {
@@ -247,6 +255,7 @@ async fn get_current_cluster_resources(context: &str) -> Result<HashMap<String, 
     // Get all services
     if let Ok(services) = get_cluster_resources(
         context,
+        namespace,
         &DynamicObject::new(
             "service",
             &kube::api::ApiResource {
@@ -273,6 +282,7 @@ async fn get_current_cluster_resources(context: &str) -> Result<HashMap<String, 
     // Get all configmaps
     if let Ok(configmaps) = get_cluster_resources(
         context,
+        namespace,
         &DynamicObject::new(
             "configmap",
             &kube::api::ApiResource {
@@ -299,6 +309,7 @@ async fn get_current_cluster_resources(context: &str) -> Result<HashMap<String, 
     // Get all secrets
     if let Ok(secrets) = get_cluster_resources(
         context,
+        namespace,
         &DynamicObject::new(
             "secret",
             &kube::api::ApiResource {
@@ -325,6 +336,7 @@ async fn get_current_cluster_resources(context: &str) -> Result<HashMap<String, 
     // Get all ingresses
     if let Ok(ingresses) = get_cluster_resources(
         context,
+        namespace,
         &DynamicObject::new(
             "ingress",
             &kube::api::ApiResource {
@@ -351,6 +363,7 @@ async fn get_current_cluster_resources(context: &str) -> Result<HashMap<String, 
     // Get all HPAs
     if let Ok(hpas) = get_cluster_resources(
         context,
+        namespace,
         &DynamicObject::new(
             "horizontalpodautoscaler",
             &kube::api::ApiResource {

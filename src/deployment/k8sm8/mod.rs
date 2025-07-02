@@ -52,6 +52,7 @@ pub async fn create_client(context: String) -> Result<kube::Client, KubeError> {
 
 pub async fn get_cluster_resources(
     context: &str,
+    namespace: &str,
     resource_type: &DynamicObject,
 ) -> Result<Vec<Value>> {
     // Use the existing client creation logic from this module.
@@ -90,7 +91,7 @@ pub async fn get_cluster_resources(
     // Use the existing dynamic_api helper to create an API client.
     // By passing `all = true`, this will fetch resources from all namespaces
     // if the resource type is namespaced, which is a common requirement.
-    let api = dynamic_api(ar, caps, client, None, true);
+    let api = dynamic_api(ar, caps, client, Some(namespace), false);
 
     // List all resources of the specified type using default parameters.
     let list = api
