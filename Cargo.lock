@@ -2079,7 +2079,7 @@ checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
 name = "sailr"
-version = "1.12.0"
+version = "1.13.0"
 dependencies = [
  "anyhow",
  "async-recursion",
