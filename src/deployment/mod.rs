@@ -64,6 +64,13 @@ pub async fn deploy(
         "Deploying to {} for {} with strategy {:?}",
         ctx, env_name, strategy
     ));
+
+    LOGGER.debug("Creating Kubernetes client...");
+    LOGGER.debug(&format!("Using context: {}", ctx));
+    LOGGER.debug(&format!("Using environment: {}", env_name));
+    LOGGER.debug(&format!("Using strategy: {:?}", strategy));
+    LOGGER.debug("Kubernetes client created.");
+
     let client = k8sm8::create_client(ctx).await?;
     let discovery = kube::Discovery::new(client.clone())
         .run()
