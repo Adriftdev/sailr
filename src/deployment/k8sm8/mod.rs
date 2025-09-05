@@ -50,6 +50,7 @@ pub async fn create_client(context: String) -> Result<kube::Client, KubeError> {
     config.read_timeout = Some(Duration::from_secs(30));
     config.write_timeout = Some(Duration::from_secs(30));
 
+
     let client = Client::try_from(config)
         .map_err(|e| KubeError::UnexpectedError(format!("Failed to create client: {}", e)))?;
 
