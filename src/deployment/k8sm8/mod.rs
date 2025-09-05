@@ -14,6 +14,7 @@ pub mod services;
 pub mod statefulsets;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -41,9 +42,14 @@ pub async fn create_client(context: String) -> Result<kube::Client, KubeError> {
         cluster: None,
         user: None,
     };
-    let config = kube::Config::from_kubeconfig(&options)
+    let mut config = kube::Config::from_kubeconfig(&options)
         .await
         .map_err(|e| KubeError::UnexpectedError(format!("Failed to create client: {}", e)))?;
+
+    config.connect_timeout = Some(Duration::from_secs(10));
+    config.read_timeout = Some(Duration::from_secs(30));
+    config.write_timeout = Some(Duration::from_secs(30));
+
     let client = Client::try_from(config)
         .map_err(|e| KubeError::UnexpectedError(format!("Failed to create client: {}", e)))?;
 
@@ -59,10 +65,13 @@ pub async fn get_cluster_resources(
     let client = create_client(context.to_string()).await?;
 
     // Discover the available API resources from the cluster.
-    let discovery = Discovery::new(client.clone())
-        .run()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to discover API resources: {}", e))?;
+    let discovery = Discovery::new(client.clone());
+
+    let discovery = match tokio::time::timeout(Duration::from_secs(10), discovery.run()).await {
+        Ok(Ok(d)) => d,
+        Ok(Err(e)) => return Err(anyhow::anyhow!("Failed to discover API resources: {}", e)),
+        Err(_) => return Err(anyhow::anyhow!("Failed to discover API resources: timed out")),
+    };
 
     let gvk = if let Some(tm) = resource_type.types.clone() {
         GroupVersionKind::try_from(tm).map_err(|e| {
