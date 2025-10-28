@@ -22,12 +22,14 @@ pub async fn get_stream(
     client: Client,
     namespace: &str,
     name: String,
+    container_name: Option<String>,
 ) -> Result<impl AsyncBufRead> {
     let api: Api<Pod> = Api::namespaced(client, namespace);
     let log_params = LogParams {
         follow: true,
         timestamps: true,
-        since_seconds: Some(120), // Stream logs for the last 60 seconds
+        since_seconds: Some(120),
+        container: container_name,
         ..Default::default()
     };
 
@@ -40,11 +42,13 @@ pub async fn get_logs(
     client: Client,
     namespace: &str,
     pod_name: String,
+    container_name: Option<String>,
 ) -> Result<impl AsyncBufRead> {
     let api: Api<Pod> = Api::namespaced(client, namespace);
     let log_params = LogParams {
         follow: false,
         timestamps: true,
+        container: container_name,
         ..Default::default()
     };
 
@@ -68,35 +72,57 @@ pub async fn log_merger(client: Client, namespace: &str, selected_pods: Vec<Stri
         }
     });
 
-    let namespace = namespace.to_string(); // Clone the namespace to move into the task.
+    let namespace = namespace.to_string();
 
-    // The `processing_task` now takes ownership of the `namespace` String.
-    // This allows us to use it in the async block without needing to clone it multiple times.
-    // The `stream::iter` will create a stream of futures that will run concurrently.
-    // We use `buffer_unordered` to limit the number of concurrent streams.
-    // This is efficient and allows us to handle multiple pods simultaneously.
+    let pod_and_containers: Vec<(String, String)> = stream::iter(selected_pods)
+        .then(|pod_name| {
+            let client = client.clone();
+            let namespace = namespace.clone();
+            async move {
+                let api: Api<Pod> = Api::namespaced(client, &namespace);
+                let containers = match api.get(&pod_name).await {
+                    Ok(pod) => pod.spec.map(|s| s.containers).unwrap_or_default(),
+                    Err(e) => {
+                        eprintln!("Error getting pod {}: {}", pod_name, e);
+                        vec![]
+                    }
+                };
+                let pod_and_containers = containers
+                    .into_iter()
+                    .map(move |c| (pod_name.clone(), c.name));
+                futures::stream::iter(pod_and_containers)
+            }
+        })
+        .flatten()
+        .collect()
+        .await;
 
     let processing_task = tokio::spawn(async move {
-        let streams: Vec<_> = stream::iter(selected_pods)
-            .map(|pod_name| {
+        let streams: Vec<_> = stream::iter(pod_and_containers)
+            .map(|(pod_name, container_name)| {
                 let client = client.clone();
-                // Clone the namespace String for each stream setup.
-                // Cloning a String is cheap and necessary for ownership.
                 let namespace_clone = namespace.clone();
                 async move {
-                    // Pass a reference (`&`) to the owned String.
-                    let stream = get_logs(client, &namespace_clone, pod_name.clone()).await?;
+                    let stream = get_logs(
+                        client,
+                        &namespace_clone,
+                        pod_name.clone(),
+                        Some(container_name.clone()),
+                    )
+                    .await?;
                     let lines = stream.lines();
-                    Ok(log_tagger(lines, pod_name.to_string()))
+                    let tag = format!("{}/{}", pod_name, container_name);
+                    Ok(log_tagger(lines, tag))
                 }
             })
-            .buffer_unordered(20) // Limit to 20 concurrent streams
+            .buffer_unordered(20)
             .filter_map(|res: Result<_>| async { res.ok() })
             .collect()
             .await;
+
         let mut merged_stream = stream::select_all(streams);
         println!(
-            "Merging logs from {} pods... Press Ctrl+C to exit.",
+            "Merging logs from {} containers... Press Ctrl+C to exit.",
             merged_stream.len()
         );
 
@@ -135,21 +161,47 @@ pub async fn log_streamer(
         }
     });
 
-    let namespace = namespace.to_string(); // Clone the namespace to move into the task.
+    let namespace = namespace.to_string();
 
-    // The `processing_task` now takes ownership of the `namespace` String.
+    let pod_and_containers: Vec<(String, String)> = stream::iter(selected_pods)
+        .then(|pod_name| {
+            let client = client.clone();
+            let namespace = namespace.clone();
+            async move {
+                let api: Api<Pod> = Api::namespaced(client, &namespace);
+                let containers = match api.get(&pod_name).await {
+                    Ok(pod) => pod.spec.map(|s| s.containers).unwrap_or_default(),
+                    Err(e) => {
+                        eprintln!("Error getting pod {}: {}", pod_name, e);
+                        vec![]
+                    }
+                };
+                let pod_and_containers = containers
+                    .into_iter()
+                    .map(move |c| (pod_name.clone(), c.name));
+                futures::stream::iter(pod_and_containers)
+            }
+        })
+        .flatten()
+        .collect()
+        .await;
+
     let processing_task = tokio::spawn(async move {
-        let streams: Vec<_> = stream::iter(selected_pods)
-            .map(|pod_name| {
+        let streams: Vec<_> = stream::iter(pod_and_containers)
+            .map(|(pod_name, container_name)| {
                 let client = client.clone();
-                // Clone the namespace String for each stream setup.
-                // Cloning a String is cheap and necessary for ownership.
                 let namespace_clone = namespace.clone();
                 async move {
-                    // Pass a reference (`&`) to the owned String.
-                    let stream = get_stream(client, &namespace_clone, pod_name.clone()).await?;
+                    let stream = get_stream(
+                        client,
+                        &namespace_clone,
+                        pod_name.clone(),
+                        Some(container_name.clone()),
+                    )
+                    .await?;
                     let lines = stream.lines();
-                    Ok(log_tagger(lines, pod_name.to_string()))
+                    let tag = format!("{}/{}", pod_name, container_name);
+                    Ok(log_tagger(lines, tag))
                 }
             })
             .buffer_unordered(20)
@@ -159,7 +211,7 @@ pub async fn log_streamer(
 
         let mut merged_stream = stream::select_all(streams);
         println!(
-            "Streaming logs from {} pods... Press Ctrl+C to exit.",
+            "Streaming logs from {} containers... Press Ctrl+C to exit.",
             merged_stream.len()
         );
 
