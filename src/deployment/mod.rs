@@ -1,7 +1,7 @@
 pub mod k8sm8;
-use crate::cli::DeploymentStrategy;
 use crate::deployment::k8sm8::deployments::delete_deployment;
 use crate::deployment::k8sm8::multidoc_deserialize;
+use crate::{cli::DeploymentStrategy, deployment::k8sm8::daemonsets::delete_daemonset};
 use anyhow::Result;
 use kube::core::DynamicObject;
 use std::fs;
@@ -56,6 +56,17 @@ async fn delete_workload_if_matches(
                         tm.kind, name, namespace
                     ));
                     match delete_deployment(client.clone(), namespace, name).await {
+                        Ok(_) => LOGGER.info(&format!(
+                            "Successfully deleted {}: {} in namespace: {}",
+                            tm.kind, name, namespace
+                        )),
+                        Err(e) => LOGGER.warn(&format!(
+                            "Failed to delete {}: {} in namespace: {}. Error: {:?}",
+                            tm.kind, name, namespace, e
+                        )),
+                    }
+
+                    match delete_daemonset(client.clone(), namespace, name).await {
                         Ok(_) => LOGGER.info(&format!(
                             "Successfully deleted {}: {} in namespace: {}",
                             tm.kind, name, namespace
