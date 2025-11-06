@@ -287,60 +287,49 @@ impl<'de> Deserialize<'de> for Service {
             .unwrap_or(&"default".to_string())
             .to_string();
 
-        let path = match service.get("path") {
-            Some(path) => path,
-            None => "",
-        };
-
+        let path = service.get("path").map(|s| s.as_str()).unwrap_or("");
         let build = service.get("build");
+        let version = service.get("version").expect("Service version is required");
 
-        let version = service.get("version").unwrap();
-
-        if !version.contains('-') && !version.contains('.') {
-            let tag = version.to_string();
-            return Ok(Self::new(
-                name,
-                &namespace,
-                Some(path),
-                build.map(|b| b.as_str()),
-                None,
-                None,
-                None,
-                Some(tag),
-            ));
-        }
-
-        // Enhanced version parsing to handle formats like 8.0
-        let mut version_parts = version.split('.');
         let mut major_version: Option<i32> = None;
         let mut minor_version: Option<i32> = None;
         let mut patch_version: Option<i32> = None;
         let mut tag: Option<String> = None;
 
-        if let Some(major_str) = version_parts.next() {
-            if let Ok(major) = major_str.parse::<i32>() {
-                major_version = Some(major);
-            }
-        }
+        // NEW LOGIC:
+        // If it doesn't contain a dot, it's a pure tag (e.g., "latest" or "2511-rc")
+        if !version.contains('.') {
+            tag = Some(version.to_string());
+        } else {
+            // It contains a dot, so parse as semver (e.g., "1.2.3", "8.0", "1.2.3-beta")
+            let mut version_parts = version.split('.');
 
-        if let Some(minor_str) = version_parts.next() {
-            if let Ok(minor) = minor_str.parse::<i32>() {
-                minor_version = Some(minor);
-            }
-        }
-
-        if let Some(patch_str) = version_parts.next() {
-            if let Ok(patch) = patch_str.parse::<i32>() {
-                patch_version = Some(patch);
-            } else if patch_str.contains('-') {
-                let mut patch_tag_split = patch_str.split('-');
-                if let Some(patch_str) = patch_tag_split.next() {
-                    if let Ok(patch) = patch_str.parse::<i32>() {
-                        patch_version = Some(patch);
-                    }
+            if let Some(major_str) = version_parts.next() {
+                if let Ok(major) = major_str.parse::<i32>() {
+                    major_version = Some(major);
                 }
-                if let Some(tag_str) = patch_tag_split.next() {
-                    tag = Some(tag_str.to_string());
+            }
+
+            if let Some(minor_str) = version_parts.next() {
+                if let Ok(minor) = minor_str.parse::<i32>() {
+                    minor_version = Some(minor);
+                }
+            }
+
+            if let Some(patch_str) = version_parts.next() {
+                if let Ok(patch) = patch_str.parse::<i32>() {
+                    patch_version = Some(patch);
+                } else if patch_str.contains('-') {
+                    // This handles the "patch-tag" case (e.g., "3-beta")
+                    let mut patch_tag_split = patch_str.split('-');
+                    if let Some(patch_val_str) = patch_tag_split.next() {
+                        if let Ok(patch) = patch_val_str.parse::<i32>() {
+                            patch_version = Some(patch);
+                        }
+                    }
+                    if let Some(tag_str) = patch_tag_split.next() {
+                        tag = Some(tag_str.to_string());
+                    }
                 }
             }
         }
@@ -413,9 +402,9 @@ impl Service {
     pub fn get_version_without_tag(&self) -> String {
         format!(
             "{}.{}.{}",
-            self.major_version.unwrap(),
-            self.minor_version.unwrap(),
-            self.patch_version.unwrap()
+            self.major_version.unwrap_or(0), // Changed from unwrap()
+            self.minor_version.unwrap_or(0), // Changed from unwrap()
+            self.patch_version.unwrap_or(0)  // Changed from unwrap()
         )
     }
 
