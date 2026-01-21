@@ -423,10 +423,16 @@ fn analyze_service_manifests(
 fn analyze_manifest_file(
     plan: &mut DeploymentPlan,
     manifest_path: &Path,
-    _service_name: &str,
+    service_name: &str,
     current_resources: &HashMap<String, Value>,
 ) -> Result<()> {
     let content = fs::read_to_string(manifest_path)?;
+
+    LOGGER.debug(&format!(
+        "Analyzing manifest file for service '{}': {}",
+        service_name,
+        manifest_path.display()
+    ));
 
     // Parse YAML content
     let docs: Vec<Value> = serde_yaml::Deserializer::from_str(&content)
