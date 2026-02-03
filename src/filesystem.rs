@@ -70,6 +70,11 @@ impl FileSystemManager {
         path.exists()
     }
 
+    pub fn is_dir(&self, dir_name: &String) -> bool {
+        let path = Path::new(self.path.as_str()).join(dir_name);
+        path.is_dir()
+    }
+
     pub fn create_dir(&self, dir_name: &String) -> Result<(), Box<dyn Error>> {
         let path = Path::new(self.path.as_str()).join(dir_name);
         create_dir_all(path)?;
@@ -118,7 +123,68 @@ impl FileSystemManager {
         if !path.exists() {
             return Ok(());
         }
-        remove_dir_all(path)?;
+
+        if path.is_file() {
+            remove_file(path)?;
+        } else {
+            remove_dir_all(path)?;
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_delete_dir_with_file() {
+        // Create a temporary directory
+        let dir = tempdir().unwrap();
+        let fs_manager = FileSystemManager::new(dir.path().to_str().unwrap().to_string());
+
+        // Create a file where a directory might be expected
+        let file_path = dir.path().join("test_file");
+        let mut file = File::create(&file_path).unwrap();
+        writeln!(file, "dummy content").unwrap();
+
+        // Ensure the file exists
+        assert!(file_path.exists());
+        assert!(file_path.is_file());
+
+        // Try to delete it using delete_dir
+        let result = fs_manager.delete_dir(&"test_file".to_string());
+
+        // Check that it succeeded
+        assert!(result.is_ok());
+        assert!(!file_path.exists());
+    }
+}
+
+#[cfg(test)]
+mod tests_isdir {
+    use super::*;
+    use std::fs::{self, File};
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_is_dir() {
+        let dir = tempdir().unwrap();
+        let fs_manager = FileSystemManager::new(dir.path().to_str().unwrap().to_string());
+
+        // Create a directory
+        let sub_dir = dir.path().join("sub_dir");
+        fs::create_dir(&sub_dir).unwrap();
+
+        // Create a file
+        let file_path = dir.path().join("test_file");
+        File::create(&file_path).unwrap();
+
+        assert!(fs_manager.is_dir(&"sub_dir".to_string()));
+        assert!(!fs_manager.is_dir(&"test_file".to_string()));
+        assert!(!fs_manager.is_dir(&"non_existent".to_string()));
     }
 }
