@@ -15,9 +15,11 @@ pub async fn main_menu(args: InteractiveArgs) -> Result<(), CliError> {
             "Describe Pod",
             "Shell into Pod",
             "Restart Deployments",
+            "Restart DaemonSets",
             "Port Forward",
             "Delete ConfigMaps",
             "Delete Deployments",
+            "Delete DaemonSets",
             "Delete Pods",
             "Delete Services",
             "Delete Secrets",
@@ -67,6 +69,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
 
+            if pods.is_empty() {
+                println!("No pods found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
             let selected_pods = MultiSelect::new(
                 "Select pods to stream logs from",
                 pods.iter()
@@ -91,6 +98,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
 
+            if pods.is_empty() {
+                println!("No pods found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
             let selected_pods = MultiSelect::new(
                 "Select pods to stream logs from",
                 pods.iter()
@@ -114,6 +126,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
             let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
+
+            if pods.is_empty() {
+                println!("No pods found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
 
             let selected_pods = MultiSelect::new(
                 "Select pods to delete",
@@ -142,6 +159,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
             let configmaps = k8sm8::configmaps::get_all_configmaps(client.clone(), &args.namespace)
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all ConfigMaps: {}", e)))?;
+
+            if configmaps.is_empty() {
+                println!("No ConfigMaps found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
 
             let selected_configmaps = MultiSelect::new(
                 "Select ConfigMaps to display",
@@ -178,6 +200,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all events: {}", e)))?;
 
+            if events.is_empty() {
+                println!("No events found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
             for event in events {
                 log(
                     scribe_rust::Color::Green,
@@ -200,6 +227,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
             let secrets = k8sm8::secrets::get_all_secrets(client.clone(), &args.namespace)
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all secrets: {}", e)))?;
+
+            if secrets.is_empty() {
+                println!("No secrets found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
 
             let selected_secrets = MultiSelect::new(
                 "Select Secrets to display",
@@ -238,6 +270,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
 
+            if pods.is_empty() {
+                println!("No pods found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
             let selected_pod = Select::new(
                 "Select a pod to describe",
                 pods.iter()
@@ -271,6 +308,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
             let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
+
+            if pods.is_empty() {
+                println!("No pods found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
 
             let selected_pod = Select::new(
                 "Select a pod to shell into",
@@ -316,6 +358,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all deployments: {}", e)))?;
 
+            if deployments.is_empty() {
+                println!("No deployments found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
             let selected_deployments = MultiSelect::new(
                 "Select Deployments to restart",
                 deployments
@@ -339,6 +386,45 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 );
             }
         }
+        "Restart DaemonSets" => {
+            let client = k8sm8::create_client(args.context.to_string())
+                .await
+                .map_err(|e| {
+                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
+                })?;
+
+            let daemonsets = k8sm8::daemonsets::get_all_daemonsets(client.clone(), &args.namespace)
+                .await
+                .map_err(|e| CliError::Other(format!("Failed to get all daemonsets: {}", e)))?;
+
+            if daemonsets.is_empty() {
+                println!("No daemonsets found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
+            let selected_daemonsets = MultiSelect::new(
+                "Select DaemonSets to restart",
+                daemonsets
+                    .iter()
+                    .map(|d| d.metadata.name.clone().unwrap_or_default())
+                    .collect::<Vec<_>>(),
+            )
+            .prompt()
+            .map_err(|e| CliError::Other(format!("Failed to select DaemonSets: {}", e)))?;
+
+            for ds_name in selected_daemonsets {
+                k8sm8::daemonsets::restart_daemonset(client.clone(), &args.namespace, &ds_name)
+                    .await
+                    .map_err(|e| {
+                        CliError::Other(format!("Failed to restart DaemonSet {}: {}", ds_name, e))
+                    })?;
+                log(
+                    scribe_rust::Color::Green,
+                    "Success",
+                    &format!("DaemonSet '{}' restarted successfully", ds_name),
+                );
+            }
+        }
         "Port Forward" => {
             let client = k8sm8::create_client(args.context.to_string())
                 .await
@@ -349,6 +435,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
             let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
+
+            if pods.is_empty() {
+                println!("No pods found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
 
             let selected_pod = Select::new(
                 "Select a pod to port-forward",
@@ -389,6 +480,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all ConfigMaps: {}", e)))?;
 
+            if configmaps.is_empty() {
+                println!("No ConfigMaps found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
             let selected_configmaps = MultiSelect::new(
                 "Select ConfigMaps to delete",
                 configmaps
@@ -418,6 +514,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all deployments: {}", e)))?;
 
+            if deployments.is_empty() {
+                println!("No deployments found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
             let selected_deployments = MultiSelect::new(
                 "Select Deployments to delete",
                 deployments
@@ -436,6 +537,40 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                     })?;
             }
         }
+        "Delete DaemonSets" => {
+            let client = k8sm8::create_client(args.context.to_string())
+                .await
+                .map_err(|e| {
+                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
+                })?;
+
+            let daemonsets = k8sm8::daemonsets::get_all_daemonsets(client.clone(), &args.namespace)
+                .await
+                .map_err(|e| CliError::Other(format!("Failed to get all daemonsets: {}", e)))?;
+
+            if daemonsets.is_empty() {
+                println!("No daemonsets found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
+
+            let selected_daemonsets = MultiSelect::new(
+                "Select DaemonSets to delete",
+                daemonsets
+                    .iter()
+                    .map(|d| d.metadata.name.clone().unwrap_or_default())
+                    .collect::<Vec<_>>(),
+            )
+            .prompt()
+            .map_err(|e| CliError::Other(format!("Failed to select DaemonSets: {}", e)))?;
+
+            for ds_name in selected_daemonsets {
+                k8sm8::daemonsets::delete_daemonset(client.clone(), &args.namespace, &ds_name)
+                    .await
+                    .map_err(|e| {
+                        CliError::Other(format!("Failed to delete DaemonSet {}: {}", ds_name, e))
+                    })?;
+            }
+        }
         "Delete Services" => {
             let client = k8sm8::create_client(args.context.to_string())
                 .await
@@ -446,6 +581,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
             let services = k8sm8::services::get_all_services(client.clone(), &args.namespace)
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all services: {}", e)))?;
+
+            if services.is_empty() {
+                println!("No services found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
 
             let selected_services = MultiSelect::new(
                 "Select Services to delete",
@@ -476,6 +616,11 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
             let secrets = k8sm8::secrets::get_all_secrets(client.clone(), &args.namespace)
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all secrets: {}", e)))?;
+
+            if secrets.is_empty() {
+                println!("No secrets found in namespace '{}'.", args.namespace);
+                return Ok(());
+            }
 
             let selected_secrets = MultiSelect::new(
                 "Select Secrets to delete",
