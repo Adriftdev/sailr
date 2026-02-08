@@ -121,12 +121,18 @@ impl TemplateManager {
                 let service_template_dir = self.filemanager.read_dir(&parent)?;
                 template_dirs.remove(&path.parent().unwrap().to_str().unwrap().to_string());
 
-                let templates = service_template_dir.into_iter().map(|x| {
-                    Path::new(path.parent().unwrap())
-                        .join(x)
-                        .to_str()
-                        .unwrap()
-                        .to_string()
+                let templates = service_template_dir.into_iter().filter_map(|x| {
+                   let full_path = Path::new(path.parent().unwrap())
+                       .join(&x)
+                       .to_str()
+                       .unwrap()
+                       .to_string();
+                    
+                    if self.filemanager.is_dir(&full_path) {
+                        Some(full_path)
+                    } else {
+                        None
+                    }
                 });
                 template_dirs.extend(templates);
             }
