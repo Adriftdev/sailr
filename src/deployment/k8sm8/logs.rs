@@ -98,42 +98,41 @@ pub async fn log_merger(client: Client, namespace: &str, selected_pods: Vec<Stri
         .await;
 
     let processing_task = tokio::spawn(async move {
-        let streams: Vec<_> = stream::iter(pod_and_containers)
-            .map(|(pod_name, container_name)| {
-                let client = client.clone();
-                let namespace_clone = namespace.clone();
-                async move {
-                    let stream = get_logs(
-                        client,
-                        &namespace_clone,
-                        pod_name.clone(),
-                        Some(container_name.clone()),
-                    )
-                    .await?;
-                    let lines = stream.lines();
-                    let tag = format!("{}/{}", pod_name, container_name);
-                    Ok(log_tagger(lines, tag))
-                }
-            })
-            .buffered(20)
-            .filter_map(|res: Result<_>| async { res.ok() })
-            .collect()
+        for (pod_name, container_name) in pod_and_containers {
+            let client = client.clone();
+            let namespace_clone = namespace.clone();
+            let tx = tx.clone();
+            let pod_name_logs = pod_name.clone();
+            let container_name_logs = container_name.clone();
+
+            let result = async move {
+                let stream = get_logs(
+                    client,
+                    &namespace_clone,
+                    pod_name_logs.clone(),
+                    Some(container_name_logs.clone()),
+                )
+                .await?;
+                let lines = stream.lines();
+                let tag = format!("{}/{}", pod_name_logs, container_name_logs);
+                Ok::<_, anyhow::Error>(log_tagger(lines, tag))
+            }
             .await;
 
-        let mut merged_stream = stream::select_all(streams);
-        println!(
-            "Merging logs from {} containers... Press Ctrl+C to exit.",
-            merged_stream.len()
-        );
-
-        while let Some(tagged_log) = merged_stream.next().await {
-            let tx_clone = tx.clone();
-            tokio::spawn(async move {
-                let processed = process_log_line(tagged_log);
-                if let Err(e) = tx_clone.send(processed).await {
-                    eprintln!("Failed to send processed log to printer: {}", e);
+            match result {
+                Ok(mut stream) => {
+                    while let Some(tagged_log) = stream.next().await {
+                        let processed = process_log_line(tagged_log);
+                        if let Err(e) = tx.send(processed).await {
+                            eprintln!("Failed to send processed log to printer: {}", e);
+                            break;
+                        }
+                    }
                 }
-            });
+                Err(e) => {
+                    eprintln!("Error getting logs for {}: {}", pod_name, e);
+                }
+            }
         }
     });
 
@@ -186,46 +185,78 @@ pub async fn log_streamer(
         .collect()
         .await;
 
-    let processing_task = tokio::spawn(async move {
-        let streams: Vec<_> = stream::iter(pod_and_containers)
-            .map(|(pod_name, container_name)| {
-                let client = client.clone();
-                let namespace_clone = namespace.clone();
-                async move {
-                    let stream = get_stream(
-                        client,
-                        &namespace_clone,
-                        pod_name.clone(),
-                        Some(container_name.clone()),
-                    )
-                    .await?;
-                    let lines = stream.lines();
-                    let tag = format!("{}/{}", pod_name, container_name);
-                    Ok(log_tagger(lines, tag))
-                }
-            })
-            .buffered(20)
-            .filter_map(|res: Result<_>| async { res.ok() })
-            .collect()
-            .await;
+    println!(
+        "Streaming logs from {} containers... Press Ctrl+C to exit.",
+        pod_and_containers.len()
+    );
 
-        let mut merged_stream = stream::select_all(streams);
-        println!(
-            "Streaming logs from {} containers... Press Ctrl+C to exit.",
-            merged_stream.len()
-        );
+    let mut handles = Vec::new();
 
-        while let Some(tagged_log) = merged_stream.next().await {
-            let tx_clone = tx.clone();
-            tokio::spawn(async move {
-                let processed = process_log_line(tagged_log);
-                if let Err(e) = tx_clone.send(processed).await {
-                    eprintln!("Failed to send processed log to printer: {}", e);
+    for (pod_name, container_name) in pod_and_containers {
+        let client = client.clone();
+        let namespace = namespace.clone();
+        let tx = tx.clone();
+        let handle = tokio::spawn(async move {
+            let mut restart_count = 0;
+            loop {
+                let log_params = LogParams {
+                    follow: true,
+                    timestamps: true,
+                    since_seconds: if restart_count == 0 { Some(120) } else { Some(1) },
+                    container: Some(container_name.clone()),
+                    ..Default::default()
+                };
+
+                let api: Api<Pod> = Api::namespaced(client.clone(), &namespace);
+                match api.log_stream(&pod_name, &log_params).await {
+                    Ok(stream) => {
+                        let mut lines = stream.lines();
+                        let tag = format!("{}/{}", pod_name, container_name);
+                        while let Some(line_res) = lines.next().await {
+                            match line_res {
+                                Ok(line) => {
+                                    let processed = process_log_line((tag.clone(), line));
+                                    if let Err(_) = tx.send(processed).await {
+                                        // Receiver dropped, stop everything
+                                        return;
+                                    }
+                                }
+                                Err(_) => break, // Stream error, reconnect
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Only print connection error if it's the first attempt or intermittent
+                        // to avoid spamming on hard failures (though spam is info here)
+                        // eprintln!("Connection failed for {}: {}", pod_name, e);
+                    }
                 }
-            });
+                
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                restart_count += 1;
+            }
+        });
+        handles.push(handle);
+    }
+
+    // Drop original tx so rx closes when all spawned tasks finish or are aborted
+    drop(tx);
+
+    println!("Press Ctrl+C to stop streaming.");
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            println!("\nStopping stream...");
         }
-    });
+        _ = printer_task => {
+            println!("Log stream finished unexpectedly.");
+        }
+    }
 
-    let _ = tokio::try_join!(printer_task, processing_task);
+    // Cleanup
+    for handle in handles {
+        handle.abort();
+    }
+    
     Ok(())
 }

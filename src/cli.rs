@@ -48,6 +48,16 @@ pub struct InteractiveArgs {
         help = "Kubernetes context to use"
     )]
     pub context: String,
+
+    /// Namespace to use
+    #[arg(
+        name = "namespace",
+        short = 'n',
+        long = "namespace",
+        help = "Namespace to use",
+        default_value = "default"
+    )]
+    pub namespace: String,
 }
 
 #[derive(Debug, Args)]

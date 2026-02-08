@@ -23,5 +23,19 @@ pub async fn get_all_events(client: Client, namespace: &str) -> Result<Vec<Event
         KubeError::ResourceRetrievalFailed(format!("Failed to retrieve resource: {}", e))
     })?;
 
-    Ok(events.items)
+    let mut items = events.items;
+    
+    // Sort by last_timestamp, falling back to event_time, then creation_timestamp
+    // Ascending order (oldest -> newest) so newest are at the bottom
+    items.sort_by(|a, b| {
+        let get_time = |event: &Event| {
+            event.last_timestamp.as_ref().map(|t| t.0)
+                .or_else(|| event.event_time.as_ref().map(|t| t.0))
+                .or_else(|| event.metadata.creation_timestamp.as_ref().map(|t| t.0))
+        };
+        
+        get_time(a).cmp(&get_time(b))
+    });
+
+    Ok(items)
 }
