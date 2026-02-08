@@ -115,7 +115,7 @@ pub async fn log_merger(client: Client, namespace: &str, selected_pods: Vec<Stri
                     Ok(log_tagger(lines, tag))
                 }
             })
-            .buffer_unordered(20)
+            .buffered(20)
             .filter_map(|res: Result<_>| async { res.ok() })
             .collect()
             .await;
@@ -204,7 +204,7 @@ pub async fn log_streamer(
                     Ok(log_tagger(lines, tag))
                 }
             })
-            .buffer_unordered(20)
+            .buffered(20)
             .filter_map(|res: Result<_>| async { res.ok() })
             .collect()
             .await;
