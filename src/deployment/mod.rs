@@ -1,9 +1,7 @@
 pub mod k8sm8;
+use crate::deployment::k8sm8::deployments::delete_deployment;
 use crate::deployment::k8sm8::multidoc_deserialize;
-use crate::{
-    cli::DeploymentStrategy,
-    deployment::k8sm8::{daemonsets::restart_daemonset, deployments::restart_deployment},
-};
+use crate::{cli::DeploymentStrategy, deployment::k8sm8::daemonsets::delete_daemonset};
 use anyhow::Result;
 use kube::core::DynamicObject;
 use std::fs;
@@ -40,8 +38,10 @@ async fn apply_manifests_from_path(
     Ok(applied_manifests)
 }
 
-/// Helper function to deserialize a YAML document and restart the resource if it's a target kind.
-async fn restart_workload_if_matches(
+/// Helper function to deserialize a YAML document and delete the resource if it's a target kind.
+///
+/// This avoids code duplication for deleting Deployments, DaemonSets, etc.
+async fn delete_workload_if_matches(
     doc: serde_yaml::Value,
     client: &kube::Client,
     target_kinds: &[&str],
@@ -52,32 +52,29 @@ async fn restart_workload_if_matches(
                 if let Some(name) = obj.metadata.name.as_ref() {
                     let namespace = obj.metadata.namespace.as_deref().unwrap_or("default");
                     LOGGER.info(&format!(
-                        "Attempting to restart {}: {} in namespace: {}",
+                        "Attempting to delete {}: {} in namespace: {}",
                         tm.kind, name, namespace
                     ));
+                    match delete_deployment(client.clone(), namespace, name).await {
+                        Ok(_) => LOGGER.info(&format!(
+                            "Successfully deleted {}: {} in namespace: {}",
+                            tm.kind, name, namespace
+                        )),
+                        Err(e) => LOGGER.warn(&format!(
+                            "Failed to delete {}: {} in namespace: {}. Error: {:?}",
+                            tm.kind, name, namespace, e
+                        )),
+                    }
 
-                    if tm.kind == "Deployment" {
-                        match restart_deployment(client.clone(), namespace, name).await {
-                            Ok(_) => LOGGER.info(&format!(
-                                "Successfully restarted Deployment: {} in namespace: {}",
-                                name, namespace
-                            )),
-                            Err(e) => LOGGER.warn(&format!(
-                                "Failed to restart Deployment: {} in namespace: {}. Error: {:?}",
-                                name, namespace, e
-                            )),
-                        }
-                    } else if tm.kind == "DaemonSet" {
-                        match restart_daemonset(client.clone(), namespace, name).await {
-                            Ok(_) => LOGGER.info(&format!(
-                                "Successfully restarted DaemonSet: {} in namespace: {}",
-                                name, namespace
-                            )),
-                            Err(e) => LOGGER.warn(&format!(
-                                "Failed to restart DaemonSet: {} in namespace: {}. Error: {:?}",
-                                name, namespace, e
-                            )),
-                        }
+                    match delete_daemonset(client.clone(), namespace, name).await {
+                        Ok(_) => LOGGER.info(&format!(
+                            "Successfully deleted {}: {} in namespace: {}",
+                            tm.kind, name, namespace
+                        )),
+                        Err(e) => LOGGER.warn(&format!(
+                            "Failed to delete {}: {} in namespace: {}. Error: {:?}",
+                            tm.kind, name, namespace, e
+                        )),
                     }
                 }
             }
@@ -110,13 +107,9 @@ pub async fn deploy(
 
     let path = Path::new("./k8s/generated").join(env_name);
 
-    // 1. Apply all manifests first (Create/Update)
-    let _manifest = apply_manifests_from_path(path.as_path(), client.clone(), &discovery).await?;
-
-    // 2. If strategy is Restart, trigger rollout restarts for Deployments and DaemonSets
     if strategy == DeploymentStrategy::Restart {
         LOGGER.info(&format!(
-            "Restart strategy selected. Triggering rollout restart for Deployments and DaemonSets in environment: {}",
+            "Restart strategy selected. Deleting existing Deployments or Daemonsets in environment: {}",
             env_name
         ));
 
@@ -130,21 +123,22 @@ pub async fn deploy(
                     .map_or(false, |ext| ext == "yaml" || ext == "yml"))
             {
                 LOGGER.debug(&format!(
-                    "Processing file for restart check: {:?}",
+                    "Processing file for pre-deletion: {:?}",
                     file_path
                 ));
                 if let Ok(yaml_content) = fs::read_to_string(file_path) {
                     if let Ok(docs) = multidoc_deserialize(&yaml_content).await {
                         for doc in docs {
-                            restart_workload_if_matches(
+                            // Use the refactored helper function to reduce duplication
+                            delete_workload_if_matches(
                                 doc,
                                 &client,
-                                &["Deployment", "DaemonSet"],
+                                &["Deployment", "DaemonSet"], // Easily extend this list
                             )
                             .await
                             .map_err(|e| {
                                 DeployError::ManifestApplicationFailed(format!(
-                                    "Failed during restart step: {}",
+                                    "Failed during pre-deletion step: {}",
                                     e
                                 ))
                             })?;
@@ -154,6 +148,9 @@ pub async fn deploy(
             }
         }
     }
+
+    // Call the simplified, non-recursive apply function
+    let _manifest = apply_manifests_from_path(path.as_path(), client.clone(), &discovery).await?;
 
     LOGGER.info("Deployed successfully!");
 
