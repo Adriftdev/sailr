@@ -1,187 +1,313 @@
-use scribe_rust::log;
-
+use crate::tui::app::{Action, App, AppState};
 use crate::{cli::InteractiveArgs, deployment::k8sm8, errors::CliError};
-use inquire::{MultiSelect, Select, Text};
+use crossterm::event::{self, Event, KeyCode};
+use scribe_rust::log;
+use std::time::Duration;
 
 pub async fn main_menu(args: InteractiveArgs) -> Result<(), CliError> {
-    let selection = Select::new(
-        "Select the command",
-        vec![
-            "Log Merger",
-            "Log Streamer",
-            "Display ConfigMaps",
-            "Display Events",
-            "Display Secrets",
-            "Describe Pod",
-            "Shell into Pod",
-            "Restart Deployments",
-            "Restart DaemonSets",
-            "Port Forward",
-            "Delete ConfigMaps",
-            "Delete Deployments",
-            "Delete DaemonSets",
-            "Delete Pods",
-            "Delete Services",
-            "Delete Secrets",
-            "Exit",
-        ],
-    );
+    let mut app = App::new(args.clone());
 
     loop {
-        let selected_command = selection
-            .clone()
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select command: {}", e)))?;
+        let mut terminal = crate::tui::init()
+            .map_err(|e| CliError::Other(format!("Failed to init TUI: {}", e)))?;
+        let res = run_app(&mut terminal, &mut app).await;
+        crate::tui::restore()
+            .map_err(|e| CliError::Other(format!("Failed to restore TUI: {}", e)))?;
 
-        if selected_command == "Exit" {
+        if let Err(e) = res {
+            println!("Error: {}", e);
+            break;
+        }
+
+        if app.should_quit {
             println!("Exiting...");
             break;
         }
 
-        if let Err(e) = execute(args.clone(), &selected_command).await {
-            log(
-                scribe_rust::Color::Red,
-                "Error",
-                &format!("Failed to execute command '{}': {}", selected_command, e),
-            );
-        } else {
-            log(
-                scribe_rust::Color::Green,
-                "Success",
-                &format!("Command '{}' executed successfully", selected_command),
-            );
+        if let Some((action, items, input)) = app.pending_external_action.take() {
+            println!("\nExecuting {}...", action.as_str());
+            if let Err(e) = run_external_action(args.clone(), action.clone(), items, input).await {
+                log(scribe_rust::Color::Red, "Error", &format!("Failed: {}", e));
+            } else {
+                log(
+                    scribe_rust::Color::Green,
+                    "Success",
+                    &format!("Command '{}' executed successfully", action.as_str()),
+                );
+            }
+            println!("\nPress Enter to return to menu...");
+            let mut buf = String::new();
+            let _ = std::io::stdin().read_line(&mut buf);
+
+            // reset state to main menu
+            app.state = AppState::MainMenu;
+            app.selected_indices.clear();
         }
     }
 
     Ok(())
 }
 
-pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<(), CliError> {
-    match selected_command {
-        "Log Merger" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
+async fn run_app(terminal: &mut crate::tui::Tui, app: &mut App) -> Result<(), CliError> {
+    loop {
+        terminal
+            .draw(|f| crate::tui::ui::draw(f, app))
+            .map_err(|e| CliError::Other(e.to_string()))?;
 
-            let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
+        if app.should_quit || app.pending_external_action.is_some() {
+            return Ok(());
+        }
+
+        // Handle auto-transitions
+        let fetch_action = match &app.state {
+            AppState::Fetching { action, .. } => Some(action.clone()),
+            _ => None,
+        };
+
+        if let Some(action) = fetch_action {
+            match fetch_items(&app.args, &action).await {
+                Ok(items) => {
+                    if items.is_empty() {
+                        app.state = AppState::Message {
+                            title: "Not Found".to_string(),
+                            content: format!(
+                                "No items found for this action in namespace '{}'.",
+                                app.args.namespace
+                            ),
+                            is_error: true,
+                        };
+                    } else {
+                        app.state = AppState::Selection {
+                            action: action.clone(),
+                            items,
+                            multi: action.is_multi_select(),
+                        };
+                    }
+                }
+                Err(e) => {
+                    app.state = AppState::Message {
+                        title: "Error".to_string(),
+                        content: format!("Failed to fetch: {}", e),
+                        is_error: true,
+                    };
+                }
+            }
+            continue;
+        }
+
+        let process_action = match &app.state {
+            AppState::Processing {
+                action,
+                selected_items,
+                input,
+                ..
+            } => Some((action.clone(), selected_items.clone(), input.clone())),
+            _ => None,
+        };
+
+        if let Some((action, selected_items, input)) = process_action {
+            // Processing means scheduling it for external action and returning
+            let input_val = input.unwrap_or_default();
+            app.pending_external_action = Some((action, selected_items, input_val));
+            return Ok(());
+        }
+
+        if event::poll(Duration::from_millis(50)).map_err(|e| CliError::Other(e.to_string()))? {
+            if let Event::Key(key) = event::read().map_err(|e| CliError::Other(e.to_string()))? {
+                match &mut app.state {
+                    AppState::MainMenu => match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
+                        KeyCode::Up => app.previous(),
+                        KeyCode::Down => app.next(),
+                        KeyCode::Enter => {
+                            let selected_idx = app.main_menu_state.selected().unwrap_or(0);
+                            let selected_action = app.menu_items[selected_idx].clone();
+
+                            if selected_action.skips_selection() {
+                                app.state = AppState::Processing {
+                                    action: selected_action,
+                                    message: "Starting...".into(),
+                                    selected_items: vec![],
+                                    input: None,
+                                };
+                            } else {
+                                app.state = AppState::Fetching {
+                                    action: selected_action.clone(),
+                                    message: format!(
+                                        "Fetching data for {}...",
+                                        selected_action.as_str()
+                                    ),
+                                };
+                            }
+                        }
+                        _ => {}
+                    },
+                    AppState::Selection {
+                        action,
+                        items,
+                        multi,
+                    } => {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.state = AppState::MainMenu;
+                                app.selected_indices.clear();
+                            }
+                            KeyCode::Up => app.previous(),
+                            KeyCode::Down => app.next(),
+                            KeyCode::Char(' ') if *multi => app.toggle_selection(),
+                            KeyCode::Enter => {
+                                let mut selected = Vec::new();
+                                if *multi {
+                                    for &idx in &app.selected_indices {
+                                        if let Some(item) = items.get(idx) {
+                                            selected.push(item.clone());
+                                        }
+                                    }
+                                } else {
+                                    if let Some(idx) = app.selection_state.selected() {
+                                        if let Some(item) = items.get(idx) {
+                                            selected.push(item.clone());
+                                        }
+                                    }
+                                }
+
+                                if selected.is_empty() && *multi {
+                                    // Must select at least one
+                                } else {
+                                    let action_clone = action.clone();
+                                    if let Some(prompt) = action_clone.requires_input() {
+                                        app.state = AppState::TextInput {
+                                            action: action_clone,
+                                            prompt: prompt.to_string(),
+                                            input: String::new(),
+                                            selected_items: selected,
+                                        };
+                                    } else {
+                                        app.state = AppState::Processing {
+                                            action: action_clone,
+                                            message: "Processing...".to_string(),
+                                            selected_items: selected,
+                                            input: None,
+                                        };
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    AppState::TextInput {
+                        action,
+                        prompt: _,
+                        input,
+                        selected_items,
+                    } => match key.code {
+                        KeyCode::Esc => {
+                            app.state = AppState::MainMenu;
+                            app.selected_indices.clear();
+                        }
+                        KeyCode::Enter => {
+                            app.state = AppState::Processing {
+                                action: action.clone(),
+                                message: "Processing...".to_string(),
+                                selected_items: selected_items.clone(),
+                                input: Some(input.clone()),
+                            };
+                        }
+                        KeyCode::Char(c) => {
+                            input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            input.pop();
+                        }
+                        _ => {}
+                    },
+                    AppState::Message { .. } => match key.code {
+                        KeyCode::Enter | KeyCode::Esc => {
+                            app.state = AppState::MainMenu;
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+async fn fetch_items(args: &InteractiveArgs, action: &Action) -> Result<Vec<String>, CliError> {
+    let client = k8sm8::create_client(args.context.to_string())
+        .await
+        .map_err(|e| CliError::Other(format!("Failed to create Kubernetes client: {}", e)))?;
+
+    match action {
+        Action::LogMerger
+        | Action::LogStreamer
+        | Action::DescribePod
+        | Action::ShellIntoPod
+        | Action::PortForward
+        | Action::DeletePods => {
+            let pods = k8sm8::pods::get_all_pods(client, &args.namespace)
                 .await
                 .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-            if pods.is_empty() {
-                println!("No pods found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_pods = MultiSelect::new(
-                "Select pods to stream logs from",
-                pods.iter()
-                    .map(|p| p.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
-
-            k8sm8::logs::log_merger(client.clone(), &args.namespace, selected_pods)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to merge logs: {}", e)))?;
+            Ok(pods.into_iter().filter_map(|p| p.metadata.name).collect())
         }
-        "Log Streamer" => {
-            let client = k8sm8::create_client(args.context.to_string())
+        Action::DisplayConfigMaps | Action::DeleteConfigMaps => {
+            let cm = k8sm8::configmaps::get_all_configmaps(client, &args.namespace)
                 .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-            if pods.is_empty() {
-                println!("No pods found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_pods = MultiSelect::new(
-                "Select pods to stream logs from",
-                pods.iter()
-                    .map(|p| p.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
-
-            k8sm8::logs::log_streamer(client.clone(), &args.namespace, selected_pods)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to stream logs: {}", e)))?;
+                .map_err(|e| CliError::Other(format!("Failed to get all configmaps: {}", e)))?;
+            Ok(cm.into_iter().filter_map(|c| c.metadata.name).collect())
         }
-        "Delete Pods" => {
-            let client = k8sm8::create_client(args.context.to_string())
+        Action::RestartDeployments | Action::DeleteDeployments => {
+            let d = k8sm8::deployments::get_all_deployments(client, &args.namespace)
                 .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-            if pods.is_empty() {
-                println!("No pods found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_pods = MultiSelect::new(
-                "Select pods to delete",
-                pods.iter()
-                    .map(|p| p.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select pods: {}", e)))?;
-
-            for pod_name in selected_pods {
-                k8sm8::pods::delete_pod(client.clone(), &args.namespace, &pod_name)
-                    .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to delete pod {}: {}", pod_name, e))
-                    })?;
-            }
+                .map_err(|e| CliError::Other(format!("Failed to get all deployments: {}", e)))?;
+            Ok(d.into_iter().filter_map(|x| x.metadata.name).collect())
         }
-        "Display ConfigMaps" => {
-            let client = k8sm8::create_client(args.context.to_string())
+        Action::RestartDaemonSets | Action::DeleteDaemonSets => {
+            let d = k8sm8::daemonsets::get_all_daemonsets(client, &args.namespace)
                 .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let configmaps = k8sm8::configmaps::get_all_configmaps(client.clone(), &args.namespace)
+                .map_err(|e| CliError::Other(format!("Failed to get all daemonsets: {}", e)))?;
+            Ok(d.into_iter().filter_map(|x| x.metadata.name).collect())
+        }
+        Action::DisplaySecrets | Action::DeleteSecrets => {
+            let s = k8sm8::secrets::get_all_secrets(client, &args.namespace)
                 .await
-                .map_err(|e| CliError::Other(format!("Failed to get all ConfigMaps: {}", e)))?;
+                .map_err(|e| CliError::Other(format!("Failed to get all secrets: {}", e)))?;
+            Ok(s.into_iter().filter_map(|x| x.metadata.name).collect())
+        }
+        Action::DeleteServices => {
+            let s = k8sm8::services::get_all_services(client, &args.namespace)
+                .await
+                .map_err(|e| CliError::Other(format!("Failed to get all services: {}", e)))?;
+            Ok(s.into_iter().filter_map(|x| x.metadata.name).collect())
+        }
+        Action::DisplayEvents => Ok(vec![]),
+    }
+}
 
-            if configmaps.is_empty() {
-                println!("No ConfigMaps found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
+async fn run_external_action(
+    args: InteractiveArgs,
+    action: Action,
+    items: Vec<String>,
+    input: String,
+) -> Result<(), CliError> {
+    let client = k8sm8::create_client(args.context.to_string())
+        .await
+        .map_err(|e| CliError::Other(format!("Failed to create Kubernetes client: {}", e)))?;
 
-            let selected_configmaps = MultiSelect::new(
-                "Select ConfigMaps to display",
-                configmaps
-                    .iter()
-                    .map(|cm| cm.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select ConfigMaps: {}", e)))?;
-
-            for cm_name in selected_configmaps {
-                let cm = k8sm8::configmaps::get_configmap(client.clone(), &args.namespace, &cm_name)
-                    .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to get ConfigMap {}: {}", cm_name, e))
-                    })?;
-                //pretty print config map
+    match action {
+        Action::LogMerger => k8sm8::logs::log_merger(client, &args.namespace, items)
+            .await
+            .map_err(|e| CliError::Other(e.to_string()))?,
+        Action::LogStreamer => k8sm8::logs::log_streamer(client, &args.namespace, items)
+            .await
+            .map_err(|e| CliError::Other(e.to_string()))?,
+        Action::DisplayConfigMaps => {
+            for cm_name in items {
+                let cm =
+                    k8sm8::configmaps::get_configmap(client.clone(), &args.namespace, &cm_name)
+                        .await
+                        .map_err(|e| CliError::Other(e.to_string()))?;
                 println!(
                     "ConfigMap: {}\nData: {:?}\n",
                     cm.metadata.name.unwrap_or_default(),
@@ -189,22 +315,10 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 );
             }
         }
-        "Display Events" => {
-            let client = k8sm8::create_client(args.context.to_string())
+        Action::DisplayEvents => {
+            let events = k8sm8::events::get_all_events(client, &args.namespace)
                 .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let events = k8sm8::events::get_all_events(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all events: {}", e)))?;
-
-            if events.is_empty() {
-                println!("No events found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
+                .map_err(|e| CliError::Other(e.to_string()))?;
             for event in events {
                 log(
                     scribe_rust::Color::Green,
@@ -217,432 +331,115 @@ pub async fn execute(args: InteractiveArgs, selected_command: &str) -> Result<()
                 );
             }
         }
-        "Display Secrets" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let secrets = k8sm8::secrets::get_all_secrets(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all secrets: {}", e)))?;
-
-            if secrets.is_empty() {
-                println!("No secrets found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_secrets = MultiSelect::new(
-                "Select Secrets to display",
-                secrets
-                    .iter()
-                    .map(|s| s.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select Secrets: {}", e)))?;
-
-            for secret_name in selected_secrets {
-                let secret = k8sm8::secrets::get_secret(client.clone(), &args.namespace, &secret_name)
-                    .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to get Secret {}: {}", secret_name, e))
-                    })?;
-
-                // Pretty print secret data
+        Action::DisplaySecrets => {
+            for secret_name in items {
+                let secret =
+                    k8sm8::secrets::get_secret(client.clone(), &args.namespace, &secret_name)
+                        .await
+                        .map_err(|e| CliError::Other(e.to_string()))?;
                 secret.data.unwrap().iter().for_each(|(k, v)| {
-                    println!(
-                        "{}",
-                        &format!("{}: {}", k, String::from_utf8_lossy(v.0.as_ref()))
-                    );
+                    println!("{}: {}", k, String::from_utf8_lossy(v.0.as_ref()));
                 });
             }
         }
-        "Describe Pod" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-            if pods.is_empty() {
-                println!("No pods found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_pod = Select::new(
-                "Select a pod to describe",
-                pods.iter()
-                    .map(|p| p.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select pod: {}", e)))?;
-
-            println!("Describing pod {}...", selected_pod);
-
-            let status = std::process::Command::new("kubectl")
-                .arg("describe")
-                .arg(format!("pod/{}", selected_pod))
-                .arg("-n")
-                .arg(&args.namespace)
-                .status();
-
-            match status {
-                Ok(s) => println!("Describe process exited with: {}", s),
-                Err(e) => println!("Failed to run kubectl describe: {}", e),
+        Action::DescribePod => {
+            for pod in items {
+                println!("Describing pod {}...", pod);
+                let _ = std::process::Command::new("kubectl")
+                    .arg("describe")
+                    .arg(format!("pod/{}", pod))
+                    .arg("-n")
+                    .arg(&args.namespace)
+                    .status();
             }
         }
-        "Shell into Pod" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-            if pods.is_empty() {
-                println!("No pods found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_pod = Select::new(
-                "Select a pod to shell into",
-                pods.iter()
-                    .map(|p| p.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select pod: {}", e)))?;
-
-            let shell = Text::new("Enter shell (default: /bin/bash):")
-                .with_default("/bin/bash")
-                .prompt()
-                .map_err(|e| CliError::Other(format!("Failed to get shell: {}", e)))?;
-
-            println!("Starting shell session in {}...", selected_pod);
-
-            let status = std::process::Command::new("kubectl")
-                .arg("exec")
-                .arg("-it")
-                .arg(selected_pod)
-                .arg("-n")
-                .arg(&args.namespace)
-                .arg("--")
-                .arg(&shell)
-                .spawn();
-
-            match status {
-                Ok(mut child) => {
-                    let _ = child.wait();
-                }
-                Err(e) => println!("Failed to run kubectl exec: {}", e),
+        Action::ShellIntoPod => {
+            if let Some(pod) = items.first() {
+                let shell = if input.is_empty() {
+                    "/bin/bash"
+                } else {
+                    &input
+                };
+                println!("Starting shell session in {}...", pod);
+                let _ = std::process::Command::new("kubectl")
+                    .arg("exec")
+                    .arg("-it")
+                    .arg(pod)
+                    .arg("-n")
+                    .arg(&args.namespace)
+                    .arg("--")
+                    .arg(shell)
+                    .status();
             }
         }
-        "Restart Deployments" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let deployments = k8sm8::deployments::get_all_deployments(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all deployments: {}", e)))?;
-
-            if deployments.is_empty() {
-                println!("No deployments found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_deployments = MultiSelect::new(
-                "Select Deployments to restart",
-                deployments
-                    .iter()
-                    .map(|d| d.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select Deployments: {}", e)))?;
-
-            for dep_name in selected_deployments {
-                k8sm8::deployments::restart_deployment(client.clone(), &args.namespace, &dep_name)
+        Action::RestartDeployments => {
+            for dep in items {
+                k8sm8::deployments::restart_deployment(client.clone(), &args.namespace, &dep)
                     .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to restart Deployment {}: {}", dep_name, e))
-                    })?;
-                log(
-                    scribe_rust::Color::Green,
-                    "Success",
-                    &format!("Deployment '{}' restarted successfully", dep_name),
-                );
+                    .map_err(|e| CliError::Other(e.to_string()))?;
             }
         }
-        "Restart DaemonSets" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let daemonsets = k8sm8::daemonsets::get_all_daemonsets(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all daemonsets: {}", e)))?;
-
-            if daemonsets.is_empty() {
-                println!("No daemonsets found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_daemonsets = MultiSelect::new(
-                "Select DaemonSets to restart",
-                daemonsets
-                    .iter()
-                    .map(|d| d.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select DaemonSets: {}", e)))?;
-
-            for ds_name in selected_daemonsets {
-                k8sm8::daemonsets::restart_daemonset(client.clone(), &args.namespace, &ds_name)
+        Action::RestartDaemonSets => {
+            for ds in items {
+                k8sm8::daemonsets::restart_daemonset(client.clone(), &args.namespace, &ds)
                     .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to restart DaemonSet {}: {}", ds_name, e))
-                    })?;
-                log(
-                    scribe_rust::Color::Green,
-                    "Success",
-                    &format!("DaemonSet '{}' restarted successfully", ds_name),
-                );
+                    .map_err(|e| CliError::Other(e.to_string()))?;
             }
         }
-        "Port Forward" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let pods = k8sm8::pods::get_all_pods(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all pods: {}", e)))?;
-
-            if pods.is_empty() {
-                println!("No pods found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_pod = Select::new(
-                "Select a pod to port-forward",
-                pods.iter()
-                    .map(|p| p.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select pod: {}", e)))?;
-
-            let ports = Text::new("Enter ports (e.g. 8080:80):")
-                .prompt()
-                .map_err(|e| CliError::Other(format!("Failed to get ports: {}", e)))?;
-
-            println!("Starting port-forward for {} on {}...", selected_pod, ports);
-
-            let status = std::process::Command::new("kubectl")
-                .arg("port-forward")
-                .arg(format!("pod/{}", selected_pod))
-                .arg("-n")
-                .arg(&args.namespace)
-                .arg(&ports)
-                .status();
-
-            match status {
-                Ok(s) => println!("Port-forward process exited with: {}", s),
-                Err(e) => println!("Failed to run kubectl port-forward: {}", e),
+        Action::PortForward => {
+            if let Some(pod) = items.first() {
+                println!("Starting port-forward for {} on {}...", pod, input);
+                let _ = std::process::Command::new("kubectl")
+                    .arg("port-forward")
+                    .arg(format!("pod/{}", pod))
+                    .arg("-n")
+                    .arg(&args.namespace)
+                    .arg(&input)
+                    .status();
             }
         }
-        "Delete ConfigMaps" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let configmaps = k8sm8::configmaps::get_all_configmaps(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all ConfigMaps: {}", e)))?;
-
-            if configmaps.is_empty() {
-                println!("No ConfigMaps found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_configmaps = MultiSelect::new(
-                "Select ConfigMaps to delete",
-                configmaps
-                    .iter()
-                    .map(|cm| cm.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select ConfigMaps: {}", e)))?;
-
-            for cm_name in selected_configmaps {
-                k8sm8::configmaps::delete_configmap(client.clone(), &args.namespace, &cm_name)
+        Action::DeleteConfigMaps => {
+            for cm in items {
+                k8sm8::configmaps::delete_configmap(client.clone(), &args.namespace, &cm)
                     .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to delete ConfigMap {}: {}", cm_name, e))
-                    })?;
+                    .map_err(|e| CliError::Other(e.to_string()))?;
             }
         }
-        "Delete Deployments" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let deployments = k8sm8::deployments::get_all_deployments(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all deployments: {}", e)))?;
-
-            if deployments.is_empty() {
-                println!("No deployments found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_deployments = MultiSelect::new(
-                "Select Deployments to delete",
-                deployments
-                    .iter()
-                    .map(|d| d.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select Deployments: {}", e)))?;
-
-            for dep_name in selected_deployments {
-                k8sm8::deployments::delete_deployment(client.clone(), &args.namespace, &dep_name)
+        Action::DeleteDeployments => {
+            for dep in items {
+                k8sm8::deployments::delete_deployment(client.clone(), &args.namespace, &dep)
                     .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to delete Deployment {}: {}", dep_name, e))
-                    })?;
+                    .map_err(|e| CliError::Other(e.to_string()))?;
             }
         }
-        "Delete DaemonSets" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let daemonsets = k8sm8::daemonsets::get_all_daemonsets(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all daemonsets: {}", e)))?;
-
-            if daemonsets.is_empty() {
-                println!("No daemonsets found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_daemonsets = MultiSelect::new(
-                "Select DaemonSets to delete",
-                daemonsets
-                    .iter()
-                    .map(|d| d.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select DaemonSets: {}", e)))?;
-
-            for ds_name in selected_daemonsets {
-                k8sm8::daemonsets::delete_daemonset(client.clone(), &args.namespace, &ds_name)
+        Action::DeleteDaemonSets => {
+            for ds in items {
+                k8sm8::daemonsets::delete_daemonset(client.clone(), &args.namespace, &ds)
                     .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to delete DaemonSet {}: {}", ds_name, e))
-                    })?;
+                    .map_err(|e| CliError::Other(e.to_string()))?;
             }
         }
-        "Delete Services" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let services = k8sm8::services::get_all_services(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all services: {}", e)))?;
-
-            if services.is_empty() {
-                println!("No services found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_services = MultiSelect::new(
-                "Select Services to delete",
-                services
-                    .iter()
-                    .map(|s| s.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select Services: {}", e)))?;
-
-            for svc_name in selected_services {
-                k8sm8::services::delete_service(client.clone(), &args.namespace, &svc_name)
+        Action::DeletePods => {
+            for pod in items {
+                k8sm8::pods::delete_pod(client.clone(), &args.namespace, &pod)
                     .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to delete Service {}: {}", svc_name, e))
-                    })?;
+                    .map_err(|e| CliError::Other(e.to_string()))?;
             }
         }
-
-        "Delete Secrets" => {
-            let client = k8sm8::create_client(args.context.to_string())
-                .await
-                .map_err(|e| {
-                    CliError::Other(format!("Failed to create Kubernetes client: {}", e))
-                })?;
-
-            let secrets = k8sm8::secrets::get_all_secrets(client.clone(), &args.namespace)
-                .await
-                .map_err(|e| CliError::Other(format!("Failed to get all secrets: {}", e)))?;
-
-            if secrets.is_empty() {
-                println!("No secrets found in namespace '{}'.", args.namespace);
-                return Ok(());
-            }
-
-            let selected_secrets = MultiSelect::new(
-                "Select Secrets to delete",
-                secrets
-                    .iter()
-                    .map(|s| s.metadata.name.clone().unwrap_or_default())
-                    .collect::<Vec<_>>(),
-            )
-            .prompt()
-            .map_err(|e| CliError::Other(format!("Failed to select Secrets: {}", e)))?;
-
-            for secret_name in selected_secrets {
-                k8sm8::secrets::delete_secret(client.clone(), &args.namespace, &secret_name)
+        Action::DeleteServices => {
+            for svc in items {
+                k8sm8::services::delete_service(client.clone(), &args.namespace, &svc)
                     .await
-                    .map_err(|e| {
-                        CliError::Other(format!("Failed to delete Secret {}: {}", secret_name, e))
-                    })?;
+                    .map_err(|e| CliError::Other(e.to_string()))?;
             }
         }
-
-        &_ => todo!(),
-    };
-
+        Action::DeleteSecrets => {
+            for sec in items {
+                k8sm8::secrets::delete_secret(client.clone(), &args.namespace, &sec)
+                    .await
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+            }
+        }
+    }
     Ok(())
 }

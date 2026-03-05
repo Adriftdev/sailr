@@ -25,6 +25,7 @@ pub mod plan;
 pub mod provider;
 pub mod roomservice;
 pub mod templates;
+pub mod tui;
 pub mod utils;
 
 pub static LOGGER: Lazy<Arc<Logger>> = Lazy::new(|| Logger::default());
