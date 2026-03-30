@@ -163,11 +163,9 @@ async fn run_app(terminal: &mut crate::tui::Tui, app: &mut App) -> Result<(), Cl
                                             selected.push(item.clone());
                                         }
                                     }
-                                } else {
-                                    if let Some(idx) = app.selection_state.selected() {
-                                        if let Some(item) = items.get(idx) {
-                                            selected.push(item.clone());
-                                        }
+                                } else if let Some(idx) = app.selection_state.selected() {
+                                    if let Some(item) = items.get(idx) {
+                                        selected.push(item.clone());
                                     }
                                 }
 

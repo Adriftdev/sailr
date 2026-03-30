@@ -273,7 +273,7 @@ async fn main() -> Result<(), CliError> {
         }
         Commands::Infra(a) => match a {
             InfraCommands::Up(arg) => {
-                LOGGER.info(&format!("Creating a new environment"));
+                LOGGER.info("Creating a new environment");
                 if let Some(template_path) = arg.infra_template_path {
                     create_default_env_infra(arg.name, Some(template_path), arg.default_registry);
                 } else if let Some(provider) = arg.provider {
@@ -321,7 +321,7 @@ async fn main() -> Result<(), CliError> {
             }
         }
         Commands::Generate(arg) => {
-            LOGGER.info(&format!("Generating an environment"));
+            LOGGER.info("Generating an environment");
 
             let env = match Environment::load_from_file(&arg.name) {
                 Ok(env) => env,
@@ -334,22 +334,16 @@ async fn main() -> Result<(), CliError> {
             let mut services = env.list_services();
 
             if let Some(only_services) = arg.only {
-                services = services
-                    .into_iter()
-                    .filter(|s| only_services.contains(&s.name))
-                    .collect();
+                services.retain(|s| only_services.contains(&s.name));
             }
 
             if let Some(ignored_services) = arg.ignore {
-                services = services
-                    .into_iter()
-                    .filter(|s| !ignored_services.contains(&s.name))
-                    .collect();
+                services.retain(|s| !ignored_services.contains(&s.name));
             }
 
             generate(&arg.name, &env, services);
 
-            LOGGER.info(&format!("Generation Complete"));
+            LOGGER.info("Generation Complete");
         }
         Commands::Build(arg) => {
             let env = match Environment::load_from_file(&arg.name) {
@@ -397,17 +391,11 @@ async fn main() -> Result<(), CliError> {
             let mut services = env.list_services();
 
             if let Some(ref ignored_services) = arg.ignore {
-                services = services
-                    .into_iter()
-                    .filter(|s| !ignored_services.contains(&s.name))
-                    .collect();
+                services.retain(|s| !ignored_services.contains(&s.name));
             }
 
             if let Some(ref only_services) = arg.only {
-                services = services
-                    .into_iter()
-                    .filter(|s| only_services.contains(&s.name))
-                    .collect();
+                services.retain(|s| only_services.contains(&s.name));
             }
 
             if !arg.skip_build {
@@ -480,7 +468,7 @@ async fn main() -> Result<(), CliError> {
             ));
 
             // Validate service type
-            let valid_types = vec!["web-app", "worker", "database-client", "api"];
+            let valid_types = ["web-app", "worker", "database-client", "api"];
             if !valid_types.contains(&args.app_type.as_str()) {
                 LOGGER.warn(&format!(
                     "Unknown service type '{}'. Using default template. Valid types: {}",

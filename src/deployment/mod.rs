@@ -26,7 +26,7 @@ async fn apply_manifests_from_path(
         if file_path.is_file()
             && (file_path
                 .extension()
-                .map_or(false, |ext| ext == "yaml" || ext == "yml"))
+                .is_some_and(|ext| ext == "yaml" || ext == "yml"))
         {
             LOGGER.debug(&format!("Applying manifest: {:?}", file_path));
             let res =
@@ -120,7 +120,7 @@ pub async fn deploy(
             if file_path.is_file()
                 && (file_path
                     .extension()
-                    .map_or(false, |ext| ext == "yaml" || ext == "yml"))
+                    .is_some_and(|ext| ext == "yaml" || ext == "yml"))
             {
                 LOGGER.debug(&format!(
                     "Processing file for pre-deletion: {:?}",

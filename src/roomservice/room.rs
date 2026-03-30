@@ -56,19 +56,16 @@ impl RoomBuilder {
 
         for maybe_file in builder.build() {
             let file = maybe_file.unwrap();
-            match file.file_type() {
-                Some(entry) => {
-                    if entry.is_file() {
-                        if dump_scope {
-                            scope.push_str(file.path().to_str().unwrap());
-                            scope.push_str("\n");
-                        }
-
-                        hash.push_str(&hash_file(file.path(), BLAKE2S));
-                        hash.push_str("\n");
+            if let Some(entry) = file.file_type() {
+                if entry.is_file() {
+                    if dump_scope {
+                        scope.push_str(file.path().to_str().unwrap());
+                        scope.push('\n');
                     }
+
+                    hash.push_str(&hash_file(file.path(), BLAKE2S));
+                    hash.push('\n');
                 }
-                None => (),
             }
         }
 
@@ -82,13 +79,10 @@ impl RoomBuilder {
     fn prev_hash(&self) -> Option<String> {
         let mut path = String::new();
         path.push_str(&self.cache_dir);
-        path.push_str("/");
+        path.push('/');
         path.push_str(&self.name);
 
-        match fs::read_to_string(path) {
-            Ok(content) => Some(content),
-            Err(_) => None,
-        }
+        fs::read_to_string(path).ok()
     }
 
     pub fn set_errored(&mut self) {
@@ -98,7 +92,7 @@ impl RoomBuilder {
     pub fn write_hash(&self) {
         let mut path = String::new();
         path.push_str(&self.cache_dir);
-        path.push_str("/");
+        path.push('/');
         path.push_str(&self.name);
         let mut file = File::create(path).unwrap();
         match file.write_all(self.latest_hash.as_ref().unwrap().as_bytes()) {
@@ -115,11 +109,7 @@ impl RoomBuilder {
         } else {
             match prev {
                 Some(old_hash) => {
-                    if old_hash == curr {
-                        self.should_build = false;
-                    } else {
-                        self.should_build = true;
-                    }
+                    self.should_build = old_hash != curr;
                 }
                 None => self.should_build = true,
             }

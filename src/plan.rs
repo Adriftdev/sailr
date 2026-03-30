@@ -61,6 +61,12 @@ pub struct PlanSummary {
     pub no_change: usize,
 }
 
+impl Default for DeploymentPlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeploymentPlan {
     pub fn new() -> Self {
         Self {
@@ -436,7 +442,7 @@ fn analyze_manifest_file(
 
     // Parse YAML content
     let docs: Vec<Value> = serde_yaml::Deserializer::from_str(&content)
-        .map(|doc| Value::deserialize(doc))
+        .map(Value::deserialize)
         .collect::<Result<Vec<_>, _>>()?;
 
     for doc in docs {

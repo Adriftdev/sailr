@@ -98,13 +98,10 @@ impl Environment {
         let env = toml::from_str::<Self>(&contents)?; // Use destructuring assignment
 
         if env.schema_version != "0.2.0" {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "Invalid schema version: expected {}, found {}",
-                    "0.2.0", env.schema_version
-                ),
-            )));
+            return Err(Box::new(std::io::Error::other(format!(
+                "Invalid schema version: expected {}, found {}",
+                "0.2.0", env.schema_version
+            ))));
         }
 
         Ok(env)
@@ -115,34 +112,31 @@ impl Environment {
 
         let filemanager = filesystem::FileSystemManager::new(
             Path::new("./k8s/environments")
-                .join(self.name.to_string())
+                .join(&self.name)
                 .to_str()
                 .unwrap()
                 .to_string(),
         );
 
-        filemanager.create_file(&format!("config.toml"), &contents)?;
+        filemanager.create_file(&"config.toml".to_string(), &contents)?;
         Ok(())
     }
 
     pub fn get_variables(&self, service: &Service) -> Vec<(String, String)> {
-        let mut variables = Vec::new();
-        variables.push(("name".to_string(), self.name.clone()));
-        variables.push(("log_level".to_string(), self.log_level.clone()));
-        variables.push(("domain".to_string(), self.domain.clone()));
-
-        variables.push(("deployment_date".to_string(), get_current_timestamp()));
-
-        variables.push((
-            "default_replicas".to_string(),
-            self.default_replicas.to_string(),
-        ));
-        variables.push(("registry".to_string(), self.registry.clone()));
-        variables.push(("schema_version".to_string(), self.schema_version.clone()));
-
-        variables.push(("service_name".to_string(), service.name.clone()));
-
-        variables.push(("service_namespace".to_string(), service.namespace.clone()));
+        let mut variables = vec![
+            ("name".to_string(), self.name.clone()),
+            ("log_level".to_string(), self.log_level.clone()),
+            ("domain".to_string(), self.domain.clone()),
+            ("deployment_date".to_string(), get_current_timestamp()),
+            (
+                "default_replicas".to_string(),
+                self.default_replicas.to_string(),
+            ),
+            ("registry".to_string(), self.registry.clone()),
+            ("schema_version".to_string(), self.schema_version.clone()),
+            ("service_name".to_string(), service.name.clone()),
+            ("service_namespace".to_string(), service.namespace.clone()),
+        ];
 
         if let Some(path) = &service.path {
             variables.push(("service_path".to_string(), path.clone()));
@@ -198,6 +192,7 @@ pub struct Service {
 }
 
 impl Service {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &str,
         namespace: &str,
@@ -225,12 +220,12 @@ impl Serialize for Service {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut service = std::collections::HashMap::new();
         service.insert("name".to_string(), self.name.to_string());
-        if self.path.is_some() {
-            service.insert("path".to_string(), self.path.clone().unwrap());
+        if let Some(path) = &self.path {
+            service.insert("path".to_string(), path.clone());
         }
 
-        if self.build.is_some() {
-            service.insert("build".to_string(), self.build.clone().unwrap());
+        if let Some(build) = &self.build {
+            service.insert("build".to_string(), build.clone());
         }
 
         if self.tag.is_none()
@@ -244,7 +239,7 @@ impl Serialize for Service {
             || self.patch_version.is_none()
         {
             service.insert("version".to_string(), self.tag.clone().unwrap());
-        } else if self.tag.is_some() {
+        } else if let Some(tag) = &self.tag {
             service.insert(
                 "version".to_string(),
                 format!(
@@ -252,7 +247,7 @@ impl Serialize for Service {
                     self.major_version.unwrap(),
                     self.minor_version.unwrap(),
                     self.patch_version.unwrap(),
-                    self.tag.as_ref().unwrap()
+                    tag
                 ),
             );
         } else {

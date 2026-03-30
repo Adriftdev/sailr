@@ -13,7 +13,7 @@ struct ProcessedLog {
 
 fn process_log_line(tagged_log: TaggedLog) -> ProcessedLog {
     let (pod_name, log_line) = tagged_log;
-    let content = format!("{}", log_line);
+    let content = log_line.to_string();
 
     ProcessedLog { pod_name, content }
 }
@@ -202,7 +202,11 @@ pub async fn log_streamer(
                 let log_params = LogParams {
                     follow: true,
                     timestamps: true,
-                    since_seconds: if restart_count == 0 { Some(120) } else { Some(1) },
+                    since_seconds: if restart_count == 0 {
+                        Some(120)
+                    } else {
+                        Some(1)
+                    },
                     container: Some(container_name.clone()),
                     ..Default::default()
                 };
@@ -216,7 +220,7 @@ pub async fn log_streamer(
                             match line_res {
                                 Ok(line) => {
                                     let processed = process_log_line((tag.clone(), line));
-                                    if let Err(_) = tx.send(processed).await {
+                                    if tx.send(processed).await.is_err() {
                                         // Receiver dropped, stop everything
                                         return;
                                     }
@@ -225,13 +229,13 @@ pub async fn log_streamer(
                             }
                         }
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         // Only print connection error if it's the first attempt or intermittent
                         // to avoid spamming on hard failures (though spam is info here)
                         // eprintln!("Connection failed for {}: {}", pod_name, e);
                     }
                 }
-                
+
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 restart_count += 1;
             }
@@ -257,6 +261,6 @@ pub async fn log_streamer(
     for handle in handles {
         handle.abort();
     }
-    
+
     Ok(())
 }

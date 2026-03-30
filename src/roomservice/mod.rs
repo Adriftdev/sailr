@@ -19,7 +19,7 @@ pub struct RoomserviceBuilder {
 }
 
 impl RoomserviceBuilder {
-    pub fn new<'a>(project: String, cache_dir: String, force: bool) -> RoomserviceBuilder {
+    pub fn new(project: String, cache_dir: String, force: bool) -> RoomserviceBuilder {
         match std::fs::create_dir(&cache_dir) {
             Ok(_) => (),
             Err(e) => match e.kind() {
@@ -129,13 +129,9 @@ impl RoomserviceBuilder {
                 return;
             }
 
-            if self.before_all.is_some() {
+            if let Some(before_all) = &self.before_all {
                 log(scribe_rust::Color::Blue, "Executing Before All", "");
-                match exec_cmd(
-                    "./",
-                    &self.before_all.as_ref().unwrap(),
-                    &"Before All".to_string(),
-                ) {
+                match exec_cmd("./", before_all, "Before All") {
                     Ok(_) => (),
                     Err(_) => fail("Error in Before All hook, aborting roomservice run"),
                 }
@@ -182,14 +178,10 @@ impl RoomserviceBuilder {
                 });
             }
 
-            if self.after_all.is_some() {
+            if let Some(after_all) = &self.after_all {
                 log(scribe_rust::Color::Blue, "Executing After All", "");
 
-                match exec_cmd(
-                    "./",
-                    &self.after_all.as_ref().unwrap(),
-                    &"After All".to_string(),
-                ) {
+                match exec_cmd("./", after_all, "After All") {
                     Ok(_) => (),
                     Err(_) => fail("Error in After All hook, aborting roomservice run"),
                 }
@@ -222,19 +214,15 @@ fn exec_room_cmd(room: &mut RoomBuilder, cmd: Option<String>) {
     let cwd = room.path.to_owned();
     let name = &room.name;
     if should_build && !is_errored {
-        match cmd {
-            Some(cmd) => {
-                log(
-                    scribe_rust::Color::Yellow,
-                    "Starting",
-                    &format!("==> {}", name),
-                );
-                match exec_cmd(&cwd, &cmd, name) {
-                    Ok(_) => (),
-                    Err(_) => room.set_errored(),
-                }
+        if let Some(cmd) = cmd {
+            log(
+                scribe_rust::Color::Yellow,
+                "Starting",
+                &format!("==> {}", name),
+            );
+            if exec_cmd(&cwd, &cmd, name).is_err() {
+                room.set_errored();
             }
-            None => (),
         }
     }
 }
@@ -266,6 +254,9 @@ fn exec_cmd(cwd: &str, cmd: &str, name: &str) -> Result<(), ()> {
                 Err(())
             }
         },
-        _ => Err(fail("Unexpected error in exec_cmd")),
+        _ => {
+            fail("Unexpected error in exec_cmd");
+            Err(())
+        }
     }
 }

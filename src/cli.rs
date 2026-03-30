@@ -1,6 +1,6 @@
 use std::io;
 
-use clap::{clap_derive::Args, command, Command, Parser, Subcommand, ValueEnum};
+use clap::{clap_derive::Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Generator, Shell};
 
 #[derive(Debug, Parser)]

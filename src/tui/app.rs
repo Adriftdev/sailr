@@ -45,13 +45,13 @@ impl Action {
     }
 
     pub fn is_multi_select(&self) -> bool {
-        match self {
+        !matches!(
+            self,
             Action::DisplayEvents
-            | Action::DescribePod
-            | Action::ShellIntoPod
-            | Action::PortForward => false,
-            _ => true,
-        }
+                | Action::DescribePod
+                | Action::ShellIntoPod
+                | Action::PortForward
+        )
     }
 
     pub fn requires_input(&self) -> Option<&'static str> {
@@ -63,10 +63,7 @@ impl Action {
     }
 
     pub fn skips_selection(&self) -> bool {
-        match self {
-            Action::DisplayEvents => true,
-            _ => false,
-        }
+        matches!(self, Action::DisplayEvents)
     }
 }
 
