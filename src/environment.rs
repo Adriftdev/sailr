@@ -236,7 +236,7 @@ impl Serialize for Service {
             service.insert("version".to_string(), "latest".to_string());
         } else if self.major_version.is_some() {
             let mut version_str = self.major_version.unwrap().to_string();
-            
+
             if let Some(minor) = self.minor_version {
                 version_str.push_str(&format!(".{}", minor));
             }
@@ -612,7 +612,7 @@ mod tests {
 
         let deserialized: Service = from_value(json_data).unwrap();
         let serialized = serde_json::to_value(&deserialized).unwrap();
-        
+
         assert_eq!(
             serialized,
             json!({
