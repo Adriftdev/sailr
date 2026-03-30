@@ -90,7 +90,7 @@ impl Environment {
             Path::new("./k8s/environments")
                 .join(name)
                 .to_str()
-                .unwrap()
+                .ok_or("Invalid path for environment name")?
                 .to_string(),
         );
 
@@ -114,7 +114,7 @@ impl Environment {
             Path::new("./k8s/environments")
                 .join(&self.name)
                 .to_str()
-                .unwrap()
+                .ok_or("Invalid path for environment name")?
                 .to_string(),
         );
 
@@ -235,7 +235,7 @@ impl Serialize for Service {
         {
             service.insert("version".to_string(), "latest".to_string());
         } else if self.major_version.is_some() {
-            let mut version_str = self.major_version.unwrap().to_string();
+            let mut version_str = self.major_version.unwrap_or(0).to_string();
 
             if let Some(minor) = self.minor_version {
                 version_str.push_str(&format!(".{}", minor));
@@ -267,7 +267,9 @@ impl<'de> Deserialize<'de> for Service {
                 }
             };
 
-        let name = service.get("name").expect("Service name is required");
+        let name = service
+            .get("name")
+            .ok_or_else(|| serde::de::Error::missing_field("name"))?;
         let namespace = service
             .get("namespace")
             .unwrap_or(&"default".to_string())
@@ -275,7 +277,9 @@ impl<'de> Deserialize<'de> for Service {
 
         let path = service.get("path").map(|s| s.as_str()).unwrap_or("");
         let build = service.get("build");
-        let version = service.get("version").expect("Service version is required");
+        let version = service
+            .get("version")
+            .ok_or_else(|| serde::de::Error::missing_field("version"))?;
 
         let mut major_version: Option<i32> = None;
         let mut minor_version: Option<i32> = None;
@@ -370,43 +374,38 @@ impl Service {
             && self.minor_version.is_none()
             && self.patch_version.is_none()
         {
-            return self.tag.as_ref().unwrap().to_string();
+            return self.tag.clone().unwrap_or_else(|| "latest".to_string());
+        }
+
+        let mut version_str = self.major_version.unwrap_or(0).to_string();
+
+        if let Some(minor) = self.minor_version {
+            version_str.push_str(&format!(".{}", minor));
+        }
+
+        if let Some(patch) = self.patch_version {
+            version_str.push_str(&format!(".{}", patch));
         }
 
         if let Some(tag) = &self.tag {
-            format!(
-                "{}.{}.{}-{}",
-                self.major_version.unwrap_or(0),
-                self.minor_version.unwrap_or(0),
-                self.patch_version.unwrap_or(0),
-                tag
-            )
-        } else {
-            // Handle cases where patch_version is None
-            if self.patch_version.is_none() {
-                format!(
-                    "{}.{}",
-                    self.major_version.unwrap_or(0),
-                    self.minor_version.unwrap_or(0),
-                )
-            } else {
-                format!(
-                    "{}.{}.{}",
-                    self.major_version.unwrap_or(0),
-                    self.minor_version.unwrap_or(0),
-                    self.patch_version.unwrap_or(0)
-                )
-            }
+            version_str.push_str(&format!("-{}", tag));
         }
+
+        version_str
     }
 
     pub fn get_version_without_tag(&self) -> String {
-        format!(
-            "{}.{}.{}",
-            self.major_version.unwrap_or(0), // Changed from unwrap()
-            self.minor_version.unwrap_or(0), // Changed from unwrap()
-            self.patch_version.unwrap_or(0)  // Changed from unwrap()
-        )
+        let mut version_str = self.major_version.unwrap_or(0).to_string();
+
+        if let Some(minor) = self.minor_version {
+            version_str.push_str(&format!(".{}", minor));
+        }
+
+        if let Some(patch) = self.patch_version {
+            version_str.push_str(&format!(".{}", patch));
+        }
+
+        version_str
     }
 
     pub fn get_path(&self) -> String {
@@ -666,5 +665,47 @@ mod tests {
                 tag: Some("beta".to_string())
             }
         );
+    }
+
+    #[test]
+    fn test_regression_get_version() {
+        let s1 = Service {
+            name: "srv1".to_string(),
+            namespace: "default".to_string(),
+            path: None,
+            build: None,
+            major_version: Some(2601),
+            minor_version: None,
+            patch_version: None,
+            tag: Some("rc".to_string()),
+        };
+        assert_eq!(s1.get_version(), "2601-rc");
+        assert_eq!(s1.get_version_without_tag(), "2601");
+
+        let s2 = Service {
+            name: "srv2".to_string(),
+            namespace: "default".to_string(),
+            path: None,
+            build: None,
+            major_version: Some(2601),
+            minor_version: None,
+            patch_version: None,
+            tag: Some("rc.0.0".to_string()),
+        };
+        assert_eq!(s2.get_version(), "2601-rc.0.0");
+        assert_eq!(s2.get_version_without_tag(), "2601");
+
+        let s3 = Service {
+            name: "srv3".to_string(),
+            namespace: "default".to_string(),
+            path: None,
+            build: None,
+            major_version: Some(2601),
+            minor_version: Some(0),
+            patch_version: None,
+            tag: Some("rc".to_string()),
+        };
+        assert_eq!(s3.get_version(), "2601.0-rc");
+        assert_eq!(s3.get_version_without_tag(), "2601.0");
     }
 }
