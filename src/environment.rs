@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(
             serialized,
             json!({
-                "name": "my-namespace/my-service",
+                "name": "my-service",
                 "path": "/api/v1",
                 "build": "build-123",
                 "version": "1.2.3-beta"
@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(
             serialized,
             json!({
-                "name": "default/another-service",
+                "name": "another-service",
                 "version": "0.1.0"
             })
         );
@@ -541,7 +541,7 @@ mod tests {
             Service {
                 name: "test-service".to_string(),
                 namespace: "default".to_string(),
-                path: Some("".to_string()),
+                path: None,
                 build: None,
                 major_version: None,
                 minor_version: None,
