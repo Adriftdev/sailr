@@ -29,3 +29,10 @@ Our collaboration model is built on directness, factual accuracy, and a shared c
 * **Direct and Candid Collaboration:** Code reviews and discussions must be factual, straightforward, and grounded in reality.
 * **Constructive Correction:** Correct misconceptions gently but firmly. Our highest priority is maintaining the project's engineering standards.
 * **Focus on the Code:** Keep discussions centered on technical merit, architecture, and alignment with this constitution.
+
+## Amendments
+
+### Amendment I: Uncompromising Error Handling and Data Integrity
+* **Zero-Panic Policy:** Use of `.unwrap()` or `.expect()` is strictly forbidden in core domain logic, serialization, and deserialization routines. All fallible operations must propagate errors via `Result` or safely resolve to `None`. Panics are exclusively reserved for unrecoverable state corruption, never for unexpected input.
+* **Symmetrical Data Structures:** Any data model that interacts with external inputs (e.g., config parsing) must be predictably and safely serializable and deserializable. Silent dropping of valid data or state during parsing is considered a critical defect.
+* **Truth in Documentation:** Inline comments must strictly reflect the code's factual reality. Stale comments or misleading inline documentation that contradicts actual code behavior (especially within tests and domain rules) are worse than absent documentation and must be corrected as bugs.

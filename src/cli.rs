@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_deploy_args_strategy_default() {
-        // Assumes DeploymentStrategy::Restart is the default
+        // Assumes DeploymentStrategy::Rolling is the default
         let cli = Cli::try_parse_from(&[
             "sailr",
             "deploy",
