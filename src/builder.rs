@@ -31,12 +31,12 @@ impl Builder {
         let cache_dir = path_buf.to_str().unwrap().to_owned().to_string();
         let cfg = env.build.clone().unwrap_fail("No config found.");
 
-        if cfg.before_all.is_some() {
-            self.roomservice.add_before_all(&cfg.before_all.unwrap())
+        if let Some(before_all) = cfg.before_all {
+            self.roomservice.add_before_all(&before_all)
         }
 
-        if cfg.after_all.is_some() {
-            self.roomservice.add_after_all(&cfg.after_all.unwrap())
+        if let Some(after_all) = cfg.after_all {
+            self.roomservice.add_after_all(&after_all)
         }
 
         //check_room_provided_to_flag("only".to_string(), &self.only, &cfg.rooms);
@@ -47,21 +47,13 @@ impl Builder {
             let mut should_add = true;
 
             // @Note Check to see if it's in the only array
-            if self.only.len() > 0 {
-                if self.only.contains(&name) {
-                    should_add = true
-                } else {
-                    should_add = false
-                }
+            if !self.only.is_empty() {
+                should_add = self.only.contains(&name);
             }
 
             // @Note Check to see if it's in the ignore array
-            if self.ignore.len() > 0 {
-                if self.ignore.contains(&name) {
-                    should_add = false
-                } else {
-                    should_add = true
-                }
+            if !self.ignore.is_empty() {
+                should_add = !self.ignore.contains(&name);
             }
 
             if should_add {
@@ -87,13 +79,9 @@ impl Builder {
     }
 }
 
-pub fn split_matches<'a>(val: Option<String>) -> Vec<String> {
+pub fn split_matches(val: Option<String>) -> Vec<String> {
     match val {
-        Some(ignore_values) => ignore_values
-            .split(',')
-            .into_iter()
-            .map(|t| t.to_string())
-            .collect(),
+        Some(ignore_values) => ignore_values.split(',').map(|t| t.to_string()).collect(),
 
         None => vec![],
     }

@@ -14,11 +14,11 @@ pub struct Config {
 impl Config {
     pub fn new(
         name: &String,
-        config_filenames: &Vec<String>,
+        config_filenames: &[String],
         content: &String,
         dir: &String,
     ) -> Config {
-        let config_path = Path::new(&dir).join(&name);
+        let config_path = Path::new(&dir).join(name);
 
         Config {
             name: name.to_string(),

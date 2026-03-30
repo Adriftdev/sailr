@@ -30,6 +30,12 @@ pub struct TemplateManager {
     templates: Vec<(String, String)>,
 }
 
+impl Default for TemplateManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TemplateManager {
     // Creates a new TemplateManager instance.
     // The `./k8s/templates` directory is used to store Sailr's base templates.
@@ -103,7 +109,7 @@ impl TemplateManager {
         //if path is specified in path, read the templates from the path instead and append to the template_dirs
         if let Some(env) = &env {
             for service in &env.service_whitelist {
-                if service.path == None || service.path.clone().unwrap() == "".to_string() {
+                if service.path.is_none() || service.path.clone().unwrap() == "" {
                     template_dirs.insert(service.name.clone());
                     continue;
                 }
@@ -112,22 +118,21 @@ impl TemplateManager {
                     .path
                     .clone()
                     .unwrap()
-                    .split("/")
-                    .into_iter()
+                    .split('/')
                     .fold(Path::new(&"".to_string()).to_owned(), |acc, x| acc.join(x));
 
                 let parent = path.parent().unwrap().to_str().unwrap().to_string();
 
                 let service_template_dir = self.filemanager.read_dir(&parent)?;
-                template_dirs.remove(&path.parent().unwrap().to_str().unwrap().to_string());
+                template_dirs.remove(path.parent().unwrap().to_str().unwrap());
 
                 let templates = service_template_dir.into_iter().filter_map(|x| {
-                   let full_path = Path::new(path.parent().unwrap())
-                       .join(&x)
-                       .to_str()
-                       .unwrap()
-                       .to_string();
-                    
+                    let full_path = Path::new(path.parent().unwrap())
+                        .join(&x)
+                        .to_str()
+                        .unwrap()
+                        .to_string();
+
                     if self.filemanager.is_dir(&full_path) {
                         Some(full_path)
                     } else {
@@ -149,7 +154,7 @@ impl TemplateManager {
                     if template_name.contains(x.name.as_str()) {
                         return true;
                     }
-                    return false;
+                    false
                 }) {
                     continue;
                 }
@@ -217,7 +222,7 @@ impl TemplateManager {
 
                 let config_content = self
                     .filemanager
-                    .read_file(&config_file, Some(&"./k8s/templates".to_string()))
+                    .read_file(config_file, Some(&"./k8s/templates".to_string()))
                     .unwrap();
 
                 acc.0.push_str(&format!("\n  {:?}: |", &config));
@@ -244,14 +249,14 @@ impl TemplateManager {
         let mut content = template.content.clone();
 
         for (key, value) in variables {
-            content = content.replace(&format!("{{{{{}}}}}", key), &value);
+            content = content.replace(&format!("{{{{{}}}}}", key), value);
         }
 
         match self.validate_yaml(content.clone()) {
             Ok(_) => log(
                 Color::Green,
                 "Passed Check",
-                &format!("{}", template.full_path),
+                &template.full_path.to_string(),
             ),
             Err(e) => {
                 log(
@@ -269,7 +274,7 @@ impl TemplateManager {
     // This checks for correct formatting and structure but does not involve schema validation.
     // An error is returned if the YAML string is invalid.
     pub fn validate_yaml(&self, yaml: String) -> Result<(), Box<dyn Error>> {
-        let _ = match serde_yaml::from_str::<serde_yaml::Value>(&yaml) {
+        match serde_yaml::from_str::<serde_yaml::Value>(&yaml) {
             Ok(_) => (),
             Err(e) => {
                 let location = e.location().unwrap();
@@ -280,7 +285,7 @@ impl TemplateManager {
                 )
                 .into());
             }
-        };
+        }
         Ok(())
     }
 }

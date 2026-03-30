@@ -1,8 +1,8 @@
 use anyhow::Result;
 
+use chrono;
 use k8s_openapi::api::apps::v1::DaemonSet;
 use kube::{Api, Client};
-use chrono;
 
 use crate::errors::KubeError;
 
@@ -88,9 +88,7 @@ pub async fn restart_daemonset(
     daemonsets
         .patch(name, &kube::api::PatchParams::default(), &patch)
         .await
-        .map_err(|e| {
-            KubeError::ResourceUpdateFailed(format!("Failed to patch resource: {}", e))
-        })?;
+        .map_err(|e| KubeError::ResourceUpdateFailed(format!("Failed to patch resource: {}", e)))?;
 
     Ok(())
 }

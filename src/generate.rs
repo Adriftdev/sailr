@@ -13,6 +13,12 @@ pub struct Generator {
     config_maps: Vec<Config>,
 }
 
+impl Default for Generator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Generator {
     pub fn new() -> Generator {
         Generator {
@@ -23,7 +29,6 @@ impl Generator {
     }
 
     pub fn add_template(&mut self, original_template: &Template, new_content: String) {
-        if original_template.content.contains("ConfigMap") {}
         self.templates.push(Template::new(
             original_template.name.clone(),
             if original_template.content.contains("kind: ConfigMap") {
@@ -50,7 +55,7 @@ impl Generator {
         for config_map in &self.config_maps {
             let path = Path::new(name)
                 .join(&config_map.name)
-                .join(&"configMap.yaml".to_string())
+                .join("configMap.yaml")
                 .to_str()
                 .unwrap()
                 .to_string();

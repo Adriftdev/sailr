@@ -97,7 +97,7 @@ pub fn create_env_toml(
 
 pub fn get_env_toml(env_name: &str) -> Result<Environment, SailrError> {
     let env_name = env_name.to_lowercase().trim().replace(" ", "-");
-    let env = std::fs::read_to_string(&format!("{}{}.toml", ENV_DIR, env_name))?;
+    let env = std::fs::read_to_string(format!("{}{}.toml", ENV_DIR, env_name))?;
     let toml: Environment = from_str(&env)?;
     Ok(toml)
 }

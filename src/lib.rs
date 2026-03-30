@@ -28,7 +28,7 @@ pub mod templates;
 pub mod tui;
 pub mod utils;
 
-pub static LOGGER: Lazy<Arc<Logger>> = Lazy::new(|| Logger::default());
+pub static LOGGER: Lazy<Arc<Logger>> = Lazy::new(Logger::default);
 
 #[derive(Debug, Deserialize)]
 pub struct GlobalVars {
@@ -77,7 +77,7 @@ pub fn load_global_vars() -> Result<BTreeMap<String, String>, Box<dyn std::error
 
 pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
     let mut template_manager = TemplateManager::new();
-    let (templates, config_maps) = match template_manager.read_templates(Some(&env)) {
+    let (templates, config_maps) = match template_manager.read_templates(Some(env)) {
         Ok((templates, config_maps)) => (templates, config_maps),
         Err(e) => {
             println!("Error: {:?}", e);
@@ -96,10 +96,10 @@ pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
                 continue;
             }
             let content = template_manager
-                .replace_variables(template, &variables)
+                .replace_variables(template, variables)
                 .unwrap();
 
-            generator.add_template(&template, content)
+            generator.add_template(template, content)
         }
         for config in &config_maps {
             if config.name.split("/").last().unwrap() != service.name {
@@ -110,12 +110,8 @@ pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
         }
     }
     let res = generator.generate(&name.to_string());
-    match res {
-        Ok(_) => (),
-        Err(e) => {
-            println!(": {:?}", e);
-            return;
-        }
+    if let Err(e) = res {
+        println!(": {:?}", e);
     }
 }
 
@@ -126,15 +122,15 @@ pub fn create_default_env_config(
 ) {
     let mut vars = load_global_vars().unwrap();
 
-    if vars.len() == 0 {
+    if vars.is_empty() {
         vars.insert("default_registry".to_string(), "docker.io".to_string());
         vars.insert("default_domain".to_string(), "example.com".to_string());
     }
 
     vars.insert("name".to_string(), name.clone());
 
-    if registry.is_some() {
-        vars.insert("default_registry".to_string(), registry.unwrap());
+    if let Some(r) = registry {
+        vars.insert("default_registry".to_string(), r);
     }
 
     let file_manager = FileSystemManager::new("./k8s/environments".to_string());
@@ -160,7 +156,6 @@ pub fn create_default_env_config(
                 &generated_config,
             )
             .unwrap();
-        return;
     } else if let Some(config_template) = config_template {
         let content = file_manager
             .read_file(&config_template.clone(), Some(&"".to_string()))
@@ -178,7 +173,6 @@ pub fn create_default_env_config(
                 &generated_config,
             )
             .unwrap();
-        return;
     } else {
         let default_env_config = (
             "config.toml".to_string(),
@@ -206,22 +200,21 @@ pub fn create_default_env_infra(
 ) {
     let mut vars = load_global_vars().unwrap();
 
-    if vars.len() == 0 {
+    if vars.is_empty() {
         vars.insert("default_registry".to_string(), "docker.io".to_string());
         vars.insert("default_domain".to_string(), "example.com".to_string());
     }
 
     vars.insert("name".to_string(), name.clone());
 
-    if registry.is_some() {
-        println!("Registry: {:?}", registry);
-        vars.insert("default_registry".to_string(), registry.unwrap());
+    if let Some(r) = registry {
+        println!("Registry: {:?}", Some(&r));
+        vars.insert("default_registry".to_string(), r);
     }
 
     println!("Vars: {:?}", vars);
 
     if let Some(config_template) = infra_template {
         Infra::use_template(&name, &config_template, &mut vars);
-        return;
     }
 }

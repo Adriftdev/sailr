@@ -50,7 +50,6 @@ pub async fn create_client(context: String) -> Result<kube::Client, KubeError> {
     config.read_timeout = Some(Duration::from_secs(30));
     config.write_timeout = Some(Duration::from_secs(30));
 
-
     let client = Client::try_from(config)
         .map_err(|e| KubeError::UnexpectedError(format!("Failed to create client: {}", e)))?;
 
@@ -71,7 +70,11 @@ pub async fn get_cluster_resources(
     let discovery = match tokio::time::timeout(Duration::from_secs(10), discovery.run()).await {
         Ok(Ok(d)) => d,
         Ok(Err(e)) => return Err(anyhow::anyhow!("Failed to discover API resources: {}", e)),
-        Err(_) => return Err(anyhow::anyhow!("Failed to discover API resources: timed out")),
+        Err(_) => {
+            return Err(anyhow::anyhow!(
+                "Failed to discover API resources: timed out"
+            ))
+        }
     };
 
     let gvk = if let Some(tm) = resource_type.types.clone() {
@@ -145,8 +148,7 @@ pub async fn apply(
             .metadata
             .namespace
             .as_deref()
-            .or(Some("default"))
-            .unwrap()
+            .unwrap_or("default")
             .to_string();
         name = obj.metadata.name.clone().unwrap_or_default();
         let gvk = if let Some(tm) = &obj.types {
@@ -161,7 +163,7 @@ pub async fn apply(
                 "cannot apply object without valid TypeMeta {:?}",
                 &obj
             ));
-            LOGGER.error(&format!("please add apiVersion and kind to the object"));
+            LOGGER.error("please add apiVersion and kind to the object");
             continue;
         };
         let name = &obj.metadata.name;
