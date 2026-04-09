@@ -63,12 +63,12 @@ impl Builder {
                     cache_dir.clone(),
                     room_config.include,
                     Hooks {
-                        before: room_config.before,
-                        before_synchronously: room_config.before_synchronous,
-                        run_synchronously: room_config.run_synchronous,
-                        run_parallel: room_config.run_parallel,
-                        after: room_config.after,
-                        finally: room_config.finally,
+                        before: inject_vars(room_config.before, &name, env),
+                        before_synchronously: inject_vars(room_config.before_synchronous, &name, env),
+                        run_synchronously: inject_vars(room_config.run_synchronous, &name, env),
+                        run_parallel: inject_vars(room_config.run_parallel, &name, env),
+                        after: inject_vars(room_config.after, &name, env),
+                        finally: inject_vars(room_config.finally, &name, env),
                     },
                 ))
             }
@@ -84,5 +84,19 @@ pub fn split_matches(val: Option<String>) -> Vec<String> {
         Some(ignore_values) => ignore_values.split(',').map(|t| t.to_string()).collect(),
 
         None => vec![],
+    }
+}
+
+fn inject_vars(script: Option<String>, name: &str, env: &crate::environment::Environment) -> Option<String> {
+    if let Some(mut s) = script {
+        if s.contains("{{") {
+            let version = env.service_whitelist.iter().find(|srv| srv.name == name).and_then(|srv| Some(srv.major_version.map(|m| format!("{}.{}.{}", m, srv.minor_version.unwrap_or(0), srv.patch_version.unwrap_or(0))))).unwrap_or_else(|| Some("latest".to_string()));
+            s = s.replace("{{ registry }}", &env.registry);
+            s = s.replace("{{ name }}", name);
+            s = s.replace("{{ version }}", version.as_deref().unwrap_or("latest"));
+        }
+        Some(s)
+    } else {
+        None
     }
 }

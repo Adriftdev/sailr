@@ -701,7 +701,10 @@ async fn main() -> Result<(), CliError> {
                 }
             }
         }
+        Commands::Bump(arg) => handle_bump(arg)?,
+        Commands::Lint(arg) => handle_lint(arg)?,
         Commands::Interactive(args) => {
+
             // Handle interactive commands
             sailr::interactive::main_menu(args)
                 .await
@@ -710,5 +713,59 @@ async fn main() -> Result<(), CliError> {
         }
     }
 
+    Ok(())
+}
+
+fn handle_bump(arg: sailr::cli::BumpArgs) -> Result<(), CliError> {
+    use toml_edit::{DocumentMut, value};
+    let env_path = std::path::Path::new("./k8s/environments").join(&arg.name).join("config.toml");
+    let content = std::fs::read_to_string(&env_path).map_err(|e| CliError::Other(e.to_string()))?;
+    let mut doc = content.parse::<DocumentMut>().map_err(|e| CliError::Other(e.to_string()))?;
+    
+    if let Some(services) = doc["service_whitelist"].as_array_of_tables_mut() {
+        let mut found = false;
+        for service in services.iter_mut() {
+            if let Some(name) = service.get("name") {
+                if name.as_str() == Some(arg.service.as_str()) {
+                    service["version"] = value(arg.version.clone());
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            return Err(CliError::Other(format!("Service {} not found in environment {}", arg.service, arg.name)));
+        }
+    } else {
+        return Err(CliError::Other("Invalid config structure".to_string()));
+    }
+    
+    std::fs::write(&env_path, doc.to_string()).map_err(|e| CliError::Other(e.to_string()))?;
+    sailr::LOGGER.info(&format!("Successfully bumped {} to {} in {}", arg.service, arg.version, arg.name));
+    Ok(())
+}
+
+fn handle_lint(arg: sailr::cli::LintArgs) -> Result<(), CliError> {
+    let env = sailr::environment::Environment::load_from_file(&arg.name).map_err(|e| CliError::Other(e.to_string()))?;
+    sailr::LOGGER.info(&format!("Linting environment '{}'...", arg.name));
+    let mut warnings = 0;
+    
+    if env.schema_version != "0.3.0" && env.schema_version != "0.2.0" {
+        sailr::LOGGER.warn(&format!("Schema version {} is deprecated or unrecognized.", env.schema_version));
+        warnings += 1;
+    }
+    
+    for service in &env.service_whitelist {
+        if service.tag.is_none() && service.major_version.is_none() {
+            sailr::LOGGER.warn(&format!("Service '{}' has an empty version string.", service.name));
+            warnings += 1;
+        }
+    }
+    
+    if warnings == 0 {
+        sailr::LOGGER.info("Lint passed with no warnings. Environment config is healthy.");
+    } else {
+        sailr::LOGGER.warn(&format!("Lint finished with {} warnings.", warnings));
+    }
     Ok(())
 }

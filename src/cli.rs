@@ -36,6 +36,10 @@ pub enum Commands {
     AddService(AddServiceArgs),
     /// Enter interactive terminal interface cli mode
     Interactive(InteractiveArgs),
+    /// Bump the version of a service
+    Bump(BumpArgs),
+    /// Lint an environment configuration
+    Lint(LintArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -491,4 +495,20 @@ mod tests {
         ]);
         assert!(result.is_err());
     }
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct BumpArgs {
+    #[arg(short, long)]
+    pub name: String,
+    #[arg(short, long)]
+    pub service: String,
+    #[arg(short, long)]
+    pub version: String,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct LintArgs {
+    #[arg(short, long)]
+    pub name: String,
 }
