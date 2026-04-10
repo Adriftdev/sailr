@@ -312,20 +312,8 @@ async fn fetch_items(args: &InteractiveArgs, action: &Action) -> Result<Vec<Stri
             match crate::environment::Environment::load_from_file(env_name) {
                 Ok(env) => {
                     let mut srvs = Vec::new();
-                    for s in env.service_whitelist {
-                        srvs.push(format!(
-                            "{} (v{})",
-                            s.name,
-                            s.tag
-                                .clone()
-                                .or(s.major_version.map(|m| format!(
-                                    "{}.{}.{}",
-                                    m,
-                                    s.minor_version.unwrap_or(0),
-                                    s.patch_version.unwrap_or(0)
-                                )))
-                                .unwrap_or("latest".to_string())
-                        ));
+                    for s in env.services {
+                        srvs.push(format!("{} (v{})", s.name, s.version));
                     }
                     Ok(srvs)
                 }

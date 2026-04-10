@@ -1,11 +1,13 @@
 pub mod k8sm8;
 use crate::deployment::k8sm8::deployments::delete_deployment;
 use crate::deployment::k8sm8::multidoc_deserialize;
+use crate::environment::{Environment, Service};
 use crate::{cli::DeploymentStrategy, deployment::k8sm8::daemonsets::delete_daemonset};
 use anyhow::Result;
 use kube::core::DynamicObject;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use walkdir::WalkDir;
 
 use crate::{errors::DeployError, LOGGER};
@@ -36,6 +38,53 @@ async fn apply_manifests_from_path(
     }
 
     Ok(applied_manifests)
+}
+
+fn replace_template_var(input: &str, key: &str, value: &str) -> String {
+    input
+        .replace(&format!("{{{{ {} }}}}", key), value)
+        .replace(&format!("{{{{{}}}}}", key), value)
+}
+
+fn render_service_hook(hook: &str, env: &Environment, service: &Service) -> String {
+    let namespace = service.namespace_or(&env.name);
+    let rendered = replace_template_var(hook, "name", &service.name);
+    let rendered = replace_template_var(&rendered, "version", &service.version);
+    replace_template_var(&rendered, "namespace", namespace)
+}
+
+fn run_service_hook(
+    stage: &str,
+    hook: &str,
+    env: &Environment,
+    service: &Service,
+) -> Result<(), DeployError> {
+    let rendered_hook = render_service_hook(hook, env, service);
+    LOGGER.info(&format!(
+        "Running {} hook for service '{}': {}",
+        stage, service.name, rendered_hook
+    ));
+
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&rendered_hook)
+        .output()
+        .map_err(|e| {
+            DeployError::ManifestApplicationFailed(format!(
+                "Failed to execute {} hook for service '{}': {}",
+                stage, service.name, e
+            ))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DeployError::ManifestApplicationFailed(format!(
+            "{} hook failed for service '{}': {}",
+            stage, service.name, stderr
+        )));
+    }
+
+    Ok(())
 }
 
 /// Helper function to deserialize a YAML document and delete the resource if it's a target kind.
@@ -94,6 +143,13 @@ pub async fn deploy(
         ctx, env_name, strategy
     ));
 
+    let env = Environment::load_from_file(&env_name.to_string()).map_err(|e| {
+        DeployError::EnvironmentDeploymentFailed(format!(
+            "Failed to load environment '{}': {}",
+            env_name, e
+        ))
+    })?;
+
     let client = k8sm8::create_client(ctx).await?;
     let discovery = kube::Discovery::new(client.clone())
         .run()
@@ -129,19 +185,14 @@ pub async fn deploy(
                 if let Ok(yaml_content) = fs::read_to_string(file_path) {
                     if let Ok(docs) = multidoc_deserialize(&yaml_content).await {
                         for doc in docs {
-                            // Use the refactored helper function to reduce duplication
-                            delete_workload_if_matches(
-                                doc,
-                                &client,
-                                &["Deployment", "DaemonSet"], // Easily extend this list
-                            )
-                            .await
-                            .map_err(|e| {
-                                DeployError::ManifestApplicationFailed(format!(
-                                    "Failed during pre-deletion step: {}",
-                                    e
-                                ))
-                            })?;
+                            delete_workload_if_matches(doc, &client, &["Deployment", "DaemonSet"])
+                                .await
+                                .map_err(|e| {
+                                    DeployError::ManifestApplicationFailed(format!(
+                                        "Failed during pre-deletion step: {}",
+                                        e
+                                    ))
+                                })?;
                         }
                     }
                 }
@@ -149,10 +200,45 @@ pub async fn deploy(
         }
     }
 
-    // Call the simplified, non-recursive apply function
-    let _manifest = apply_manifests_from_path(path.as_path(), client.clone(), &discovery).await?;
+    let mut applied_total = 0usize;
 
-    LOGGER.info("Deployed successfully!");
+    for service in &env.services {
+        let service_path = path.join(service.get_path());
+        if !service_path.exists() {
+            LOGGER.warn(&format!(
+                "Generated manifests not found for service '{}': {:?}",
+                service.name, service_path
+            ));
+            continue;
+        }
+
+        if let Some(hooks) = &service.hooks {
+            if let Some(pre_deploy) = &hooks.pre_deploy {
+                run_service_hook("pre_deploy", pre_deploy, &env, service)?;
+            }
+        }
+
+        let applied =
+            apply_manifests_from_path(service_path.as_path(), client.clone(), &discovery).await?;
+        applied_total += applied.len();
+
+        if let Some(hooks) = &service.hooks {
+            if let Some(post_deploy) = &hooks.post_deploy {
+                run_service_hook("post_deploy", post_deploy, &env, service)?;
+            }
+        }
+    }
+
+    // Fallback for legacy/generated layouts where manifests are not grouped by service directory.
+    if applied_total == 0 {
+        let applied = apply_manifests_from_path(path.as_path(), client.clone(), &discovery).await?;
+        applied_total += applied.len();
+    }
+
+    LOGGER.info(&format!(
+        "Deployed successfully! Applied {} manifests.",
+        applied_total
+    ));
 
     Ok(())
 }

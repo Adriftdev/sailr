@@ -1,25 +1,30 @@
 use std::path::Path;
 
-use serde;
-use serde::ser::Serialize;
-use serde::{Deserialize, Deserializer, Serializer};
+use serde::{Deserialize, Deserializer};
 use toml::Value;
 
 use crate::filesystem;
 use crate::roomservice::config::Config;
 use crate::utils::get_current_timestamp;
+use crate::LOGGER;
+
+const SCHEMA_V02: &str = "0.2.0";
+const SCHEMA_V03: &str = "0.3.0";
+const SCHEMA_V04: &str = "0.4.0";
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Environment {
     pub schema_version: String,
     pub name: String,
     pub log_level: String,
-    pub service_whitelist: Vec<Service>,
+    #[serde(rename = "service", alias = "service_whitelist", default)]
+    pub services: Vec<Service>,
     pub domain: String,
     pub default_replicas: u8,
     pub registry: String,
-    pub build: Option<Config>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
+    #[serde(rename = "build", default, skip_serializing)]
+    legacy_build: Option<Config>,
 }
 
 impl Environment {
@@ -29,35 +34,35 @@ impl Environment {
     // A `FileSystemManager` is used to manage access and manipulation of environment configuration files.
     pub fn new(name: &str) -> Self {
         Self {
-            schema_version: "0.2.0".to_string(),
+            schema_version: SCHEMA_V04.to_string(),
             name: name.to_string(),
             log_level: "INFO".to_string(),
-            service_whitelist: Vec::new(),
+            services: Vec::new(),
             domain: "localhost".to_string(),
             default_replicas: 1,
             registry: "docker.io".to_string(),
-            build: None,
             environment_variables: Some(Vec::new()),
+            legacy_build: None,
         }
     }
 
     pub fn get_service(&self, name: &str) -> Option<&Service> {
-        self.service_whitelist.iter().find(|s| s.name == name)
+        self.services.iter().find(|s| s.name == name)
     }
 
     // Returns a list of services in the environment.
     pub fn list_services(&self) -> Vec<&Service> {
-        self.service_whitelist.iter().collect()
+        self.services.iter().collect()
     }
 
     // Adds a service to the environment.
     pub fn add_service(&mut self, service: Service) {
-        self.service_whitelist.push(service);
+        self.services.push(service);
     }
 
     // Removes a service from the environment.
     pub fn remove_service(&mut self, name: &str) {
-        self.service_whitelist.retain(|s| s.name != name);
+        self.services.retain(|s| s.name != name);
     }
 
     // Returns an environment variable from the environment.
@@ -83,6 +88,75 @@ impl Environment {
         }
     }
 
+    fn validate_schema_constraints(
+        raw: &Value,
+        schema_version: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if schema_version == SCHEMA_V04 {
+            if raw.get("build").is_some() {
+                return Err(Box::new(std::io::Error::other(
+                    "Schema 0.4.0 does not allow top-level [build.rooms]. Move build config to [[service]].[service.build].",
+                )));
+            }
+
+            if raw.get("service_whitelist").is_some() {
+                return Err(Box::new(std::io::Error::other(
+                    "Schema 0.4.0 requires [[service]] instead of [[service_whitelist]].",
+                )));
+            }
+
+            if let Some(services) = raw.get("service").and_then(|v| v.as_array()) {
+                for service in services {
+                    if service.get("path").is_some() {
+                        return Err(Box::new(std::io::Error::other(
+                            "Schema 0.4.0 does not allow top-level service.path. Use [service.build].relies_on instead.",
+                        )));
+                    }
+
+                    if service.get("build").is_some_and(Value::is_str) {
+                        return Err(Box::new(std::io::Error::other(
+                            "Schema 0.4.0 requires [service.build] table syntax; string shorthand is legacy.",
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn apply_legacy_build_fallback(&mut self) {
+        let Some(legacy_build) = self.legacy_build.take() else {
+            return;
+        };
+
+        for (name, room_config) in legacy_build.rooms {
+            let mapped_build = ServiceBuildConfig {
+                path: room_config.path,
+                relies_on: None,
+                before: room_config
+                    .before
+                    .or(room_config.run_parallel)
+                    .or(room_config.run_synchronous)
+                    .or(room_config.before_synchronous),
+                after: room_config.after.or(room_config.finally),
+            };
+
+            match self.services.iter_mut().find(|s| s.name == name) {
+                Some(service) => {
+                    if service.build.is_none() {
+                        service.build = Some(mapped_build);
+                    }
+                }
+                None => {
+                    let mut service = Service::new(&name, None, "latest");
+                    service.build = Some(mapped_build);
+                    self.services.push(service);
+                }
+            }
+        }
+    }
+
     // Loads the environment configuration from the `./k8s/environments/<name>/config.toml` file, overriding default values set in the constructor.
     // An error is returned if the file is missing, cannot be read, or contains an incompatible schema version.
     pub fn load_from_file(name: &String) -> Result<Self, Box<dyn std::error::Error>> {
@@ -95,14 +169,34 @@ impl Environment {
         );
 
         let contents = filemanager.read_file(&"config.toml".to_string(), None)?;
-        let env = toml::from_str::<Self>(&contents)?; // Use destructuring assignment
+        let raw = toml::from_str::<Value>(&contents)?;
+        let schema_version = raw
+            .get("schema_version")
+            .and_then(Value::as_str)
+            .ok_or("Missing schema_version in environment config")?;
 
-        if env.schema_version != "0.2.0" {
+        if schema_version != SCHEMA_V02
+            && schema_version != SCHEMA_V03
+            && schema_version != SCHEMA_V04
+        {
             return Err(Box::new(std::io::Error::other(format!(
-                "Invalid schema version: expected {}, found {}",
-                "0.2.0", env.schema_version
+                "Invalid schema version: expected one of [{}, {}, {}], found {}",
+                SCHEMA_V02, SCHEMA_V03, SCHEMA_V04, schema_version
             ))));
         }
+
+        Self::validate_schema_constraints(&raw, schema_version)?;
+
+        let mut env = toml::from_str::<Self>(&contents)?;
+
+        if env.schema_version == SCHEMA_V02 || env.schema_version == SCHEMA_V03 {
+            LOGGER.warn(&format!(
+                "Schema version {} is legacy. Please migrate to {}.",
+                env.schema_version, SCHEMA_V04
+            ));
+        }
+
+        env.apply_legacy_build_fallback();
 
         Ok(env)
     }
@@ -135,10 +229,15 @@ impl Environment {
             ("registry".to_string(), self.registry.clone()),
             ("schema_version".to_string(), self.schema_version.clone()),
             ("service_name".to_string(), service.name.clone()),
-            ("service_namespace".to_string(), service.namespace.clone()),
+            (
+                "service_namespace".to_string(),
+                service.namespace_or(&self.name).to_string(),
+            ),
         ];
 
-        if let Some(path) = &service.path {
+        if let Some(build) = &service.build {
+            variables.push(("service_path".to_string(), build.path.clone()));
+        } else if let Some(path) = &service.template_path {
             variables.push(("service_path".to_string(), path.clone()));
         }
 
@@ -146,13 +245,13 @@ impl Environment {
 
         if let Some(env_vars) = &self.environment_variables {
             env_vars.iter().for_each(|e| {
-                variables.push((
-                    e.name.clone(),
-                    e.value
-                        .clone()
-                        .unwrap_or(Value::String("".to_string()))
-                        .to_string(),
-                ))
+                let rendered_value = match e.value.clone() {
+                    Some(Value::String(s)) => s,
+                    Some(v) => v.to_string(),
+                    None => String::new(),
+                };
+
+                variables.push((e.name.clone(), rendered_value));
             })
         }
 
@@ -179,536 +278,286 @@ impl EnvironmentVariable {
     }
 }
 
-#[derive(Debug, Clone)]
+fn default_service_version() -> String {
+    "latest".to_string()
+}
+
+fn deserialize_build_config<'de, D>(deserializer: D) -> Result<Option<ServiceBuildConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let maybe_value = Option::<Value>::deserialize(deserializer)?;
+
+    match maybe_value {
+        None => Ok(None),
+        Some(Value::String(path)) => Ok(Some(ServiceBuildConfig {
+            path,
+            relies_on: None,
+            before: None,
+            after: None,
+        })),
+        Some(value) => value
+            .try_into::<ServiceBuildConfig>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct Service {
     pub name: String,
-    pub namespace: String,
-    pub path: Option<String>,
-    pub build: Option<String>,
-    pub major_version: Option<i32>,
-    pub minor_version: Option<i32>,
-    pub patch_version: Option<i32>,
-    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default = "default_service_version")]
+    pub version: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_build_config",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub build: Option<ServiceBuildConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<ServiceHooks>,
+    #[serde(default, alias = "path", skip_serializing)]
+    pub template_path: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
+pub struct ServiceBuildConfig {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relies_on: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
+pub struct ServiceHooks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_deploy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_deploy: Option<String>,
 }
 
 impl Service {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        name: &str,
-        namespace: &str,
-        path: Option<&str>,
-        build: Option<&str>,
-        major_version: Option<i32>,
-        minor_version: Option<i32>,
-        patch_version: Option<i32>,
-        tag: Option<String>,
-    ) -> Self {
+    pub fn new(name: &str, namespace: Option<&str>, version: &str) -> Self {
         Self {
             name: name.to_string(),
-            namespace: namespace.to_string(),
-            path: path.map(|p| p.to_string()),
-            build: build.map(|b| b.to_string()),
-            major_version,
-            minor_version,
-            patch_version,
-            tag,
+            namespace: namespace.map(|ns| ns.to_string()),
+            version: version.to_string(),
+            build: None,
+            hooks: None,
+            template_path: None,
         }
     }
-}
 
-impl Serialize for Service {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut service = std::collections::HashMap::new();
-        service.insert("name".to_string(), self.name.to_string());
-        if let Some(path) = &self.path {
-            service.insert("path".to_string(), path.clone());
-        }
-
-        if let Some(build) = &self.build {
-            service.insert("build".to_string(), build.clone());
-        }
-
-        if self.tag.is_none()
-            && self.major_version.is_none()
-            && self.minor_version.is_none()
-            && self.patch_version.is_none()
-        {
-            service.insert("version".to_string(), "latest".to_string());
-        } else if self.major_version.is_some() {
-            let mut version_str = self.major_version.unwrap_or(0).to_string();
-
-            if let Some(minor) = self.minor_version {
-                version_str.push_str(&format!(".{}", minor));
-            }
-            if let Some(patch) = self.patch_version {
-                version_str.push_str(&format!(".{}", patch));
-            }
-            if let Some(tag) = &self.tag {
-                version_str.push_str(&format!("-{}", tag));
-            }
-            service.insert("version".to_string(), version_str);
-        } else if let Some(tag) = &self.tag {
-            service.insert("version".to_string(), tag.clone());
-        } else {
-            service.insert("version".to_string(), "latest".to_string());
-        }
-        service.serialize(serializer)
+    pub fn namespace_or<'a>(&'a self, default_namespace: &'a str) -> &'a str {
+        self.namespace.as_deref().unwrap_or(default_namespace)
     }
-}
 
-impl<'de> Deserialize<'de> for Service {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let service: std::collections::HashMap<String, String> =
-            match serde::Deserialize::deserialize(deserializer) {
-                Ok(service) => service,
-                Err(e) => {
-                    println!("Error deserializing service: {}", e);
-                    return Err(e);
-                }
-            };
-
-        let name = service
-            .get("name")
-            .ok_or_else(|| serde::de::Error::missing_field("name"))?;
-        let namespace = service
-            .get("namespace")
-            .unwrap_or(&"default".to_string())
-            .to_string();
-
-        let path = service.get("path").map(|s| s.as_str()).unwrap_or("");
-        let build = service.get("build");
-        let version = service
-            .get("version")
-            .ok_or_else(|| serde::de::Error::missing_field("version"))?;
-
-        let mut major_version: Option<i32> = None;
-        let mut minor_version: Option<i32> = None;
-        let mut patch_version: Option<i32> = None;
-        let tag: Option<String>;
-
-        let is_semver_like = version.chars().next().map_or(false, |c| c.is_ascii_digit());
-        let mut valid_semver = true;
-
-        if is_semver_like {
-            let (base, parsed_tag) = match version.split_once('-') {
-                Some((b, t)) => (b, Some(t.to_string())),
-                None => (version.as_str(), None),
-            };
-
-            let mut parts = base.split('.');
-
-            if let Some(major_str) = parts.next() {
-                if let Ok(major) = major_str.parse::<i32>() {
-                    major_version = Some(major);
-
-                    if let Some(minor_str) = parts.next() {
-                        if let Ok(minor) = minor_str.parse::<i32>() {
-                            minor_version = Some(minor);
-
-                            if let Some(patch_str) = parts.next() {
-                                if let Ok(patch) = patch_str.parse::<i32>() {
-                                    patch_version = Some(patch);
-
-                                    if parts.next().is_some() {
-                                        valid_semver = false;
-                                    }
-                                } else {
-                                    valid_semver = false;
-                                }
-                            }
-                        } else {
-                            valid_semver = false;
-                        }
-                    }
-                } else {
-                    valid_semver = false;
-                }
-            } else {
-                valid_semver = false;
-            }
-
-            if valid_semver {
-                // FIX: Instead of stripping the base and just returning the parsed tag, 
-                // return the ENTIRE exact string exactly as written in the TOML.
-                tag = Some(version.to_string());
-            } else {
-                major_version = None;
-                minor_version = None;
-                patch_version = None;
-                tag = Some(version.to_string());
-            }
-
-        } else {
-            tag = Some(version.to_string());
-        }
-
-        Ok(Self {
-            name: name.to_string(),
-            namespace,
-            path: if path.is_empty() {
-                None
-            } else {
-                Some(path.to_string())
-            },
-            build: build.cloned(),
-            major_version,
-            minor_version,
-            patch_version,
-            tag,
-        })
-    }
-}
-
-impl PartialEq for Service {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-            && self.namespace == other.namespace
-            && self.path == other.path
-            && self.major_version == other.major_version
-            && self.minor_version == other.minor_version
-            && self.patch_version == other.patch_version
-            && self.tag == other.tag
-    }
-}
-
-impl Service {
     pub fn get_version(&self) -> String {
-        if self.major_version.is_none()
-            && self.minor_version.is_none()
-            && self.patch_version.is_none()
-        {
-            return self.tag.clone().unwrap_or_else(|| "latest".to_string());
-        }
-
-        let mut version_str = self.major_version.unwrap_or(0).to_string();
-
-        if let Some(minor) = self.minor_version {
-            version_str.push_str(&format!(".{}", minor));
-        }
-
-        if let Some(patch) = self.patch_version {
-            version_str.push_str(&format!(".{}", patch));
-        }
-
-        if let Some(tag) = &self.tag {
-            version_str.push_str(&format!("-{}", tag));
-        }
-
-        version_str
+        self.version.clone()
     }
 
     pub fn get_version_without_tag(&self) -> String {
-        let mut version_str = self.major_version.unwrap_or(0).to_string();
-
-        if let Some(minor) = self.minor_version {
-            version_str.push_str(&format!(".{}", minor));
-        }
-
-        if let Some(patch) = self.patch_version {
-            version_str.push_str(&format!(".{}", patch));
-        }
-
-        version_str
+        self.version
+            .split_once('-')
+            .map(|(base, _)| base.to_string())
+            .unwrap_or_else(|| self.version.clone())
     }
 
     pub fn get_path(&self) -> String {
-        self.path
+        self.template_path
             .clone()
-            .unwrap_or("".to_string())
+            .unwrap_or_else(|| self.name.clone())
             .replace("./", "")
-            .to_string()
     }
 
     pub fn get_full_name(&self) -> String {
-        format!("{}/{}", self.namespace, self.name)
+        format!("{}/{}", self.namespace_or("default"), self.name)
     }
 
     pub fn get_full_name_with_version(&self) -> String {
-        format!("{}/{}:{}", self.namespace, self.name, self.get_version())
+        format!(
+            "{}/{}:{}",
+            self.namespace_or("default"),
+            self.name,
+            self.get_version()
+        )
     }
 
     pub fn get_full_name_with_path(&self) -> String {
-        format!("{}/{}:{}", self.namespace, self.name, self.get_path())
+        format!(
+            "{}/{}:{}",
+            self.namespace_or("default"),
+            self.name,
+            self.get_path()
+        )
     }
 
     pub fn bump_major_version(&mut self) {
-        if let Some(major_version) = self.major_version {
-            self.major_version = Some(major_version + 1);
+        let mut parts = self
+            .get_version_without_tag()
+            .split('.')
+            .map(|x| x.parse::<i32>().unwrap_or(0))
+            .collect::<Vec<i32>>();
+
+        if parts.is_empty() {
+            parts = vec![1, 0, 0];
         } else {
-            self.major_version = Some(1);
+            parts[0] += 1;
+            if parts.len() < 3 {
+                while parts.len() < 3 {
+                    parts.push(0);
+                }
+            } else {
+                parts[1] = 0;
+                parts[2] = 0;
+            }
         }
+
+        self.version = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
     }
 
     pub fn bump_minor_version(&mut self) {
-        if let Some(minor_version) = self.minor_version {
-            self.minor_version = Some(minor_version + 1);
-        } else {
-            self.minor_version = Some(1);
+        let mut parts = self
+            .get_version_without_tag()
+            .split('.')
+            .map(|x| x.parse::<i32>().unwrap_or(0))
+            .collect::<Vec<i32>>();
+
+        while parts.len() < 3 {
+            parts.push(0);
         }
+
+        parts[1] += 1;
+        parts[2] = 0;
+        self.version = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
     }
 
     pub fn bump_patch_version(&mut self) {
-        if let Some(patch_version) = self.patch_version {
-            self.patch_version = Some(patch_version + 1);
-        } else {
-            self.patch_version = Some(1);
+        let mut parts = self
+            .get_version_without_tag()
+            .split('.')
+            .map(|x| x.parse::<i32>().unwrap_or(0))
+            .collect::<Vec<i32>>();
+
+        while parts.len() < 3 {
+            parts.push(0);
         }
+
+        parts[2] += 1;
+        self.version = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
     }
 
     pub fn set_tag(&mut self, tag: String) {
-        self.tag = Some(tag);
+        self.version = format!("{}-{}", self.get_version_without_tag(), tag);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{from_value, json};
+    use serde_json::json;
 
     #[test]
-    fn test_serialize_with_tag() {
-        let service = Service::new(
-            "my-service",
-            "my-namespace",
-            Some("/api/v1"),
-            Some("build-123"),
-            Some(1),
-            Some(2),
-            Some(3),
-            Some("beta".to_string()),
-        );
+    fn test_deserialize_legacy_service_build_string() {
+        let service_json = json!({
+            "name": "api",
+            "version": "1.2.3",
+            "build": "./services/api"
+        });
 
-        let serialized = serde_json::to_value(&service).unwrap();
+        let service: Service = serde_json::from_value(service_json).unwrap();
+        assert_eq!(service.name, "api");
+        assert_eq!(service.version, "1.2.3");
         assert_eq!(
-            serialized,
-            json!({
-                "name": "my-service",
-                "path": "/api/v1",
-                "build": "build-123",
-                "version": "1.2.3-beta"
+            service.build,
+            Some(ServiceBuildConfig {
+                path: "./services/api".to_string(),
+                relies_on: None,
+                before: None,
+                after: None
             })
         );
     }
 
     #[test]
-    fn test_serialize_without_tag() {
-        let service = Service::new(
-            "another-service",
-            "default",
-            None,
-            None,
-            Some(0),
-            Some(1),
-            Some(0),
-            None,
-        );
-
-        let serialized = serde_json::to_value(&service).unwrap();
-        assert_eq!(
-            serialized,
-            json!({
-                "name": "another-service",
-                "version": "0.1.0"
-            })
-        );
-    }
-
-    #[test]
-    fn test_deserialize_with_tag() {
-        let json_data = json!({
-            "name": "test-service",
-            "version": "2.0.1-rc1"
-        });
-
-        let deserialized: Service = from_value(json_data).unwrap();
-        assert_eq!(
-            deserialized,
-            Service {
-                name: "test-service".to_string(),
-                namespace: "default".to_string(),
-                path: None,
-                build: None,
-                major_version: Some(2),
-                minor_version: Some(0),
-                patch_version: Some(1),
-                tag: Some("rc1".to_string())
+    fn test_deserialize_service_build_table() {
+        let service_json = json!({
+            "name": "api",
+            "version": "1.2.3",
+            "build": {
+                "path": "./services/api",
+                "relies_on": ["./services/shared"],
+                "before": "docker build .",
+                "after": "docker push x"
             }
-        );
-    }
-
-    #[test]
-    fn test_deserialize_without_tag() {
-        let json_data = json!({
-            "name": "test-service",
-            "version": "latest"
         });
 
-        let deserialized: Service = from_value(json_data).unwrap();
-        assert_eq!(
-            deserialized,
-            Service {
-                name: "test-service".to_string(),
-                namespace: "default".to_string(),
-                path: None,
-                build: None,
-                major_version: None,
-                minor_version: None,
-                patch_version: None,
-                tag: Some("latest".to_string())
-            }
-        );
+        let service: Service = serde_json::from_value(service_json).unwrap();
+        let build = service.build.unwrap();
+        assert_eq!(build.path, "./services/api");
+        assert_eq!(build.relies_on.unwrap(), vec!["./services/shared"]);
+        assert_eq!(build.before.unwrap(), "docker build .");
+        assert_eq!(build.after.unwrap(), "docker push x");
     }
 
     #[test]
-    fn test_deserialize_version_without_patch() {
-        let json_data = json!({
-            "name": "version-test-service",
-            "version": "8.0"
-        });
-
-        let deserialized: Service = from_value(json_data).unwrap();
-        assert_eq!(
-            deserialized,
-            Service {
-                name: "version-test-service".to_string(),
-                namespace: "default".to_string(),
-                path: None,
-                build: None,
-                major_version: Some(8),
-                minor_version: Some(0),
-                patch_version: None, // Should not default to 0
-                tag: None
-            }
-        );
+    fn test_service_path_falls_back_to_name() {
+        let service = Service::new("worker", None, "latest");
+        assert_eq!(service.get_path(), "worker");
     }
 
     #[test]
-    fn test_deserialize_version_with_tag_in_patch() {
-        let json_data = json!({
-            "name": "patch-tag-service",
-            "version": "1.0.0-beta"
-        });
+    fn test_environment_uses_service_aliases() {
+        let content = r#"
+schema_version = "0.3.0"
+name = "dev"
+log_level = "INFO"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
 
-        let deserialized: Service = from_value(json_data).unwrap();
-        assert_eq!(
-            deserialized,
-            Service {
-                name: "patch-tag-service".to_string(),
-                namespace: "default".to_string(),
-                path: None,
-                build: None,
-                major_version: Some(1),
-                minor_version: Some(0),
-                patch_version: Some(0),
-                tag: Some("beta".to_string())
-            }
-        );
+[[service_whitelist]]
+name = "api"
+version = "latest"
+"#;
+
+        let env: Environment = toml::from_str(content).unwrap();
+        assert_eq!(env.services.len(), 1);
+        assert_eq!(env.services[0].name, "api");
     }
 
     #[test]
-    fn test_serialize_version_without_patch() {
-        let json_data = json!({
-            "name": "version-test-service",
-            "version": "8.0"
-        });
+    fn test_legacy_build_rooms_map_onto_services() {
+        let content = r#"
+schema_version = "0.3.0"
+name = "dev"
+log_level = "INFO"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
 
-        let deserialized: Service = from_value(json_data).unwrap();
-        let serialized = serde_json::to_value(&deserialized).unwrap();
+[[service_whitelist]]
+name = "api"
+version = "latest"
 
-        assert_eq!(
-            serialized,
-            json!({
-                "name": "version-test-service",
-                "version": "8.0"
-            })
-        );
-    }
+[build.rooms.api]
+path = "./services/api"
+before = "custom-build"
+after = "custom-push"
+"#;
 
-    #[test]
-    fn test_deserialize_version_with_tag_in_minor() {
-        let json_data = json!({
-            "name": "minor-tag-service",
-            "version": "1.2-beta"
-        });
+        let mut env: Environment = toml::from_str(content).unwrap();
+        env.apply_legacy_build_fallback();
 
-        let deserialized: Service = from_value(json_data).unwrap();
-        assert_eq!(
-            deserialized,
-            Service {
-                name: "minor-tag-service".to_string(),
-                namespace: "default".to_string(),
-                path: None,
-                build: None,
-                major_version: Some(1),
-                minor_version: Some(2),
-                patch_version: None,
-                tag: Some("beta".to_string())
-            }
-        );
-    }
-
-    #[test]
-    fn test_deserialize_version_with_tag_in_major() {
-        let json_data = json!({
-            "name": "major-tag-service",
-            "version": "1-beta"
-        });
-
-        let deserialized: Service = from_value(json_data).unwrap();
-        assert_eq!(
-            deserialized,
-            Service {
-                name: "major-tag-service".to_string(),
-                namespace: "default".to_string(),
-                path: None,
-                build: None,
-                major_version: Some(1),
-                minor_version: None,
-                patch_version: None,
-                tag: Some("beta".to_string())
-            }
-        );
-    }
-
-    #[test]
-    fn test_regression_get_version() {
-        let s1 = Service {
-            name: "srv1".to_string(),
-            namespace: "default".to_string(),
-            path: None,
-            build: None,
-            major_version: Some(2601),
-            minor_version: None,
-            patch_version: None,
-            tag: Some("rc".to_string()),
-        };
-        assert_eq!(s1.get_version(), "2601-rc");
-        assert_eq!(s1.get_version_without_tag(), "2601");
-
-        let s2 = Service {
-            name: "srv2".to_string(),
-            namespace: "default".to_string(),
-            path: None,
-            build: None,
-            major_version: Some(2601),
-            minor_version: None,
-            patch_version: None,
-            tag: Some("rc.0.0".to_string()),
-        };
-        assert_eq!(s2.get_version(), "2601-rc.0.0");
-        assert_eq!(s2.get_version_without_tag(), "2601");
-
-        let s3 = Service {
-            name: "srv3".to_string(),
-            namespace: "default".to_string(),
-            path: None,
-            build: None,
-            major_version: Some(2601),
-            minor_version: Some(0),
-            patch_version: None,
-            tag: Some("rc".to_string()),
-        };
-        assert_eq!(s3.get_version(), "2601.0-rc");
-        assert_eq!(s3.get_version_without_tag(), "2601.0");
+        let api = env.get_service("api").unwrap();
+        let build = api.build.as_ref().unwrap();
+        assert_eq!(build.path, "./services/api");
+        assert_eq!(build.before.as_deref(), Some("custom-build"));
+        assert_eq!(build.after.as_deref(), Some("custom-push"));
     }
 }

@@ -197,7 +197,7 @@ pub async fn generate_deployment_plan(
     let current_resources = get_current_cluster_resources(context, namespace).await?;
 
     // Generate manifests and compare with cluster state
-    for service in &env.service_whitelist {
+    for service in &env.services {
         let service_path = format!("k8s/generated/{}/{}", env_name, service.get_path());
 
         if !Path::new(&service_path).exists() {

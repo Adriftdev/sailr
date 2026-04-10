@@ -28,16 +28,7 @@ pub fn create_env_toml(
     let mut env = Environment::new(env_name);
 
     if redis {
-        let redis = Service::new(
-            "redis",
-            "default",
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("latest".to_string()),
-        );
+        let redis = Service::new("redis", Some("default"), "latest");
         env.add_service(redis);
 
         let redis_host =
@@ -51,16 +42,7 @@ pub fn create_env_toml(
     }
 
     if postgres {
-        let postgres = Service::new(
-            "postgres",
-            "default",
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("latest".to_string()),
-        );
+        let postgres = Service::new("postgres", Some("default"), "latest");
         env.add_service(postgres);
 
         let db_host =
@@ -78,16 +60,7 @@ pub fn create_env_toml(
     }
 
     if registry {
-        let registry = Service::new(
-            "registry",
-            "kube-system",
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("latest".to_string()),
-        );
+        let registry = Service::new("registry", Some("kube-system"), "latest");
         env.add_service(registry);
     }
 

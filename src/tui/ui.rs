@@ -75,8 +75,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .iter()
                 .enumerate()
                 .map(|(i, srv)| {
-                    let check = if app.selected_indices.contains(&i) { "[x]" } else { "[ ]" };
-                    let name = format!("{} {} (v{})", check, srv.name, srv.tag.clone().unwrap_or_else(|| "latest".to_string()));
+                    let check = if app.selected_indices.contains(&i) {
+                        "[x]"
+                    } else {
+                        "[ ]"
+                    };
+                    let name = format!("{} {} (v{})", check, srv.name, srv.version);
                     let lines = vec![Line::from(name)];
                     ListItem::new(lines).style(Style::default().fg(Color::White))
                 })

@@ -1,4 +1,4 @@
-schema_version = "0.2.0"
+schema_version = "0.4.0"
 name = "dev"
 log_level = "INFO"
 domain = "example.com"
@@ -6,9 +6,6 @@ default_replicas = 1
 registry = "docker.io"
 environment_variables = []
 
-[[service_whitelist]]
+[[service]]
 name = "hello-sailr"
 version = "latest"
-path = "hello-sailr"
-
-[build.rooms]

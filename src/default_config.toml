@@ -1,12 +1,9 @@
-schema_version = "0.2.0"
+schema_version = "0.4.0"
 name = "{{name}}"
 log_level = "INFO"
-domain = "{{default_domain}}" 
+domain = "{{default_domain}}"
 default_replicas = 1
-registry = "{{default_registry}}" 
+registry = "{{default_registry}}"
 
-service_whitelist = []
-
+service = []
 environment_variables = []
-
-[build.rooms]

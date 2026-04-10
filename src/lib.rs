@@ -90,9 +90,7 @@ pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
     for service in services {
         let variables = &env.get_variables(service);
         for template in &templates {
-            if template.name != service.name
-                && template.name != service.path.clone().unwrap_or("".to_string())
-            {
+            if template.name != service.name && template.name != service.get_path() {
                 continue;
             }
             let content = template_manager

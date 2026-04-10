@@ -57,6 +57,27 @@ impl RoomserviceBuilder {
                 .unwrap()
                 .to_string();
 
+            room.dependencies = room
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    let dependency_path = Path::new(&self.project).join(dependency);
+                    if !dependency_path.exists() {
+                        fail(format!(
+                            "Dependency path does not exist for room \"{}\" at \"{}\"",
+                            room.name, dependency
+                        ));
+                    }
+
+                    dependency_path
+                        .canonicalize()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+
             self.rooms.push(room);
         } else {
             fail(format!(

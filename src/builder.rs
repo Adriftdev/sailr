@@ -1,5 +1,5 @@
 use crate::{
-    environment::Environment,
+    environment::{Environment, Service},
     roomservice::{
         room::{Hooks, RoomBuilder},
         util::Failable,
@@ -7,6 +7,10 @@ use crate::{
 };
 
 use crate::roomservice::RoomserviceBuilder;
+
+const DEFAULT_BEFORE_TEMPLATE: &str =
+    "docker buildx build --ssh default -t {{ registry }}/{{ name }}:{{ version }} .";
+const DEFAULT_AFTER_TEMPLATE: &str = "docker push {{ registry }}/{{ name }}:{{ version }}";
 
 pub struct Builder {
     roomservice: RoomserviceBuilder,
@@ -25,53 +29,63 @@ impl Builder {
 
     pub fn build(&mut self, env: &Environment) -> Result<(), String> {
         let canonical_project_path = std::path::Path::new(&"./").canonicalize().unwrap();
-
         let path_buf = canonical_project_path.join(".roomservice");
-
         let cache_dir = path_buf.to_str().unwrap().to_owned().to_string();
-        let cfg = env.build.clone().unwrap_fail("No config found.");
 
-        if let Some(before_all) = cfg.before_all {
-            self.roomservice.add_before_all(&before_all)
+        let buildable_services = env
+            .services
+            .iter()
+            .filter(|service| service.build.is_some())
+            .collect::<Vec<&Service>>();
+
+        if buildable_services.is_empty() {
+            return Err("No buildable services found in environment config.".to_string());
         }
 
-        if let Some(after_all) = cfg.after_all {
-            self.roomservice.add_after_all(&after_all)
-        }
-
-        //check_room_provided_to_flag("only".to_string(), &self.only, &cfg.rooms);
-
-        //check_room_provided_to_flag("ignore".to_string(), &self.ignore, &cfg.rooms);
-
-        for (name, room_config) in cfg.rooms {
+        for service in buildable_services {
             let mut should_add = true;
 
-            // @Note Check to see if it's in the only array
             if !self.only.is_empty() {
-                should_add = self.only.contains(&name);
+                should_add = self.only.contains(&service.name);
             }
 
-            // @Note Check to see if it's in the ignore array
             if !self.ignore.is_empty() {
-                should_add = !self.ignore.contains(&name);
+                should_add = !self.ignore.contains(&service.name);
             }
 
-            if should_add {
-                self.roomservice.add_room(RoomBuilder::new(
-                    name.to_string(),
-                    room_config.path.to_string(),
-                    cache_dir.clone(),
-                    room_config.include,
-                    Hooks {
-                        before: inject_vars(room_config.before, &name, env),
-                        before_synchronously: inject_vars(room_config.before_synchronous, &name, env),
-                        run_synchronously: inject_vars(room_config.run_synchronous, &name, env),
-                        run_parallel: inject_vars(room_config.run_parallel, &name, env),
-                        after: inject_vars(room_config.after, &name, env),
-                        finally: inject_vars(room_config.finally, &name, env),
-                    },
-                ))
+            if !should_add {
+                continue;
             }
+
+            let build_cfg = service
+                .build
+                .as_ref()
+                .unwrap_fail("Service marked as buildable but missing build config.");
+
+            let before_template = build_cfg
+                .before
+                .clone()
+                .unwrap_or_else(|| DEFAULT_BEFORE_TEMPLATE.to_string());
+            let after_template = build_cfg
+                .after
+                .clone()
+                .unwrap_or_else(|| DEFAULT_AFTER_TEMPLATE.to_string());
+
+            self.roomservice.add_room(RoomBuilder::new(
+                service.name.clone(),
+                build_cfg.path.clone(),
+                cache_dir.clone(),
+                "./**/*.*".to_string(),
+                build_cfg.relies_on.clone().unwrap_or_default(),
+                Hooks {
+                    before: inject_vars(Some(before_template), service, env),
+                    before_synchronously: None,
+                    run_synchronously: None,
+                    run_parallel: None,
+                    after: inject_vars(Some(after_template), service, env),
+                    finally: None,
+                },
+            ));
         }
 
         self.roomservice.exec(false, false, false);
@@ -82,21 +96,26 @@ impl Builder {
 pub fn split_matches(val: Option<String>) -> Vec<String> {
     match val {
         Some(ignore_values) => ignore_values.split(',').map(|t| t.to_string()).collect(),
-
         None => vec![],
     }
 }
 
-fn inject_vars(script: Option<String>, name: &str, env: &crate::environment::Environment) -> Option<String> {
-    if let Some(mut s) = script {
-        if s.contains("{{") {
-            let version = env.service_whitelist.iter().find(|srv| srv.name == name).and_then(|srv| Some(srv.major_version.map(|m| format!("{}.{}.{}", m, srv.minor_version.unwrap_or(0), srv.patch_version.unwrap_or(0))))).unwrap_or_else(|| Some("latest".to_string()));
-            s = s.replace("{{ registry }}", &env.registry);
-            s = s.replace("{{ name }}", name);
-            s = s.replace("{{ version }}", version.as_deref().unwrap_or("latest"));
-        }
-        Some(s)
-    } else {
-        None
-    }
+fn replace_template_var(input: &str, key: &str, value: &str) -> String {
+    input
+        .replace(&format!("{{{{ {} }}}}", key), value)
+        .replace(&format!("{{{{{}}}}}", key), value)
+}
+
+fn inject_vars(
+    script: Option<String>,
+    service: &Service,
+    env: &crate::environment::Environment,
+) -> Option<String> {
+    script.map(|s| {
+        let namespace = service.namespace_or(&env.name);
+        let s = replace_template_var(&s, "registry", &env.registry);
+        let s = replace_template_var(&s, "name", &service.name);
+        let s = replace_template_var(&s, "version", &service.version);
+        replace_template_var(&s, "namespace", namespace)
+    })
 }

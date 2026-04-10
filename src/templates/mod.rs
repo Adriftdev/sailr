@@ -108,30 +108,25 @@ impl TemplateManager {
         //read the templates from the environment
         //if path is specified in path, read the templates from the path instead and append to the template_dirs
         if let Some(env) = &env {
-            for service in &env.service_whitelist {
-                if service.path.is_none() || service.path.clone().unwrap() == "" {
-                    template_dirs.insert(service.name.clone());
+            for service in &env.services {
+                let service_path = service.get_path();
+                if !service_path.contains('/') {
+                    template_dirs.insert(service_path);
                     continue;
                 }
 
-                let path = service
-                    .path
-                    .clone()
-                    .unwrap()
-                    .split('/')
-                    .fold(Path::new(&"".to_string()).to_owned(), |acc, x| acc.join(x));
-
-                let parent = path.parent().unwrap().to_str().unwrap().to_string();
+                let path = Path::new(&service_path);
+                let Some(parent) = path.parent() else {
+                    template_dirs.insert(service_path);
+                    continue;
+                };
+                let parent = parent.to_str().unwrap().to_string();
 
                 let service_template_dir = self.filemanager.read_dir(&parent)?;
-                template_dirs.remove(path.parent().unwrap().to_str().unwrap());
+                template_dirs.remove(&parent);
 
                 let templates = service_template_dir.into_iter().filter_map(|x| {
-                    let full_path = Path::new(path.parent().unwrap())
-                        .join(&x)
-                        .to_str()
-                        .unwrap()
-                        .to_string();
+                    let full_path = Path::new(&parent).join(&x).to_str().unwrap().to_string();
 
                     if self.filemanager.is_dir(&full_path) {
                         Some(full_path)
@@ -150,11 +145,8 @@ impl TemplateManager {
             let template_dir = self.filemanager.read_dir(&template_name)?;
 
             if let Some(env) = &env {
-                if !env.service_whitelist.iter().any(|x| {
-                    if template_name.contains(x.name.as_str()) {
-                        return true;
-                    }
-                    false
+                if !env.services.iter().any(|x| {
+                    template_name.contains(x.name.as_str()) || template_name == x.get_path()
                 }) {
                     continue;
                 }

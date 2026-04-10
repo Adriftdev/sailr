@@ -178,19 +178,11 @@ async fn main() -> Result<(), CliError> {
                 let env_name = arg.name.clone();
                 match Environment::load_from_file(&env_name) {
                     Ok(mut env) => {
-                        let sample_service_entry = Service::new(
-                            &sample_service_name,
-                            "default",
-                            Some(sample_service_name.as_str()),
-                            None,                       // build
-                            None,                       // major_version
-                            None,                       // minor_version
-                            None,                       // patch_version
-                            Some("latest".to_string()), // tag
-                        );
+                        let sample_service_entry =
+                            Service::new(&sample_service_name, None, "latest");
 
                         if env
-                            .service_whitelist
+                            .services
                             .iter()
                             .any(|s| s.name == sample_service_entry.name)
                         {
@@ -199,7 +191,7 @@ async fn main() -> Result<(), CliError> {
                                 sample_service_name, env_name
                             ));
                         } else {
-                            env.service_whitelist.push(sample_service_entry);
+                            env.services.push(sample_service_entry);
                             match env.save_to_file() {
                                 Ok(_) => LOGGER.info(&format!(
                                     "✓ Added {} service to environment {} config.",
@@ -646,29 +638,16 @@ async fn main() -> Result<(), CliError> {
             let env_name = args.env_name.to_string(); // Fixed environment name for now
             match Environment::load_from_file(&env_name) {
                 Ok(mut env) => {
-                    let new_service = Service::new(
-                        &args.service_name,
-                        "default",
-                        Some(args.service_name.as_str()), // path
-                        None,                             // build
-                        None,                             // major_version
-                        None,                             // minor_version
-                        None,                             // patch_version
-                        Some("latest".to_string()),       // tag
-                    );
+                    let new_service = Service::new(&args.service_name, None, "latest");
 
                     // Check if service already exists to prevent duplicates
-                    if env
-                        .service_whitelist
-                        .iter()
-                        .any(|s| s.name == new_service.name)
-                    {
+                    if env.services.iter().any(|s| s.name == new_service.name) {
                         LOGGER.warn(&format!(
                             "Service {} already exists in environment {}, skipping addition to config.toml.",
                             args.service_name, env_name
                         ));
                     } else {
-                        env.service_whitelist.push(new_service);
+                        env.services.push(new_service);
                         match env.save_to_file() {
                             Ok(_) => LOGGER.info(&format!(
                                 "Updated config.toml for environment {} with new service {}.",
@@ -704,7 +683,6 @@ async fn main() -> Result<(), CliError> {
         Commands::Bump(arg) => handle_bump(arg)?,
         Commands::Lint(arg) => handle_lint(arg)?,
         Commands::Interactive(args) => {
-
             // Handle interactive commands
             sailr::interactive::main_menu(args)
                 .await
@@ -717,12 +695,22 @@ async fn main() -> Result<(), CliError> {
 }
 
 fn handle_bump(arg: sailr::cli::BumpArgs) -> Result<(), CliError> {
-    use toml_edit::{DocumentMut, value};
-    let env_path = std::path::Path::new("./k8s/environments").join(&arg.name).join("config.toml");
+    use toml_edit::{value, DocumentMut};
+    let env_path = std::path::Path::new("./k8s/environments")
+        .join(&arg.name)
+        .join("config.toml");
     let content = std::fs::read_to_string(&env_path).map_err(|e| CliError::Other(e.to_string()))?;
-    let mut doc = content.parse::<DocumentMut>().map_err(|e| CliError::Other(e.to_string()))?;
-    
-    if let Some(services) = doc["service_whitelist"].as_array_of_tables_mut() {
+    let mut doc = content
+        .parse::<DocumentMut>()
+        .map_err(|e| CliError::Other(e.to_string()))?;
+
+    let services = if doc["service"].is_array_of_tables() {
+        doc["service"].as_array_of_tables_mut()
+    } else {
+        doc["service_whitelist"].as_array_of_tables_mut()
+    };
+
+    if let Some(services) = services {
         let mut found = false;
         for service in services.iter_mut() {
             if let Some(name) = service.get("name") {
@@ -734,34 +722,53 @@ fn handle_bump(arg: sailr::cli::BumpArgs) -> Result<(), CliError> {
             }
         }
         if !found {
-            return Err(CliError::Other(format!("Service {} not found in environment {}", arg.service, arg.name)));
+            return Err(CliError::Other(format!(
+                "Service {} not found in environment {}",
+                arg.service, arg.name
+            )));
         }
     } else {
         return Err(CliError::Other("Invalid config structure".to_string()));
     }
-    
+
     std::fs::write(&env_path, doc.to_string()).map_err(|e| CliError::Other(e.to_string()))?;
-    sailr::LOGGER.info(&format!("Successfully bumped {} to {} in {}", arg.service, arg.version, arg.name));
+    sailr::LOGGER.info(&format!(
+        "Successfully bumped {} to {} in {}",
+        arg.service, arg.version, arg.name
+    ));
     Ok(())
 }
 
 fn handle_lint(arg: sailr::cli::LintArgs) -> Result<(), CliError> {
-    let env = sailr::environment::Environment::load_from_file(&arg.name).map_err(|e| CliError::Other(e.to_string()))?;
+    let env = sailr::environment::Environment::load_from_file(&arg.name)
+        .map_err(|e| CliError::Other(e.to_string()))?;
     sailr::LOGGER.info(&format!("Linting environment '{}'...", arg.name));
     let mut warnings = 0;
-    
-    if env.schema_version != "0.3.0" && env.schema_version != "0.2.0" {
-        sailr::LOGGER.warn(&format!("Schema version {} is deprecated or unrecognized.", env.schema_version));
+
+    if env.schema_version == "0.2.0" || env.schema_version == "0.3.0" {
+        sailr::LOGGER.warn(&format!(
+            "Schema version {} is legacy; please migrate to 0.4.0.",
+            env.schema_version
+        ));
+        warnings += 1;
+    } else if env.schema_version != "0.4.0" {
+        sailr::LOGGER.warn(&format!(
+            "Schema version {} is unrecognized.",
+            env.schema_version
+        ));
         warnings += 1;
     }
-    
-    for service in &env.service_whitelist {
-        if service.tag.is_none() && service.major_version.is_none() {
-            sailr::LOGGER.warn(&format!("Service '{}' has an empty version string.", service.name));
+
+    for service in &env.services {
+        if service.version.trim().is_empty() {
+            sailr::LOGGER.warn(&format!(
+                "Service '{}' has an empty version string.",
+                service.name
+            ));
             warnings += 1;
         }
     }
-    
+
     if warnings == 0 {
         sailr::LOGGER.info("Lint passed with no warnings. Environment config is healthy.");
     } else {

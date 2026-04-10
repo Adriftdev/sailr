@@ -2,6 +2,7 @@ use checksums::{hash_file, Algorithm::BLAKE2S};
 use ignore::WalkBuilder;
 use std::fs::{self, File};
 use std::io::prelude::*;
+use std::path::{Path, PathBuf};
 
 use super::util::fail;
 
@@ -9,6 +10,7 @@ use super::util::fail;
 pub struct RoomBuilder {
     pub name: String,
     pub path: String,
+    pub dependencies: Vec<String>,
     pub cache_dir: String,
     pub include: String,
     pub hooks: Hooks,
@@ -33,11 +35,13 @@ impl RoomBuilder {
         path: String,
         cache_dir: String,
         include: String,
+        dependencies: Vec<String>,
         hooks: Hooks,
     ) -> RoomBuilder {
         RoomBuilder {
             name,
             path,
+            dependencies,
             cache_dir,
             include,
             hooks,
@@ -47,25 +51,39 @@ impl RoomBuilder {
         }
     }
 
+    fn walk_file_paths(root: &Path) -> Vec<PathBuf> {
+        let builder = WalkBuilder::new(root);
+        let mut files = Vec::new();
+
+        for maybe_file in builder.build() {
+            let Ok(file) = maybe_file else {
+                continue;
+            };
+
+            if file.file_type().is_some_and(|entry| entry.is_file()) {
+                files.push(file.path().to_path_buf());
+            }
+        }
+
+        files.sort();
+        files
+    }
+
     fn generate_hash(&self, dump_scope: bool) -> String {
         let mut hash = String::with_capacity(256);
         let mut scope = String::new();
+        let mut all_paths = vec![self.path.clone()];
+        all_paths.extend(self.dependencies.clone());
 
-        // Use WalkBuilder to apply .roomignore if it exists
-        let builder = WalkBuilder::new(&self.path);
-
-        for maybe_file in builder.build() {
-            let file = maybe_file.unwrap();
-            if let Some(entry) = file.file_type() {
-                if entry.is_file() {
-                    if dump_scope {
-                        scope.push_str(file.path().to_str().unwrap());
-                        scope.push('\n');
-                    }
-
-                    hash.push_str(&hash_file(file.path(), BLAKE2S));
-                    hash.push('\n');
+        for directory in all_paths {
+            for file_path in Self::walk_file_paths(Path::new(&directory)) {
+                if dump_scope {
+                    scope.push_str(file_path.to_str().unwrap());
+                    scope.push('\n');
                 }
+
+                hash.push_str(&hash_file(&file_path, BLAKE2S));
+                hash.push('\n');
             }
         }
 
