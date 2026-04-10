@@ -22,6 +22,8 @@ pub struct Environment {
     pub domain: String,
     pub default_replicas: u8,
     pub registry: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     #[serde(rename = "build", default, skip_serializing)]
     legacy_build: Option<Config>,
@@ -41,6 +43,7 @@ impl Environment {
             domain: "localhost".to_string(),
             default_replicas: 1,
             registry: "docker.io".to_string(),
+            platform: None,
             environment_variables: Some(Vec::new()),
             legacy_build: None,
         }
@@ -138,8 +141,12 @@ impl Environment {
                     .before
                     .or(room_config.run_parallel)
                     .or(room_config.run_synchronous)
-                    .or(room_config.before_synchronous),
-                after: room_config.after.or(room_config.finally),
+                    .or(room_config.before_synchronous)
+                    .map(CommandSpec::Single),
+                after: room_config
+                    .after
+                    .or(room_config.finally)
+                    .map(CommandSpec::Single),
             };
 
             match self.services.iter_mut().find(|s| s.name == name) {
@@ -227,6 +234,10 @@ impl Environment {
                 self.default_replicas.to_string(),
             ),
             ("registry".to_string(), self.registry.clone()),
+            (
+                "platform".to_string(),
+                self.platform.clone().unwrap_or_default(),
+            ),
             ("schema_version".to_string(), self.schema_version.clone()),
             ("service_name".to_string(), service.name.clone()),
             (
@@ -304,6 +315,29 @@ where
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
+#[serde(untagged)]
+pub enum CommandSpec {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl CommandSpec {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(cmd) => vec![cmd],
+            Self::Multiple(cmds) => cmds,
+        }
+    }
+
+    pub fn as_vec(&self) -> Vec<String> {
+        match self {
+            Self::Single(cmd) => vec![cmd.clone()],
+            Self::Multiple(cmds) => cmds.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct Service {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -328,17 +362,17 @@ pub struct ServiceBuildConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relies_on: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before: Option<String>,
+    pub before: Option<CommandSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after: Option<String>,
+    pub after: Option<CommandSpec>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct ServiceHooks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pre_deploy: Option<String>,
+    pub pre_deploy: Option<CommandSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post_deploy: Option<String>,
+    pub post_deploy: Option<CommandSpec>,
 }
 
 impl Service {
@@ -501,8 +535,52 @@ mod tests {
         let build = service.build.unwrap();
         assert_eq!(build.path, "./services/api");
         assert_eq!(build.relies_on.unwrap(), vec!["./services/shared"]);
-        assert_eq!(build.before.unwrap(), "docker build .");
-        assert_eq!(build.after.unwrap(), "docker push x");
+        assert_eq!(
+            build.before.unwrap(),
+            CommandSpec::Single("docker build .".to_string())
+        );
+        assert_eq!(
+            build.after.unwrap(),
+            CommandSpec::Single("docker push x".to_string())
+        );
+    }
+
+    #[test]
+    fn test_deserialize_service_build_with_command_arrays() {
+        let service_json = json!({
+            "name": "api",
+            "version": "1.2.3",
+            "build": {
+                "path": "./services/api",
+                "before": ["pnpm i", "pnpm build"],
+                "after": ["docker push x", "echo done"]
+            },
+            "hooks": {
+                "pre_deploy": ["echo pre", "scripts/check.sh"],
+                "post_deploy": "echo post"
+            }
+        });
+
+        let service: Service = serde_json::from_value(service_json).unwrap();
+        let build = service.build.unwrap();
+        assert_eq!(
+            build.before.unwrap(),
+            CommandSpec::Multiple(vec!["pnpm i".to_string(), "pnpm build".to_string()])
+        );
+        assert_eq!(
+            build.after.unwrap(),
+            CommandSpec::Multiple(vec!["docker push x".to_string(), "echo done".to_string()])
+        );
+
+        let hooks = service.hooks.unwrap();
+        assert_eq!(
+            hooks.pre_deploy.unwrap(),
+            CommandSpec::Multiple(vec!["echo pre".to_string(), "scripts/check.sh".to_string()])
+        );
+        assert_eq!(
+            hooks.post_deploy.unwrap(),
+            CommandSpec::Single("echo post".to_string())
+        );
     }
 
     #[test]
@@ -532,6 +610,26 @@ version = "latest"
     }
 
     #[test]
+    fn test_environment_parses_top_level_platform() {
+        let content = r#"
+schema_version = "0.3.0"
+name = "edge"
+log_level = "INFO"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
+platform = "linux/amd64,linux/arm64"
+
+[[service_whitelist]]
+name = "api"
+version = "latest"
+"#;
+
+        let env: Environment = toml::from_str(content).unwrap();
+        assert_eq!(env.platform.as_deref(), Some("linux/amd64,linux/arm64"));
+    }
+
+    #[test]
     fn test_legacy_build_rooms_map_onto_services() {
         let content = r#"
 schema_version = "0.3.0"
@@ -557,7 +655,13 @@ after = "custom-push"
         let api = env.get_service("api").unwrap();
         let build = api.build.as_ref().unwrap();
         assert_eq!(build.path, "./services/api");
-        assert_eq!(build.before.as_deref(), Some("custom-build"));
-        assert_eq!(build.after.as_deref(), Some("custom-push"));
+        assert_eq!(
+            build.before,
+            Some(CommandSpec::Single("custom-build".to_string()))
+        );
+        assert_eq!(
+            build.after,
+            Some(CommandSpec::Single("custom-push".to_string()))
+        );
     }
 }

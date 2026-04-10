@@ -1,7 +1,7 @@
 pub mod k8sm8;
 use crate::deployment::k8sm8::deployments::delete_deployment;
 use crate::deployment::k8sm8::multidoc_deserialize;
-use crate::environment::{Environment, Service};
+use crate::environment::{CommandSpec, Environment, Service};
 use crate::{cli::DeploymentStrategy, deployment::k8sm8::daemonsets::delete_daemonset};
 use anyhow::Result;
 use kube::core::DynamicObject;
@@ -49,39 +49,43 @@ fn replace_template_var(input: &str, key: &str, value: &str) -> String {
 fn render_service_hook(hook: &str, env: &Environment, service: &Service) -> String {
     let namespace = service.namespace_or(&env.name);
     let rendered = replace_template_var(hook, "name", &service.name);
+    let rendered =
+        replace_template_var(&rendered, "platform", env.platform.as_deref().unwrap_or(""));
     let rendered = replace_template_var(&rendered, "version", &service.version);
     replace_template_var(&rendered, "namespace", namespace)
 }
 
-fn run_service_hook(
+fn run_service_hooks(
     stage: &str,
-    hook: &str,
+    hook_spec: &CommandSpec,
     env: &Environment,
     service: &Service,
 ) -> Result<(), DeployError> {
-    let rendered_hook = render_service_hook(hook, env, service);
-    LOGGER.info(&format!(
-        "Running {} hook for service '{}': {}",
-        stage, service.name, rendered_hook
-    ));
+    for hook in hook_spec.as_vec() {
+        let rendered_hook = render_service_hook(&hook, env, service);
+        LOGGER.info(&format!(
+            "Running {} hook for service '{}': {}",
+            stage, service.name, rendered_hook
+        ));
 
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&rendered_hook)
-        .output()
-        .map_err(|e| {
-            DeployError::ManifestApplicationFailed(format!(
-                "Failed to execute {} hook for service '{}': {}",
-                stage, service.name, e
-            ))
-        })?;
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&rendered_hook)
+            .output()
+            .map_err(|e| {
+                DeployError::ManifestApplicationFailed(format!(
+                    "Failed to execute {} hook for service '{}': {}",
+                    stage, service.name, e
+                ))
+            })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DeployError::ManifestApplicationFailed(format!(
-            "{} hook failed for service '{}': {}",
-            stage, service.name, stderr
-        )));
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(DeployError::ManifestApplicationFailed(format!(
+                "{} hook failed for service '{}': {}",
+                stage, service.name, stderr
+            )));
+        }
     }
 
     Ok(())
@@ -214,7 +218,7 @@ pub async fn deploy(
 
         if let Some(hooks) = &service.hooks {
             if let Some(pre_deploy) = &hooks.pre_deploy {
-                run_service_hook("pre_deploy", pre_deploy, &env, service)?;
+                run_service_hooks("pre_deploy", pre_deploy, &env, service)?;
             }
         }
 
@@ -224,7 +228,7 @@ pub async fn deploy(
 
         if let Some(hooks) = &service.hooks {
             if let Some(post_deploy) = &hooks.post_deploy {
-                run_service_hook("post_deploy", post_deploy, &env, service)?;
+                run_service_hooks("post_deploy", post_deploy, &env, service)?;
             }
         }
     }

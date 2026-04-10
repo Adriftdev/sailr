@@ -8,8 +8,6 @@ use crate::{
 
 use crate::roomservice::RoomserviceBuilder;
 
-const DEFAULT_BEFORE_TEMPLATE: &str =
-    "docker buildx build --ssh default -t {{ registry }}/{{ name }}:{{ version }} .";
 const DEFAULT_AFTER_TEMPLATE: &str = "docker push {{ registry }}/{{ name }}:{{ version }}";
 
 pub struct Builder {
@@ -65,11 +63,13 @@ impl Builder {
             let before_template = build_cfg
                 .before
                 .clone()
-                .unwrap_or_else(|| DEFAULT_BEFORE_TEMPLATE.to_string());
+                .map(|commands| commands.into_vec())
+                .unwrap_or_else(|| vec![default_before_template(env)]);
             let after_template = build_cfg
                 .after
                 .clone()
-                .unwrap_or_else(|| DEFAULT_AFTER_TEMPLATE.to_string());
+                .map(|commands| commands.into_vec())
+                .unwrap_or_else(|| vec![DEFAULT_AFTER_TEMPLATE.to_string()]);
 
             self.roomservice.add_room(RoomBuilder::new(
                 service.name.clone(),
@@ -78,11 +78,11 @@ impl Builder {
                 "./**/*.*".to_string(),
                 build_cfg.relies_on.clone().unwrap_or_default(),
                 Hooks {
-                    before: inject_vars(Some(before_template), service, env),
+                    before: inject_commands(before_template, service, env),
                     before_synchronously: None,
                     run_synchronously: None,
                     run_parallel: None,
-                    after: inject_vars(Some(after_template), service, env),
+                    after: inject_commands(after_template, service, env),
                     finally: None,
                 },
             ));
@@ -106,16 +106,45 @@ fn replace_template_var(input: &str, key: &str, value: &str) -> String {
         .replace(&format!("{{{{{}}}}}", key), value)
 }
 
-fn inject_vars(
-    script: Option<String>,
+fn default_before_template(env: &Environment) -> String {
+    match env.platform.as_deref() {
+        Some(platform) if !platform.trim().is_empty() => format!(
+            "docker buildx build --ssh default --platform {} -t {{{{ registry }}}}/{{{{ name }}}}:{{{{ version }}}} .",
+            platform
+        ),
+        _ => {
+            "docker buildx build --ssh default -t {{ registry }}/{{ name }}:{{ version }} ."
+                .to_string()
+        }
+    }
+}
+
+fn inject_command(
+    script: &str,
+    service: &Service,
+    env: &crate::environment::Environment,
+) -> String {
+    let namespace = service.namespace_or(&env.name);
+    let s = replace_template_var(script, "registry", &env.registry);
+    let s = replace_template_var(&s, "platform", env.platform.as_deref().unwrap_or(""));
+    let s = replace_template_var(&s, "name", &service.name);
+    let s = replace_template_var(&s, "version", &service.version);
+    replace_template_var(&s, "namespace", namespace)
+}
+
+fn inject_commands(
+    commands: Vec<String>,
     service: &Service,
     env: &crate::environment::Environment,
 ) -> Option<String> {
-    script.map(|s| {
-        let namespace = service.namespace_or(&env.name);
-        let s = replace_template_var(&s, "registry", &env.registry);
-        let s = replace_template_var(&s, "name", &service.name);
-        let s = replace_template_var(&s, "version", &service.version);
-        replace_template_var(&s, "namespace", namespace)
-    })
+    if commands.is_empty() {
+        return None;
+    }
+
+    let rendered = commands
+        .iter()
+        .map(|command| inject_command(command, service, env))
+        .collect::<Vec<String>>();
+
+    Some(rendered.join(" && "))
 }
