@@ -680,6 +680,7 @@ async fn main() -> Result<(), CliError> {
                 }
             }
         }
+        Commands::Migrate(arg) => handle_migrate(arg)?,
         Commands::Bump(arg) => handle_bump(arg)?,
         Commands::Lint(arg) => handle_lint(arg)?,
         Commands::Interactive(args) => {
@@ -692,6 +693,22 @@ async fn main() -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+fn handle_migrate(arg: sailr::cli::MigrateArgs) -> Result<(), CliError> {
+    match Environment::migrate_file_to_v04(&arg.name) {
+        Ok(_) => {
+            sailr::LOGGER.info(&format!(
+                "Successfully migrated environment '{}' to schema 0.4.0",
+                arg.name
+            ));
+            Ok(())
+        }
+        Err(e) => Err(CliError::Other(format!(
+            "Failed to migrate environment '{}': {}",
+            arg.name, e
+        ))),
+    }
 }
 
 fn handle_bump(arg: sailr::cli::BumpArgs) -> Result<(), CliError> {

@@ -36,6 +36,8 @@ pub enum Commands {
     AddService(AddServiceArgs),
     /// Enter interactive terminal interface cli mode
     Interactive(InteractiveArgs),
+    /// Migrate an environment configuration to schema 0.4.0
+    Migrate(MigrateArgs),
     /// Bump the version of a service
     Bump(BumpArgs),
     /// Lint an environment configuration
@@ -495,6 +497,23 @@ mod tests {
         ]);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_migrate_args_parse() {
+        let cli = Cli::try_parse_from(&["sailr", "migrate", "--name", "edge"]).unwrap();
+        match cli.commands {
+            Commands::Migrate(args) => {
+                assert_eq!(args.name, "edge");
+            }
+            _ => panic!("Expected Migrate command"),
+        }
+    }
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct MigrateArgs {
+    #[arg(short, long)]
+    pub name: String,
 }
 
 #[derive(Debug, Args, Clone)]
