@@ -151,7 +151,17 @@ impl Environment {
 
             match self.services.iter_mut().find(|s| s.name == name) {
                 Some(service) => {
-                    if service.build.is_none() {
+                    if let Some(existing_build) = service.build.as_mut() {
+                        if existing_build.path.trim().is_empty() {
+                            existing_build.path = mapped_build.path.clone();
+                        }
+                        if existing_build.before.is_none() {
+                            existing_build.before = mapped_build.before.clone();
+                        }
+                        if existing_build.after.is_none() {
+                            existing_build.after = mapped_build.after.clone();
+                        }
+                    } else {
                         service.build = Some(mapped_build);
                     }
                 }
@@ -206,6 +216,48 @@ impl Environment {
         env.apply_legacy_build_fallback();
 
         Ok(env)
+    }
+
+    pub fn migrate_contents_to_v04(contents: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let raw = toml::from_str::<Value>(contents)?;
+        let schema_version = raw
+            .get("schema_version")
+            .and_then(Value::as_str)
+            .ok_or("Missing schema_version in environment config")?;
+
+        if schema_version != SCHEMA_V02
+            && schema_version != SCHEMA_V03
+            && schema_version != SCHEMA_V04
+        {
+            return Err(Box::new(std::io::Error::other(format!(
+                "Invalid schema version: expected one of [{}, {}, {}], found {}",
+                SCHEMA_V02, SCHEMA_V03, SCHEMA_V04, schema_version
+            ))));
+        }
+
+        Self::validate_schema_constraints(&raw, schema_version)?;
+
+        let mut env = toml::from_str::<Self>(contents)?;
+        env.apply_legacy_build_fallback();
+        env.schema_version = SCHEMA_V04.to_string();
+        env.legacy_build = None;
+
+        Ok(toml::to_string_pretty(&env)?)
+    }
+
+    pub fn migrate_file_to_v04(name: &String) -> Result<String, Box<dyn std::error::Error>> {
+        let filemanager = filesystem::FileSystemManager::new(
+            Path::new("./k8s/environments")
+                .join(name)
+                .to_str()
+                .ok_or("Invalid path for environment name")?
+                .to_string(),
+        );
+
+        let contents = filemanager.read_file(&"config.toml".to_string(), None)?;
+        let migrated = Self::migrate_contents_to_v04(&contents)?;
+        filemanager.create_file(&"config.toml".to_string(), &migrated)?;
+        Ok(migrated)
     }
 
     pub fn save_to_file(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -663,5 +715,84 @@ after = "custom-push"
             build.after,
             Some(CommandSpec::Single("custom-push".to_string()))
         );
+    }
+
+    #[test]
+    fn test_legacy_build_rooms_merge_with_existing_service_build() {
+        let content = r#"
+schema_version = "0.3.0"
+name = "edge"
+log_level = "INFO"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
+
+[[service_whitelist]]
+name = "kernel"
+version = "edge-latest"
+build = "./services/core/kernel"
+
+[build.rooms.kernel]
+path = "./services/core/kernel"
+before = "docker buildx build -t kernel:edge-latest ."
+after = "docker push kernel:edge-latest"
+"#;
+
+        let mut env: Environment = toml::from_str(content).unwrap();
+        env.apply_legacy_build_fallback();
+
+        let kernel = env.get_service("kernel").unwrap();
+        let build = kernel.build.as_ref().unwrap();
+        assert_eq!(build.path, "./services/core/kernel");
+        assert_eq!(
+            build.before,
+            Some(CommandSpec::Single(
+                "docker buildx build -t kernel:edge-latest .".to_string()
+            ))
+        );
+        assert_eq!(
+            build.after,
+            Some(CommandSpec::Single(
+                "docker push kernel:edge-latest".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_migrate_contents_to_v04_from_legacy_schema() {
+        let content = r#"
+schema_version = "0.3.0"
+name = "edge"
+log_level = "TRACE"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
+platform = "linux/amd64,linux/arm64"
+
+[[service_whitelist]]
+name = "kernel"
+version = "edge-latest"
+build = "./services/core/kernel"
+
+[build.rooms.kernel]
+path = "./services/core/kernel"
+before = "docker buildx build --platform linux/amd64,linux/arm64 -t docker.io/kernel:edge-latest ."
+after = "docker push docker.io/kernel:edge-latest"
+"#;
+
+        let migrated = Environment::migrate_contents_to_v04(content).unwrap();
+        assert!(migrated.contains("schema_version = \"0.4.0\""));
+        assert!(!migrated.contains("service_whitelist"));
+        assert!(!migrated.contains("[build.rooms"));
+
+        let env: Environment = toml::from_str(&migrated).unwrap();
+        assert_eq!(env.schema_version, "0.4.0");
+        assert_eq!(env.platform.as_deref(), Some("linux/amd64,linux/arm64"));
+
+        let kernel = env.get_service("kernel").unwrap();
+        let build = kernel.build.as_ref().unwrap();
+        assert_eq!(build.path, "./services/core/kernel");
+        assert!(build.before.is_some());
+        assert!(build.after.is_some());
     }
 }
