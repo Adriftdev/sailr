@@ -328,13 +328,16 @@ impl<'de> Deserialize<'de> for Service {
             }
 
             if valid_semver {
-                tag = parsed_tag;
+                // FIX: Instead of stripping the base and just returning the parsed tag, 
+                // return the ENTIRE exact string exactly as written in the TOML.
+                tag = Some(version.to_string());
             } else {
                 major_version = None;
                 minor_version = None;
                 patch_version = None;
                 tag = Some(version.to_string());
             }
+
         } else {
             tag = Some(version.to_string());
         }

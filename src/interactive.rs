@@ -142,6 +142,34 @@ async fn run_app(terminal: &mut crate::tui::Tui, app: &mut App) -> Result<(), Cl
                         }
                         _ => {}
                     },
+                    AppState::DeploySelection { services } => match key.code {
+                        KeyCode::Esc => {
+                            app.state = AppState::MainMenu;
+                            app.selected_indices.clear();
+                        }
+
+                        KeyCode::Up => app.previous(),
+                        KeyCode::Down => app.next(),
+                        KeyCode::Char(' ') => app.toggle_selection(),
+                        KeyCode::Enter => {
+                            let mut selected = Vec::new();
+                            for &idx in &app.selected_indices {
+                                if let Some(srv) = services.get(idx) {
+                                    selected.push(srv.name.clone());
+                                }
+                            }
+                            if !selected.is_empty() {
+                                app.state = AppState::Processing {
+                                    action: Action::InteractiveDeploy,
+                                    message: "Starting deployment...".into(),
+                                    selected_items: selected,
+                                    input: None,
+                                };
+                            }
+                        }
+                        _ => {}
+                    },
+
                     AppState::Selection {
                         action,
                         items,
@@ -279,6 +307,33 @@ async fn fetch_items(args: &InteractiveArgs, action: &Action) -> Result<Vec<Stri
                 .map_err(|e| CliError::Other(format!("Failed to get all services: {}", e)))?;
             Ok(s.into_iter().filter_map(|x| x.metadata.name).collect())
         }
+        Action::InteractiveDeploy => {
+            let env_name = &args.namespace; // Quick proxy, assume interactive takes an env
+            match crate::environment::Environment::load_from_file(env_name) {
+                Ok(env) => {
+                    let mut srvs = Vec::new();
+                    for s in env.service_whitelist {
+                        srvs.push(format!(
+                            "{} (v{})",
+                            s.name,
+                            s.tag
+                                .clone()
+                                .or(s.major_version.map(|m| format!(
+                                    "{}.{}.{}",
+                                    m,
+                                    s.minor_version.unwrap_or(0),
+                                    s.patch_version.unwrap_or(0)
+                                )))
+                                .unwrap_or("latest".to_string())
+                        ));
+                    }
+                    Ok(srvs)
+                }
+                Err(_) => Err(CliError::Other(
+                    "Failed to load environment for deploy".to_string(),
+                )),
+            }
+        }
         Action::DisplayEvents => Ok(vec![]),
     }
 }
@@ -312,6 +367,18 @@ async fn run_external_action(
                     cm.data
                 );
             }
+        }
+        Action::InteractiveDeploy => {
+            let parsed_services = items
+                .iter()
+                .map(|s| s.split_whitespace().next().unwrap_or("").to_string())
+                .collect::<Vec<String>>();
+            println!(
+                "Ready to deploy services: {:?} to env: {}",
+                parsed_services, args.namespace
+            );
+            // Hook up to standard deployment builder flow here
+            // Call into builder.rs / plan.rs logic
         }
         Action::DisplayEvents => {
             let events = k8sm8::events::get_all_events(client, &args.namespace)

@@ -1,4 +1,5 @@
 use crate::cli::InteractiveArgs;
+use crate::tui::app::Action::InteractiveDeploy;
 use ratatui::widgets::ListState;
 use std::collections::HashSet;
 
@@ -20,6 +21,7 @@ pub enum Action {
     DeletePods,
     DeleteServices,
     DeleteSecrets,
+    InteractiveDeploy,
 }
 
 impl Action {
@@ -41,6 +43,7 @@ impl Action {
             Action::DeletePods => "Delete Pods",
             Action::DeleteServices => "Delete Services",
             Action::DeleteSecrets => "Delete Secrets",
+            Action::InteractiveDeploy => "Interactive Deploy (Select Services)",
         }
     }
 
@@ -68,6 +71,10 @@ impl Action {
 }
 
 pub enum AppState {
+    DeploySelection {
+        services: Vec<crate::environment::Service>,
+    },
+
     MainMenu,
     Fetching {
         action: Action,
@@ -129,6 +136,7 @@ impl App {
             Action::DeletePods,
             Action::DeleteServices,
             Action::DeleteSecrets,
+            InteractiveDeploy,
         ];
 
         let mut main_menu_state = ListState::default();

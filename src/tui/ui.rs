@@ -70,6 +70,35 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 );
             f.render_widget(p, chunks[1]);
         }
+        AppState::DeploySelection { services } => {
+            let items: Vec<ListItem> = services
+                .iter()
+                .enumerate()
+                .map(|(i, srv)| {
+                    let check = if app.selected_indices.contains(&i) { "[x]" } else { "[ ]" };
+                    let name = format!("{} {} (v{})", check, srv.name, srv.tag.clone().unwrap_or_else(|| "latest".to_string()));
+                    let lines = vec![Line::from(name)];
+                    ListItem::new(lines).style(Style::default().fg(Color::White))
+                })
+                .collect();
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Select Services to Deploy (Space to toggle) ");
+
+            let list = List::new(items)
+                .block(block)
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+                .highlight_symbol(">> ");
+
+            f.render_stateful_widget(list, chunks[1], &mut app.selection_state);
+
+            let instruction = "Space: toggle, Enter: deploy selected, Esc: cancel";
+            let footer = Paragraph::new(instruction)
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL));
+            f.render_widget(footer, chunks[2]);
+        }
         AppState::Selection {
             action,
             items,
