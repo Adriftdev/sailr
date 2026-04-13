@@ -110,12 +110,6 @@ impl Environment {
 
             if let Some(services) = raw.get("service").and_then(|v| v.as_array()) {
                 for service in services {
-                    if service.get("path").is_some() {
-                        return Err(Box::new(std::io::Error::other(
-                            "Schema 0.4.0 does not allow top-level service.path. Use [service.build].relies_on instead.",
-                        )));
-                    }
-
                     if service.get("build").is_some_and(Value::is_str) {
                         return Err(Box::new(std::io::Error::other(
                             "Schema 0.4.0 requires [service.build] table syntax; string shorthand is legacy.",
@@ -134,19 +128,27 @@ impl Environment {
         };
 
         for (name, room_config) in legacy_build.rooms {
+            let crate::roomservice::config::RoomConfig {
+                path,
+                include: _,
+                before_synchronous,
+                before,
+                run_synchronous,
+                run_parallel,
+                after,
+                finally,
+            } = room_config;
+
             let mapped_build = ServiceBuildConfig {
-                path: room_config.path,
+                path,
                 relies_on: None,
-                before: room_config
-                    .before
-                    .or(room_config.run_parallel)
-                    .or(room_config.run_synchronous)
-                    .or(room_config.before_synchronous)
-                    .map(CommandSpec::Single),
-                after: room_config
-                    .after
-                    .or(room_config.finally)
-                    .map(CommandSpec::Single),
+                before: command_spec_from_vec(
+                    [before_synchronous, before, run_parallel, run_synchronous]
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                ),
+                after: command_spec_from_vec([after, finally].into_iter().flatten().collect()),
             };
 
             match self.services.iter_mut().find(|s| s.name == name) {
@@ -389,6 +391,14 @@ impl CommandSpec {
     }
 }
 
+fn command_spec_from_vec(commands: Vec<String>) -> Option<CommandSpec> {
+    match commands.len() {
+        0 => None,
+        1 => commands.into_iter().next().map(CommandSpec::Single),
+        _ => Some(CommandSpec::Multiple(commands)),
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
 pub struct Service {
     pub name: String,
@@ -404,7 +414,12 @@ pub struct Service {
     pub build: Option<ServiceBuildConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<ServiceHooks>,
-    #[serde(default, alias = "path", skip_serializing)]
+    #[serde(
+        default,
+        rename = "path",
+        alias = "template_path",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub template_path: Option<String>,
 }
 
@@ -759,6 +774,46 @@ after = "docker push kernel:edge-latest"
     }
 
     #[test]
+    fn test_legacy_build_rooms_preserve_before_synchronous_and_before() {
+        let content = r#"
+schema_version = "0.2.0"
+name = "edge"
+log_level = "TRACE"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
+
+[[service_whitelist]]
+path = "services/skyfleetv2-portal"
+version = "edge-latest"
+name = "skyfleetv2-portal"
+build = "./services/extensions/skyfleetv2-portal"
+
+[build.rooms.skyfleetv2-portal]
+path = "./services/extensions/skyfleetv2-portal"
+beforeSynchronous = "pnpm i && rm -rf ./dist && pnpm build"
+before = "docker buildx build -t portal:edge-latest ."
+after = "docker push portal:edge-latest"
+"#;
+
+        let migrated = Environment::migrate_contents_to_v04(content).unwrap();
+        let env: Environment = toml::from_str(&migrated).unwrap();
+
+        let portal = env.get_service("skyfleetv2-portal").unwrap();
+        assert_eq!(
+            portal.template_path.as_deref(),
+            Some("services/skyfleetv2-portal")
+        );
+        assert_eq!(
+            portal.build.as_ref().unwrap().before,
+            Some(CommandSpec::Multiple(vec![
+                "pnpm i && rm -rf ./dist && pnpm build".to_string(),
+                "docker buildx build -t portal:edge-latest .".to_string()
+            ]))
+        );
+    }
+
+    #[test]
     fn test_migrate_contents_to_v04_from_legacy_schema() {
         let content = r#"
 schema_version = "0.3.0"
@@ -770,6 +825,7 @@ registry = "docker.io"
 platform = "linux/amd64,linux/arm64"
 
 [[service_whitelist]]
+path = "./core/kernel"
 name = "kernel"
 version = "edge-latest"
 build = "./services/core/kernel"
@@ -784,15 +840,57 @@ after = "docker push docker.io/kernel:edge-latest"
         assert!(migrated.contains("schema_version = \"0.4.0\""));
         assert!(!migrated.contains("service_whitelist"));
         assert!(!migrated.contains("[build.rooms"));
+        assert!(migrated.contains("path = \"./core/kernel\""));
 
         let env: Environment = toml::from_str(&migrated).unwrap();
         assert_eq!(env.schema_version, "0.4.0");
         assert_eq!(env.platform.as_deref(), Some("linux/amd64,linux/arm64"));
 
         let kernel = env.get_service("kernel").unwrap();
+        assert_eq!(kernel.template_path.as_deref(), Some("./core/kernel"));
+        assert_eq!(kernel.get_path(), "core/kernel");
         let build = kernel.build.as_ref().unwrap();
         assert_eq!(build.path, "./services/core/kernel");
         assert!(build.before.is_some());
         assert!(build.after.is_some());
+    }
+
+    #[test]
+    fn test_migrate_preserves_template_paths_for_non_build_services() {
+        let content = r#"
+schema_version = "0.2.0"
+name = "edge"
+log_level = "TRACE"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
+
+[[service_whitelist]]
+path = "valkey"
+version = "latest"
+name = "valkey"
+
+[[service_whitelist]]
+path = "aux/postgres"
+version = "latest"
+name = "postgres"
+"#;
+
+        let migrated = Environment::migrate_contents_to_v04(content).unwrap();
+        assert!(migrated.contains("path = \"valkey\""));
+        assert!(migrated.contains("path = \"aux/postgres\""));
+
+        let env: Environment = toml::from_str(&migrated).unwrap();
+        assert_eq!(
+            env.get_service("valkey").unwrap().template_path.as_deref(),
+            Some("valkey")
+        );
+        assert_eq!(
+            env.get_service("postgres")
+                .unwrap()
+                .template_path
+                .as_deref(),
+            Some("aux/postgres")
+        );
     }
 }
