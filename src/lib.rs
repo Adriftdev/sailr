@@ -21,6 +21,7 @@ pub mod filesystem;
 pub mod generate;
 pub mod infra;
 pub mod interactive;
+pub mod orchestrator;
 pub mod plan;
 pub mod provider;
 pub mod roomservice;

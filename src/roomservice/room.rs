@@ -1,58 +1,131 @@
 use checksums::{hash_file, Algorithm::BLAKE2S};
-use ignore::WalkBuilder;
+use ignore::{overrides::OverrideBuilder, WalkBuilder};
 use std::fs::{self, File};
-use std::io::prelude::*;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use super::util::fail;
+#[derive(Debug, Clone, Default)]
+pub struct Hooks {
+    pub before_synchronously: Vec<String>,
+    pub before: Vec<String>,
+    pub run_parallel: Vec<String>,
+    pub run_synchronously: Vec<String>,
+    pub after: Vec<String>,
+    pub finally: Vec<String>,
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RoomBuilder {
     pub name: String,
     pub path: String,
-    pub dependencies: Vec<String>,
+    pub dependency_rooms: Vec<String>,
+    pub dependency_paths: Vec<String>,
     pub cache_dir: String,
-    pub include: String,
+    pub include: Vec<String>,
+    pub dockerfile: Option<String>,
     pub hooks: Hooks,
-    pub should_build: bool,
-    pub latest_hash: Option<String>,
-    pub errored: bool,
-}
-
-#[derive(Debug)]
-pub struct Hooks {
-    pub before: Option<String>,
-    pub before_synchronously: Option<String>,
-    pub run_synchronously: Option<String>,
-    pub run_parallel: Option<String>,
-    pub after: Option<String>,
-    pub finally: Option<String>,
+    pub build_command: Option<String>,
+    pub push_command: Option<String>,
+    pub image_ref: Option<String>,
 }
 
 impl RoomBuilder {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         path: String,
         cache_dir: String,
-        include: String,
-        dependencies: Vec<String>,
+        include: Vec<String>,
+        dependency_rooms: Vec<String>,
+        dependency_paths: Vec<String>,
+        dockerfile: Option<String>,
         hooks: Hooks,
+        build_command: Option<String>,
+        push_command: Option<String>,
+        image_ref: Option<String>,
     ) -> RoomBuilder {
         RoomBuilder {
             name,
             path,
-            dependencies,
+            dependency_rooms,
+            dependency_paths,
             cache_dir,
             include,
+            dockerfile,
             hooks,
-            errored: false,
-            should_build: true,
-            latest_hash: None,
+            build_command,
+            push_command,
+            image_ref,
         }
     }
 
-    fn walk_file_paths(root: &Path) -> Vec<PathBuf> {
-        let builder = WalkBuilder::new(root);
+    pub fn all_commands(&self) -> Vec<String> {
+        let mut commands = Vec::new();
+        commands.extend(self.hooks.before_synchronously.clone());
+        commands.extend(self.hooks.before.clone());
+        commands.extend(self.hooks.run_parallel.clone());
+        commands.extend(self.hooks.run_synchronously.clone());
+        commands.extend(self.build_command.clone());
+        commands.extend(self.push_command.clone());
+        commands.extend(self.hooks.after.clone());
+        commands.extend(self.hooks.finally.clone());
+        commands
+    }
+
+    pub fn generate_source_hash(
+        &self,
+        scope_dump_path: Option<&Path>,
+    ) -> Result<(String, Vec<String>), String> {
+        let mut file_hashes = Vec::new();
+        let mut scoped_paths = Vec::new();
+
+        for file_path in self.walk_file_paths(Path::new(&self.path), true)? {
+            file_hashes.push(hash_file(&file_path, BLAKE2S));
+            scoped_paths.push(file_path.to_string_lossy().to_string());
+        }
+
+        for dependency_path in &self.dependency_paths {
+            for file_path in self.walk_file_paths(Path::new(dependency_path), false)? {
+                file_hashes.push(hash_file(&file_path, BLAKE2S));
+                scoped_paths.push(file_path.to_string_lossy().to_string());
+            }
+        }
+
+        scoped_paths.sort();
+        file_hashes.sort();
+
+        if let Some(scope_dump_path) = scope_dump_path {
+            if let Some(parent) = scope_dump_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| format!("Failed to create scope directory: {}", error))?;
+            }
+
+            let mut file = File::create(scope_dump_path)
+                .map_err(|error| format!("Failed to create scope dump: {}", error))?;
+            file.write_all(scoped_paths.join("\n").as_bytes())
+                .map_err(|error| format!("Failed to write scope dump: {}", error))?;
+        }
+
+        Ok((hash_text(&file_hashes.join("\n")), scoped_paths))
+    }
+
+    fn walk_file_paths(&self, root: &Path, apply_include: bool) -> Result<Vec<PathBuf>, String> {
+        let mut builder = WalkBuilder::new(root);
+
+        if apply_include && !self.include.is_empty() {
+            let mut overrides = OverrideBuilder::new(root);
+            for pattern in &self.include {
+                let clean_pattern = pattern.trim_start_matches("./");
+                overrides
+                    .add(clean_pattern)
+                    .map_err(|e| format!("Failed to parse include pattern '{}': {}", pattern, e))?;
+            }
+            let override_set = overrides
+                .build()
+                .map_err(|e| format!("Failed to build overrides: {}", e))?;
+            builder.overrides(override_set);
+        }
+
         let mut files = Vec::new();
 
         for maybe_file in builder.build() {
@@ -60,79 +133,24 @@ impl RoomBuilder {
                 continue;
             };
 
-            if file.file_type().is_some_and(|entry| entry.is_file()) {
-                files.push(file.path().to_path_buf());
+            if !file.file_type().is_some_and(|entry| entry.is_file()) {
+                continue;
             }
+
+            let path = file.path().to_path_buf();
+            files.push(path);
         }
 
         files.sort();
-        files
+        Ok(files)
     }
+}
 
-    fn generate_hash(&self, dump_scope: bool) -> String {
-        let mut hash = String::with_capacity(256);
-        let mut scope = String::new();
-        let mut all_paths = vec![self.path.clone()];
-        all_paths.extend(self.dependencies.clone());
+pub fn hash_text(value: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
-        for directory in all_paths {
-            for file_path in Self::walk_file_paths(Path::new(&directory)) {
-                if dump_scope {
-                    scope.push_str(file_path.to_str().unwrap());
-                    scope.push('\n');
-                }
-
-                hash.push_str(&hash_file(&file_path, BLAKE2S));
-                hash.push('\n');
-            }
-        }
-
-        if dump_scope {
-            fs::write(&self.name, scope).expect("unable to dump file-scope");
-        }
-
-        hash
-    }
-
-    fn prev_hash(&self) -> Option<String> {
-        let mut path = String::new();
-        path.push_str(&self.cache_dir);
-        path.push('/');
-        path.push_str(&self.name);
-
-        fs::read_to_string(path).ok()
-    }
-
-    pub fn set_errored(&mut self) {
-        self.errored = true;
-    }
-
-    pub fn write_hash(&self) {
-        let mut path = String::new();
-        path.push_str(&self.cache_dir);
-        path.push('/');
-        path.push_str(&self.name);
-        let mut file = File::create(path).unwrap();
-        match file.write_all(self.latest_hash.as_ref().unwrap().as_bytes()) {
-            Ok(_) => (),
-            Err(_) => fail("Unable to write roomservice cache for room {}"),
-        }
-    }
-
-    pub fn should_build(&mut self, force: bool, dump_scope: bool) {
-        let prev = self.prev_hash();
-        let curr = self.generate_hash(dump_scope);
-        if force {
-            self.should_build = true;
-        } else {
-            match prev {
-                Some(old_hash) => {
-                    self.should_build = old_hash != curr;
-                }
-                None => self.should_build = true,
-            }
-        }
-
-        self.latest_hash = Some(curr);
-    }
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }

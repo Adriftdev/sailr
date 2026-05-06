@@ -346,16 +346,16 @@ async fn main() -> Result<(), CliError> {
                 }
             };
 
-            let services = env
-                .list_services()
-                .into_iter()
-                .filter(|s| s.build.is_some());
-
             let mut builder = Builder::new(
                 ".roomservice".to_string(),
                 arg.force.unwrap_or(false),
-                services.into_iter().map(|s| s.name.clone()).collect(),
+                split_matches(arg.only),
                 split_matches(arg.ignore),
+                arg.plan,
+                arg.dry_run,
+                arg.explain,
+                arg.dump_scope,
+                env.build.clone(),
             );
 
             match builder.build(&env) {
@@ -394,16 +394,22 @@ async fn main() -> Result<(), CliError> {
                 let mut builder = Builder::new(
                     ".roomservice".to_string(),
                     arg.force,
-                    services
-                        .clone()
-                        .into_iter()
-                        .map(|s| s.name.clone())
-                        .collect(),
+                    split_matches(arg.only.clone()),
                     split_matches(arg.ignore),
+                    arg.plan,
+                    arg.dry_run,
+                    arg.explain,
+                    arg.dump_scope,
+                    env.build.clone(),
                 );
 
                 match builder.build(&env) {
-                    Ok(_) => (),
+                    Ok(result) => {
+                        if !result.executed {
+                            LOGGER.info("Build step planned only; skipping generate and deploy.");
+                            return Ok(());
+                        }
+                    }
                     Err(e) => {
                         LOGGER.error(&format!("Failed to build environment: {}", e));
                         std::process::exit(1);
@@ -696,10 +702,10 @@ async fn main() -> Result<(), CliError> {
 }
 
 fn handle_migrate(arg: sailr::cli::MigrateArgs) -> Result<(), CliError> {
-    match Environment::migrate_file_to_v04(&arg.name) {
+    match Environment::migrate_file_to_v05(&arg.name) {
         Ok(_) => {
             sailr::LOGGER.info(&format!(
-                "Successfully migrated environment '{}' to schema 0.4.0",
+                "Successfully migrated environment '{}' to schema 0.5.0",
                 arg.name
             ));
             Ok(())
@@ -764,11 +770,11 @@ fn handle_lint(arg: sailr::cli::LintArgs) -> Result<(), CliError> {
 
     if env.schema_version == "0.2.0" || env.schema_version == "0.3.0" {
         sailr::LOGGER.warn(&format!(
-            "Schema version {} is legacy; please migrate to 0.4.0.",
+            "Schema version {} is legacy; please migrate to 0.5.0.",
             env.schema_version
         ));
         warnings += 1;
-    } else if env.schema_version != "0.4.0" {
+    } else if env.schema_version != "0.4.0" && env.schema_version != "0.5.0" {
         sailr::LOGGER.warn(&format!(
             "Schema version {} is unrecognized.",
             env.schema_version

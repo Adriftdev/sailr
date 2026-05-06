@@ -36,7 +36,7 @@ pub enum Commands {
     AddService(AddServiceArgs),
     /// Enter interactive terminal interface cli mode
     Interactive(InteractiveArgs),
-    /// Migrate an environment configuration to schema 0.4.0
+    /// Migrate an environment configuration to schema 0.5.0
     Migrate(MigrateArgs),
     /// Bump the version of a service
     Bump(BumpArgs),
@@ -54,6 +54,15 @@ pub struct InteractiveArgs {
         help = "Kubernetes context to use"
     )]
     pub context: String,
+
+    /// Sailr environment to use for interactive deploy
+    #[arg(
+        name = "environment",
+        short = 'e',
+        long = "environment",
+        help = "Sailr environment to use for interactive deploy"
+    )]
+    pub environment: Option<String>,
 
     /// Namespace to use
     #[arg(
@@ -306,6 +315,9 @@ pub struct BuildArgs {
     )]
     pub force: Option<bool>,
 
+    #[arg(long)]
+    pub only: Option<String>,
+
     /// Name of the environment
     #[arg(
         name = "ignore",
@@ -314,6 +326,21 @@ pub struct BuildArgs {
         help = "rooms to ignore from the build of the environment"
     )]
     pub ignore: Option<String>,
+
+    #[arg(long, help = "Plan the build without executing commands")]
+    pub plan: bool,
+
+    #[arg(
+        long,
+        help = "Print the commands that would run without executing them"
+    )]
+    pub dry_run: bool,
+
+    #[arg(long, help = "Explain why each room is dirty or clean")]
+    pub explain: bool,
+
+    #[arg(long, help = "Dump the resolved file scope for each room")]
+    pub dump_scope: bool,
 }
 
 #[derive(Debug, Args)]
@@ -372,6 +399,18 @@ pub struct GoArgs {
 
     #[arg(long, short)]
     pub only: Option<String>,
+
+    #[arg(long, help = "Plan the build step without executing commands")]
+    pub plan: bool,
+
+    #[arg(long, help = "Print the build-step commands without executing them")]
+    pub dry_run: bool,
+
+    #[arg(long, help = "Explain why each build room is dirty or clean")]
+    pub explain: bool,
+
+    #[arg(long, help = "Dump the resolved file scope for each room")]
+    pub dump_scope: bool,
 
     #[arg(long = "strategy", help = "Deployment strategy to use for the deploy step", default_value_t = DeploymentStrategy::Rolling, value_enum)]
     pub strategy: DeploymentStrategy,
@@ -506,6 +545,34 @@ mod tests {
                 assert_eq!(args.name, "edge");
             }
             _ => panic!("Expected Migrate command"),
+        }
+    }
+
+    #[test]
+    fn test_build_args_parse_plan_flags() {
+        let cli = Cli::try_parse_from(&[
+            "sailr",
+            "build",
+            "--name",
+            "edge",
+            "--plan",
+            "--dry-run",
+            "--explain",
+            "--dump-scope",
+            "--only",
+            "api,web",
+        ])
+        .unwrap();
+        match cli.commands {
+            Commands::Build(args) => {
+                assert_eq!(args.name, "edge");
+                assert!(args.plan);
+                assert!(args.dry_run);
+                assert!(args.explain);
+                assert!(args.dump_scope);
+                assert_eq!(args.only.as_deref(), Some("api,web"));
+            }
+            _ => panic!("Expected Build command"),
         }
     }
 }

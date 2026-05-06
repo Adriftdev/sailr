@@ -1,16 +1,19 @@
-use crate::tui::app::{Action, App, AppState};
+use crate::orchestrator::RoomError;
+use crate::tui::app::{Action, App, AppAction, AppState, PendingExternalAction};
 use crate::{cli::InteractiveArgs, deployment::k8sm8, errors::CliError};
 use crossterm::event::{self, Event, KeyCode};
 use scribe_rust::log;
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 pub async fn main_menu(args: InteractiveArgs) -> Result<(), CliError> {
-    let mut app = App::new(args.clone());
+    let app = App::new().map_err(room_error)?;
 
     loop {
         let mut terminal = crate::tui::init()
             .map_err(|e| CliError::Other(format!("Failed to init TUI: {}", e)))?;
-        let res = run_app(&mut terminal, &mut app).await;
+        let res = run_app(&mut terminal, &app, &args).await;
         crate::tui::restore()
             .map_err(|e| CliError::Other(format!("Failed to restore TUI: {}", e)))?;
 
@@ -19,12 +22,17 @@ pub async fn main_menu(args: InteractiveArgs) -> Result<(), CliError> {
             break;
         }
 
-        if app.should_quit {
+        if app.should_quit() {
             println!("Exiting...");
             break;
         }
 
-        if let Some((action, items, input)) = app.pending_external_action.take() {
+        if let Some(PendingExternalAction {
+            action,
+            items,
+            input,
+        }) = app.take_pending_external_action().map_err(room_error)?
+        {
             println!("\nExecuting {}...", action.as_str());
             if let Err(e) = run_external_action(args.clone(), action.clone(), items, input).await {
                 log(scribe_rust::Color::Red, "Error", &format!("Failed: {}", e));
@@ -38,219 +46,134 @@ pub async fn main_menu(args: InteractiveArgs) -> Result<(), CliError> {
             println!("\nPress Enter to return to menu...");
             let mut buf = String::new();
             let _ = std::io::stdin().read_line(&mut buf);
-
-            // reset state to main menu
-            app.state = AppState::MainMenu;
-            app.selected_indices.clear();
+            app.dispatch(AppAction::ExternalActionCompleted)
+                .map_err(room_error)?;
         }
     }
 
     Ok(())
 }
 
-async fn run_app(terminal: &mut crate::tui::Tui, app: &mut App) -> Result<(), CliError> {
+async fn run_app(
+    terminal: &mut crate::tui::Tui,
+    app: &App,
+    args: &InteractiveArgs,
+) -> Result<(), CliError> {
     loop {
         terminal
             .draw(|f| crate::tui::ui::draw(f, app))
             .map_err(|e| CliError::Other(e.to_string()))?;
 
-        if app.should_quit || app.pending_external_action.is_some() {
+        if app.should_quit() || app.has_pending_external_action() {
             return Ok(());
         }
 
-        // Handle auto-transitions
-        let fetch_action = match &app.state {
-            AppState::Fetching { action, .. } => Some(action.clone()),
-            _ => None,
-        };
-
-        if let Some(action) = fetch_action {
-            match fetch_items(&app.args, &action).await {
+        if let Some(action) = app.fetch_action() {
+            match fetch_items(args, &action).await {
                 Ok(items) => {
                     if items.is_empty() {
-                        app.state = AppState::Message {
+                        app.dispatch(AppAction::ShowMessage {
                             title: "Not Found".to_string(),
                             content: format!(
                                 "No items found for this action in namespace '{}'.",
-                                app.args.namespace
+                                args.namespace
                             ),
                             is_error: true,
-                        };
+                        })
+                        .map_err(room_error)?;
                     } else {
-                        app.state = AppState::Selection {
+                        app.dispatch(AppAction::LoadSelection {
                             action: action.clone(),
                             items,
-                            multi: action.is_multi_select(),
-                        };
+                        })
+                        .map_err(room_error)?;
                     }
                 }
                 Err(e) => {
-                    app.state = AppState::Message {
+                    app.dispatch(AppAction::ShowMessage {
                         title: "Error".to_string(),
                         content: format!("Failed to fetch: {}", e),
                         is_error: true,
-                    };
+                    })
+                    .map_err(room_error)?;
                 }
             }
             continue;
         }
 
-        let process_action = match &app.state {
-            AppState::Processing {
-                action,
-                selected_items,
-                input,
-                ..
-            } => Some((action.clone(), selected_items.clone(), input.clone())),
-            _ => None,
-        };
-
-        if let Some((action, selected_items, input)) = process_action {
-            // Processing means scheduling it for external action and returning
-            let input_val = input.unwrap_or_default();
-            app.pending_external_action = Some((action, selected_items, input_val));
+        if app.processing_action().is_some() {
+            app.dispatch(AppAction::QueuePendingExternalAction)
+                .map_err(room_error)?;
             return Ok(());
         }
 
         if event::poll(Duration::from_millis(50)).map_err(|e| CliError::Other(e.to_string()))? {
             if let Event::Key(key) = event::read().map_err(|e| CliError::Other(e.to_string()))? {
-                match &mut app.state {
+                let snapshot = app.state();
+                match &snapshot.state {
                     AppState::MainMenu => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
-                        KeyCode::Up => app.previous(),
-                        KeyCode::Down => app.next(),
+                        KeyCode::Char('q') | KeyCode::Esc => {
+                            app.dispatch(AppAction::Quit).map_err(room_error)?
+                        }
+                        KeyCode::Up => app
+                            .dispatch(AppAction::MovePrevious {
+                                menu_len: app.menu_items().len(),
+                            })
+                            .map_err(room_error)?,
+                        KeyCode::Down => app
+                            .dispatch(AppAction::MoveNext {
+                                menu_len: app.menu_items().len(),
+                            })
+                            .map_err(room_error)?,
                         KeyCode::Enter => {
-                            let selected_idx = app.main_menu_state.selected().unwrap_or(0);
-                            let selected_action = app.menu_items[selected_idx].clone();
-
-                            if selected_action.skips_selection() {
-                                app.state = AppState::Processing {
-                                    action: selected_action,
-                                    message: "Starting...".into(),
-                                    selected_items: vec![],
-                                    input: None,
-                                };
-                            } else {
-                                app.state = AppState::Fetching {
-                                    action: selected_action.clone(),
-                                    message: format!(
-                                        "Fetching data for {}...",
-                                        selected_action.as_str()
-                                    ),
-                                };
+                            if let Some(selected_action) = app.current_main_menu_action() {
+                                app.dispatch(AppAction::ActivateMenu(selected_action))
+                                    .map_err(room_error)?;
                             }
                         }
                         _ => {}
                     },
-                    AppState::DeploySelection { services } => match key.code {
-                        KeyCode::Esc => {
-                            app.state = AppState::MainMenu;
-                            app.selected_indices.clear();
-                        }
-
-                        KeyCode::Up => app.previous(),
-                        KeyCode::Down => app.next(),
-                        KeyCode::Char(' ') => app.toggle_selection(),
-                        KeyCode::Enter => {
-                            let mut selected = Vec::new();
-                            for &idx in &app.selected_indices {
-                                if let Some(srv) = services.get(idx) {
-                                    selected.push(srv.name.clone());
-                                }
-                            }
-                            if !selected.is_empty() {
-                                app.state = AppState::Processing {
-                                    action: Action::InteractiveDeploy,
-                                    message: "Starting deployment...".into(),
-                                    selected_items: selected,
-                                    input: None,
-                                };
-                            }
-                        }
+                    AppState::Selection { multi, .. } => match key.code {
+                        KeyCode::Esc => app
+                            .dispatch(AppAction::ReturnToMainMenu)
+                            .map_err(room_error)?,
+                        KeyCode::Up => app
+                            .dispatch(AppAction::MovePrevious {
+                                menu_len: app.menu_items().len(),
+                            })
+                            .map_err(room_error)?,
+                        KeyCode::Down => app
+                            .dispatch(AppAction::MoveNext {
+                                menu_len: app.menu_items().len(),
+                            })
+                            .map_err(room_error)?,
+                        KeyCode::Char(' ') if *multi => app
+                            .dispatch(AppAction::ToggleSelection)
+                            .map_err(room_error)?,
+                        KeyCode::Enter => app
+                            .dispatch(AppAction::ConfirmSelection)
+                            .map_err(room_error)?,
                         _ => {}
                     },
-
-                    AppState::Selection {
-                        action,
-                        items,
-                        multi,
-                    } => {
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.state = AppState::MainMenu;
-                                app.selected_indices.clear();
-                            }
-                            KeyCode::Up => app.previous(),
-                            KeyCode::Down => app.next(),
-                            KeyCode::Char(' ') if *multi => app.toggle_selection(),
-                            KeyCode::Enter => {
-                                let mut selected = Vec::new();
-                                if *multi {
-                                    for &idx in &app.selected_indices {
-                                        if let Some(item) = items.get(idx) {
-                                            selected.push(item.clone());
-                                        }
-                                    }
-                                } else if let Some(idx) = app.selection_state.selected() {
-                                    if let Some(item) = items.get(idx) {
-                                        selected.push(item.clone());
-                                    }
-                                }
-
-                                if selected.is_empty() && *multi {
-                                    // Must select at least one
-                                } else {
-                                    let action_clone = action.clone();
-                                    if let Some(prompt) = action_clone.requires_input() {
-                                        app.state = AppState::TextInput {
-                                            action: action_clone,
-                                            prompt: prompt.to_string(),
-                                            input: String::new(),
-                                            selected_items: selected,
-                                        };
-                                    } else {
-                                        app.state = AppState::Processing {
-                                            action: action_clone,
-                                            message: "Processing...".to_string(),
-                                            selected_items: selected,
-                                            input: None,
-                                        };
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    AppState::TextInput {
-                        action,
-                        prompt: _,
-                        input,
-                        selected_items,
-                    } => match key.code {
-                        KeyCode::Esc => {
-                            app.state = AppState::MainMenu;
-                            app.selected_indices.clear();
-                        }
-                        KeyCode::Enter => {
-                            app.state = AppState::Processing {
-                                action: action.clone(),
-                                message: "Processing...".to_string(),
-                                selected_items: selected_items.clone(),
-                                input: Some(input.clone()),
-                            };
-                        }
+                    AppState::TextInput { .. } => match key.code {
+                        KeyCode::Esc => app
+                            .dispatch(AppAction::ReturnToMainMenu)
+                            .map_err(room_error)?,
+                        KeyCode::Enter => app
+                            .dispatch(AppAction::SubmitTextInput)
+                            .map_err(room_error)?,
                         KeyCode::Char(c) => {
-                            input.push(c);
+                            app.dispatch(AppAction::InputChar(c)).map_err(room_error)?
                         }
-                        KeyCode::Backspace => {
-                            input.pop();
-                        }
+                        KeyCode::Backspace => app
+                            .dispatch(AppAction::BackspaceInput)
+                            .map_err(room_error)?,
                         _ => {}
                     },
                     AppState::Message { .. } => match key.code {
-                        KeyCode::Enter | KeyCode::Esc => {
-                            app.state = AppState::MainMenu;
-                        }
+                        KeyCode::Enter | KeyCode::Esc => app
+                            .dispatch(AppAction::ReturnToMainMenu)
+                            .map_err(room_error)?,
                         _ => {}
                     },
                     _ => {}
@@ -308,8 +231,8 @@ async fn fetch_items(args: &InteractiveArgs, action: &Action) -> Result<Vec<Stri
             Ok(s.into_iter().filter_map(|x| x.metadata.name).collect())
         }
         Action::InteractiveDeploy => {
-            let env_name = &args.namespace; // Quick proxy, assume interactive takes an env
-            match crate::environment::Environment::load_from_file(env_name) {
+            let env_name = resolve_interactive_environment(args)?;
+            match crate::environment::Environment::load_from_file(&env_name) {
                 Ok(env) => {
                     let mut srvs = Vec::new();
                     for s in env.services {
@@ -317,9 +240,10 @@ async fn fetch_items(args: &InteractiveArgs, action: &Action) -> Result<Vec<Stri
                     }
                     Ok(srvs)
                 }
-                Err(_) => Err(CliError::Other(
-                    "Failed to load environment for deploy".to_string(),
-                )),
+                Err(e) => Err(CliError::Other(format!(
+                    "Failed to load environment '{}' for deploy: {}",
+                    env_name, e
+                ))),
             }
         }
         Action::DisplayEvents => Ok(vec![]),
@@ -495,4 +419,152 @@ async fn run_external_action(
         }
     }
     Ok(())
+}
+
+fn room_error(error: RoomError) -> CliError {
+    CliError::Other(format!(
+        "Failed to update interactive room state: {}",
+        error
+    ))
+}
+
+fn resolve_interactive_environment(args: &InteractiveArgs) -> Result<String, CliError> {
+    if let Some(environment) = &args.environment {
+        return Ok(environment.clone());
+    }
+
+    if environment_exists(&args.namespace) {
+        return Ok(args.namespace.clone());
+    }
+
+    let environments = discover_environments()?;
+    match environments.as_slice() {
+        [only_environment] => Ok(only_environment.clone()),
+        [] => Err(CliError::Other(
+            "No Sailr environments found in ./k8s/environments. Pass --environment to interactive mode.".to_string(),
+        )),
+        _ => Err(CliError::Other(format!(
+            "Interactive deploy needs a Sailr environment. Pass --environment. Available environments: {}",
+            environments.join(", ")
+        ))),
+    }
+}
+
+fn discover_environments() -> Result<Vec<String>, CliError> {
+    let environments_dir = Path::new("./k8s/environments");
+    if !environments_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut environments = fs::read_dir(environments_dir)
+        .map_err(|e| CliError::Other(format!("Failed to read environments directory: {}", e)))?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let config_path = path.join("config.toml");
+            if path.is_dir() && config_path.exists() {
+                entry.file_name().into_string().ok()
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    environments.sort();
+    Ok(environments)
+}
+
+fn environment_exists(environment: &str) -> bool {
+    Path::new("./k8s/environments")
+        .join(environment)
+        .join("config.toml")
+        .exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::tempdir;
+
+    fn cwd_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn resolve_interactive_environment_prefers_explicit_argument() {
+        let _guard = cwd_lock().lock().expect("cwd lock should be available");
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let previous_dir = env::current_dir().expect("cwd should be readable");
+        env::set_current_dir(temp_dir.path()).expect("cwd should switch to temp dir");
+
+        fs::create_dir_all("k8s/environments").expect("environments dir should exist");
+        fs::create_dir_all("k8s/environments/dev").expect("env dir should exist");
+        fs::write("k8s/environments/dev/config.toml", "").expect("config should be written");
+
+        let args = InteractiveArgs {
+            context: "ctx".to_string(),
+            environment: Some("staging".to_string()),
+            namespace: "default".to_string(),
+        };
+
+        let resolved = resolve_interactive_environment(&args).expect("environment should resolve");
+        assert_eq!(resolved, "staging");
+
+        env::set_current_dir(previous_dir).expect("cwd should be restored");
+    }
+
+    #[test]
+    fn resolve_interactive_environment_uses_single_local_environment() {
+        let _guard = cwd_lock().lock().expect("cwd lock should be available");
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let previous_dir = env::current_dir().expect("cwd should be readable");
+        env::set_current_dir(temp_dir.path()).expect("cwd should switch to temp dir");
+
+        fs::create_dir_all("k8s/environments").expect("environments dir should exist");
+        fs::create_dir_all("k8s/environments/dev").expect("env dir should exist");
+        fs::write("k8s/environments/dev/config.toml", "").expect("config should be written");
+
+        let args = InteractiveArgs {
+            context: "ctx".to_string(),
+            environment: None,
+            namespace: "default".to_string(),
+        };
+
+        let resolved = resolve_interactive_environment(&args).expect("environment should resolve");
+        assert_eq!(resolved, "dev");
+
+        env::set_current_dir(previous_dir).expect("cwd should be restored");
+    }
+
+    #[test]
+    fn resolve_interactive_environment_errors_when_ambiguous() {
+        let _guard = cwd_lock().lock().expect("cwd lock should be available");
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let previous_dir = env::current_dir().expect("cwd should be readable");
+        env::set_current_dir(temp_dir.path()).expect("cwd should switch to temp dir");
+
+        fs::create_dir_all("k8s/environments").expect("environments dir should exist");
+        fs::create_dir_all("k8s/environments/dev").expect("dev dir should exist");
+        fs::create_dir_all("k8s/environments/staging").expect("staging dir should exist");
+        fs::write("k8s/environments/dev/config.toml", "").expect("dev config should be written");
+        fs::write("k8s/environments/staging/config.toml", "")
+            .expect("staging config should be written");
+
+        let args = InteractiveArgs {
+            context: "ctx".to_string(),
+            environment: None,
+            namespace: "default".to_string(),
+        };
+
+        let error =
+            resolve_interactive_environment(&args).expect_err("resolution should be ambiguous");
+        assert!(error
+            .to_string()
+            .contains("Interactive deploy needs a Sailr environment"));
+
+        env::set_current_dir(previous_dir).expect("cwd should be restored");
+    }
 }
