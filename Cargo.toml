@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+runkernel = "0.1.1"
 clap = { version = "~4", features = ["derive"] }
 futures = "~0.3"
 tokio = { version = "~1", features = ["full"] }
@@ -14,7 +15,8 @@ serde = { version = "~1", features = ["derive"] }
 serde_yaml = "~0.9"
 toml = "~0.7"
 chrono = "~0.4"
-scribe-rust = "~0.2"
+indicatif = "0.17"
+console = "0.15"
 k8s-openapi = { version = "~0.25", features = ["v1_33"] }
 kube = { version = "~1.1.0", features = [
     "runtime",
@@ -39,7 +41,6 @@ diffy = "0.4.2"
 walkdir = "2.5.0"
 inquire = "0.7.5"
 tokio-stream = "0.1.17"
-term = "1.0.2"
 base64 = "0.22.1"
 ratatui = "0.26"
 crossterm = { version = "0.27", features = ["event-stream"] }

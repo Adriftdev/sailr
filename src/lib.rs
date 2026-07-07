@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, path::Path};
 
 use environment::{Environment, Service};
 use filesystem::FileSystemManager;
@@ -9,7 +9,6 @@ use templates::TemplateManager;
 use utils::replace_variables;
 
 use once_cell::sync::Lazy;
-use scribe_rust::{self, Logger};
 
 pub mod builder;
 pub mod cli;
@@ -27,9 +26,10 @@ pub mod provider;
 pub mod roomservice;
 pub mod templates;
 pub mod tui;
+pub mod ui;
 pub mod utils;
 
-pub static LOGGER: Lazy<Arc<Logger>> = Lazy::new(Logger::default);
+pub static LOGGER: Lazy<ui::SailrUI> = Lazy::new(|| ui::SailrUI::new(false, false));
 
 #[derive(Debug, Deserialize)]
 pub struct GlobalVars {
@@ -76,15 +76,11 @@ pub fn load_global_vars() -> Result<BTreeMap<String, String>, Box<dyn std::error
     Ok(vars)
 }
 
-pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
+pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) -> anyhow::Result<()> {
     let mut template_manager = TemplateManager::new();
-    let (templates, config_maps) = match template_manager.read_templates(Some(env)) {
-        Ok((templates, config_maps)) => (templates, config_maps),
-        Err(e) => {
-            println!("Error: {:?}", e);
-            return;
-        }
-    };
+    let (templates, config_maps) = template_manager
+        .read_templates(Some(env))
+        .map_err(|e| anyhow::anyhow!("Failed to read templates: {:?}", e))?;
 
     let mut generator = Generator::new();
 
@@ -96,7 +92,7 @@ pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
             }
             let content = template_manager
                 .replace_variables(template, variables)
-                .unwrap();
+                .map_err(|e| anyhow::anyhow!("Failed to replace variables: {:?}", e))?;
 
             generator.add_template(template, content)
         }
@@ -108,10 +104,10 @@ pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
             generator.add_config_map(config);
         }
     }
-    let res = generator.generate(&name.to_string());
-    if let Err(e) = res {
-        println!(": {:?}", e);
-    }
+    generator
+        .generate(&name.to_string())
+        .map_err(|e| anyhow::anyhow!("Failed to generate templates: {:?}", e))?;
+    Ok(())
 }
 
 pub fn create_default_env_config(
@@ -207,11 +203,8 @@ pub fn create_default_env_infra(
     vars.insert("name".to_string(), name.clone());
 
     if let Some(r) = registry {
-        println!("Registry: {:?}", Some(&r));
         vars.insert("default_registry".to_string(), r);
     }
-
-    println!("Vars: {:?}", vars);
 
     if let Some(config_template) = infra_template {
         Infra::use_template(&name, &config_template, &mut vars);

@@ -18,12 +18,19 @@ These settings define the overall behavior and metadata for your environment.
 ### `schema_version` (string)
 *   **Required**
 *   Specifies the version of the configuration file schema Sailr should expect.
-*   Example: `schema_version = "0.2.0"`
+*   Example: `schema_version = "0.5.0"`
 *   Changing this version might indicate breaking changes or new features in the Sailr config specification. Consult the Sailr release notes if you need to change this.
 
+### `extends` (string)
+*   **Optional**
+*   Names another environment under `k8s/environments/<name>/config.toml` to use as this environment's base.
+*   Layered environments must resolve to `schema_version = "0.5.0"`.
+*   Example: `extends = "develop"`
+
 ### `name` (string)
-*   **Required**
+*   **Required unless `extends` is set**
 *   The name of the environment. This is used for identification purposes and can be used as a variable in your templates (e.g., `{{name}}` or `{{env_name}}` - Sailr provides it as `{{name}}` as per `Environment::get_variables`).
+*   If an environment extends another environment and omits `name`, Sailr uses the child environment directory name.
 *   Example: `name = "production"`
 
 ### `log_level` (string)
@@ -49,6 +56,35 @@ These settings define the overall behavior and metadata for your environment.
 *   The container image registry to use for pulling images if the image name does not include a registry hostname. Also used as a target for images built by Sailr. This value is available in templates as `{{registry}}`.
 *   Defaults to `"docker.io"`.
 *   Example: `registry = "gcr.io/my-project"` or `registry = "quay.io/my-org"`
+
+## Layered Environments
+
+Layered environments let you keep a complete base environment and define small overrides for derived environments. When Sailr loads the child environment, it resolves the base first and then applies the child values in memory.
+
+```toml
+# k8s/environments/production-eu/config.toml
+schema_version = "0.5.0"
+extends = "production"
+domain = "eu.example.com"
+
+[[environment_variables]]
+name = "REGION"
+value = "eu"
+
+[[service]]
+name = "api"
+version = "2.1.0"
+```
+
+Merge behavior:
+
+*   Top-level scalar values override the base.
+*   Tables merge field by field.
+*   `[[service]]` entries merge by `name`; child fields override matching base fields, and new services are appended.
+*   `[[environment_variables]]` entries merge by `name`; child values override matching base values, and new variables are appended.
+*   Other arrays replace the base array.
+*   Inheritance can be chained. Cycles are rejected.
+*   `sailr add-service` and `sailr bump` write local child overrides instead of flattening the resolved environment.
 
 ## Service Whitelist (`[[service_whitelist]]`)
 

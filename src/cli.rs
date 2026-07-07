@@ -11,6 +11,22 @@ use clap_complete::{generate, Generator, Shell};
 )]
 #[command(propagate_version = true)]
 pub struct Cli {
+    #[arg(
+        short = 'q',
+        long = "quiet",
+        global = true,
+        help = "Do not print log messages"
+    )]
+    pub quiet: bool,
+
+    #[arg(
+        short = 'v',
+        long = "verbose",
+        global = true,
+        help = "Use verbose output"
+    )]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub commands: Commands,
 }

@@ -1,6 +1,5 @@
 use anyhow::Result;
 use kube::api::DynamicObject;
-use scribe_rust::{log, Color};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -35,15 +34,6 @@ impl ChangeAction {
             ChangeAction::Update => "~",
             ChangeAction::Delete => "-",
             ChangeAction::NoChange => "=",
-        }
-    }
-
-    pub fn color(&self) -> Color {
-        match self {
-            ChangeAction::Create => Color::Green,
-            ChangeAction::Update => Color::Yellow,
-            ChangeAction::Delete => Color::Red,
-            ChangeAction::NoChange => Color::Blue,
         }
     }
 }
@@ -92,14 +82,14 @@ impl DeploymentPlan {
 
     pub fn display(&self) {
         LOGGER.info("📋 Deployment Plan:");
-        println!();
+        LOGGER.println("");
 
         // Display summary
         LOGGER.info(&format!(
             "Plan: {} to create, {} to update, {} to delete",
             self.summary.to_create, self.summary.to_update, self.summary.to_delete
         ));
-        println!();
+        LOGGER.println("");
 
         // Group changes by action
         let mut creates = Vec::new();
@@ -123,14 +113,13 @@ impl DeploymentPlan {
                 .map(|ns| format!(" (namespace: {})", ns))
                 .unwrap_or_default();
 
-            log(
-                change.action.color(),
-                change.action.symbol(),
+            log_change(
+                &change.action,
                 &format!("{}/{}{}", change.resource_type, change.name, namespace_str),
             );
 
             for detail in &change.details {
-                println!("{}", &format!("    {}", detail));
+                LOGGER.println(&format!("    {}", detail));
             }
         }
 
@@ -142,14 +131,13 @@ impl DeploymentPlan {
                 .map(|ns| format!(" (namespace: {})", ns))
                 .unwrap_or_default();
 
-            log(
-                change.action.color(),
-                change.action.symbol(),
+            log_change(
+                &change.action,
                 &format!("{}/{}{}", change.resource_type, change.name, namespace_str),
             );
 
             for detail in &change.details {
-                println!("{}", &format!("    {}", detail));
+                LOGGER.println(&format!("    {}", detail));
             }
         }
 
@@ -161,20 +149,31 @@ impl DeploymentPlan {
                 .map(|ns| format!(" (namespace: {})", ns))
                 .unwrap_or_default();
 
-            log(
-                change.action.color(),
-                change.action.symbol(),
+            log_change(
+                &change.action,
                 &format!("{}/{}{}", change.resource_type, change.name, namespace_str),
             );
         }
 
-        println!();
+        LOGGER.println("");
         if self.summary.to_create > 0 || self.summary.to_update > 0 || self.summary.to_delete > 0 {
             LOGGER.info("Run without --plan to apply these changes.");
         } else {
             LOGGER.info("No changes detected. Infrastructure is up to date.");
         }
     }
+}
+
+fn log_change(action: &ChangeAction, msg: &str) {
+    use console::style;
+    let symbol = action.symbol();
+    let styled_symbol = match action {
+        ChangeAction::Create => style(symbol).green().bold(),
+        ChangeAction::Update => style(symbol).yellow().bold(),
+        ChangeAction::Delete => style(symbol).red().bold(),
+        ChangeAction::NoChange => style(symbol).dim(),
+    };
+    LOGGER.println(&format!("  {} {}", styled_symbol, msg));
 }
 
 pub async fn generate_deployment_plan(
