@@ -2,7 +2,7 @@
 environment = "local"
 mode = "build"
 interactive = false
-build = "plan"
+build = "run"
 generate = "run"
 deploy = "disabled"
 report = "text"

@@ -186,7 +186,9 @@ mod tests {
         let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
         let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
         let (pipeline, _) = planner.build_pipeline().unwrap();
-        assert!(pipeline.tasks().any(|t| t.name == "workflow:validate-config"));
+        assert!(pipeline
+            .tasks()
+            .any(|t| t.name == "workflow:validate-config"));
     }
 
     #[test]
