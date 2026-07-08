@@ -1,0 +1,6 @@
+schema_version = "0.5.0"
+name = "local"
+log_level = "info"
+domain = "local.dev"
+default_replicas = 1
+registry = "local.registry"

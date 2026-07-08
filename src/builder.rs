@@ -30,15 +30,15 @@ pub struct BuildRunResult {
 
 #[derive(Debug, Clone)]
 pub struct BuildOptions {
-    cache_dir: String,
-    force: bool,
-    only: Vec<String>,
-    ignore: Vec<String>,
-    plan: bool,
-    dry_run: bool,
-    explain: bool,
-    dump_scope: bool,
-    policy: Option<BuildPolicy>,
+    pub(crate) cache_dir: String,
+    pub(crate) force: bool,
+    pub(crate) only: Vec<String>,
+    pub(crate) ignore: Vec<String>,
+    pub(crate) plan: bool,
+    pub(crate) dry_run: bool,
+    pub(crate) explain: bool,
+    pub(crate) dump_scope: bool,
+    pub(crate) policy: Option<BuildPolicy>,
 }
 
 #[async_trait]
@@ -297,7 +297,7 @@ struct NormalizedBuildConfig {
     phases: ServicePhases,
 }
 
-fn create_sailr_build_plan(
+pub(crate) fn create_sailr_build_plan(
     env: &Environment,
     options: &BuildOptions,
 ) -> Result<SailrBuildPlan, String> {
@@ -439,7 +439,7 @@ fn create_sailr_build_plan(
     })
 }
 
-fn add_runkernel_tasks(pipeline: &mut Pipeline, plan: &SailrBuildPlan) -> Result<(), String> {
+pub(crate) fn add_runkernel_tasks(pipeline: &mut Pipeline, plan: &SailrBuildPlan) -> Result<(), String> {
     let dirty_services = plan
         .services
         .iter()
@@ -1118,7 +1118,7 @@ fn load_service_cache(
         .map_err(|error| format!("Failed to parse Sailr service cache: {}", error))
 }
 
-fn write_successful_service_caches(
+pub(crate) fn write_successful_service_caches(
     plan: &SailrBuildPlan,
     result: &PipelineResult,
 ) -> Result<(), String> {
@@ -1269,7 +1269,7 @@ fn print_sailr_plan(plan: &SailrBuildPlan, options: &BuildOptions) {
     }
 }
 
-fn print_pipeline_result(plan: &SailrBuildPlan, result: &PipelineResult) {
+pub(crate) fn print_pipeline_result(plan: &SailrBuildPlan, result: &PipelineResult) {
     let task_statuses = result
         .tasks
         .iter()
@@ -1324,7 +1324,7 @@ fn print_pipeline_result(plan: &SailrBuildPlan, result: &PipelineResult) {
     );
 }
 
-fn attach_pipeline_logging(pipeline: &mut Pipeline) {
+pub(crate) fn attach_pipeline_logging(pipeline: &mut Pipeline) {
     pipeline.on_event(|event| match event {
         PipelineEvent::PipelineStarted { name, task_count } => {
             crate::LOGGER.info(&format!(

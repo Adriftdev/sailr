@@ -1,0 +1,20 @@
+name: Sailr Workflow - ci
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  sailr-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Sailr
+        run: curl -sSL https://sailr.dev/install.sh | bash
+      
+      - name: Run Workflow
+        run: sailr workflow run ci
