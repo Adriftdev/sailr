@@ -157,25 +157,28 @@ impl Builder {
                     LOGGER.info(&format!("Task '{}' started.", name));
                 }
                 PipelineEvent::TaskCompleted { name, duration } => {
-                    LOGGER.info(&format!("Task '{}' completed in {:.2?}.", name, duration));
+                    LOGGER.task_completed(&name, duration);
                 }
                 PipelineEvent::TaskQueued { name } => {
                     LOGGER.info(&format!("Task '{}' queued.", name));
                 }
                 PipelineEvent::TaskFailed { name, error } => {
-                    LOGGER.error(&format!("Task '{}' failed: {}", name, error));
+                    LOGGER.task_failed(&name, &error);
                 }
-                PipelineEvent::TaskCached { name, reason } => {
-                    LOGGER.info(&format!("Task '{}' cached: {}", name, reason));
+                PipelineEvent::TaskCached { name, .. } => {
+                    LOGGER.task_cached(&name);
                 }
                 PipelineEvent::TaskCancelled { name } => {
                     LOGGER.warn(&format!("Task '{}' cancelled.", name));
                 }
                 PipelineEvent::TaskSkipped { name, reason } => {
-                    LOGGER.info(&format!("Task '{}' skipped: {}", name, reason));
+                    LOGGER.debug(&format!("Task '{}' skipped: {}", name, reason));
+                }
+                PipelineEvent::TaskRollbackCompleted { name } => {
+                    LOGGER.task_rollback(&name);
                 }
                 PipelineEvent::TaskRollbackFailed { name, error } => {
-                    LOGGER.error(&format!("Task '{}' rollback failed: {}", name, error));
+                    LOGGER.task_failed(&name, &error);
                 }
                 PipelineEvent::PipelineFinished { result } => {
                     LOGGER.info(&format!(
