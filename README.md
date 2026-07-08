@@ -97,6 +97,10 @@ Sailr supports two build backends:
 
 Use `--engine runkernel` or `[build].engine = "runkernel"` to try the new backend. Roomservice remains available with `--engine roomservice`.
 
+Roomservice stores build cache under `.roomservice`. The runkernel backend stores Sailr-owned build cache under `.sailr/cache/build`, keeping embedded runkernel state inside Sailr's project cache instead of exposing `.runkernel` as a user-facing project directory.
+
+`[build].max_parallelism` is accepted by the runkernel backend, but not enforced yet. Sailr emits a warning when this setting is used with `engine = "runkernel"`.
+
 ```bash 
 sailr build <environment_name> [--ignore <service1,service2,...>]
 sailr build --name dev --engine runkernel
@@ -132,7 +136,7 @@ This document outlines the configuration options for the Sailr CLI application, 
 
 ### Schema Version
 
-* **schema_version (string):** (Required) The schema version of the configuration file. Currently set to `0.2.0`. Changing this version might indicate breaking changes, new features, or patches to the Sailr config specification.
+* **schema_version (string):** (Required) The schema version of the configuration file. New projects should use `0.5.0`.
 
 ### Global Configuration
 
@@ -144,25 +148,31 @@ These settings apply globally and can be referenced within templates using doubl
 * **default_replicas (integer):** (Optional) The default number of replicas for deployed services. Defaults to 1.
 * **registry (string):** (Optional) The container image registry to use for deployments. Defaults to "docker.io".
 
-### Service Whitelist
+### Services
 
-This section defines the services to be generated and deployed, and the build process optionally.
+Services are defined with `[[service]]` entries. Each service can also include build configuration shared by both build backends.
 
-Under the hood of the build system uses the core of roomservice-rust credit goes to [Curtis Wilkinson](https://github.com/curtiswilkinson/roomservice-rust) for the roomservice code :D.
+Sailr supports pluggable build backends.
 
-Some changes to roomservice config have been made for this applciation - config file has been merged into the config.toml and defined them is as below.
+Roomservice is the current default backend. The experimental runkernel backend can be selected with `--engine runkernel` or `[build].engine = "runkernel"`.
 
-* **[[service_whitelist]] (array):** An array of service definitions. Each service definition within the whitelist has the following properties:
-    * **name (string):** (Required) The name of the service. Used for image pulling and as a reference in templates (`{{service_name}}`).
-    * **version (string):** (Required) The version of the service image (semver or tag). Used in templates (`{{service_version}}`).
-    * **path (string):** (Optional) The path to the service template directory relative to `k8s/templates`. Defaults to the service name.
-    * **namespace (string):** (Optional) The namespace where the service will be deployed in Kubernetes. Defaults to the environment name.
-    * **build (string):** (optional) The path to the service build directory relative to the project root.
-    * **run_parallel (string):** (Optional) A shell command to run in parallel for all builds.
-    * **run_synchronous (string):** (Optional) A shell command to run in synchronous.
-    * **before (string):** (Optional) A shell command to run before building the service image.
-    * **before_synchonous: (string):** (Optional) A shell command to run before building the service image.
-    * **after (string):** (Optional) A shell command to run after building the service image.
+Build configuration lives in `config.toml` and is shared by both backends.
+
+```toml
+[[service]]
+name = "api"
+version = "1.2.3"
+
+[service.build]
+path = "services/api"
+include = ["src/**/*.rs", "Cargo.toml", "Dockerfile"]
+build_command = "docker buildx build -t {{ registry }}/{{ name }}:{{ version }} ."
+push_command = "docker push {{ registry }}/{{ name }}:{{ version }}"
+```
+
+Older configs may still use `service_whitelist`; migrate to schema `0.5.0` and `[[service]]` for new projects. See the [config.toml Guide](docs/docs/configuration/config-toml.md) and [Roomservice to runkernel migration guide](docs/docs/migration/roomservice-to-runkernel.md) for details.
+
+The Roomservice backend is based on roomservice-rust. Credit to [Curtis Wilkinson](https://github.com/curtiswilkinson/roomservice-rust) for the original Roomservice implementation.
 
 ### Environment Variables
 
