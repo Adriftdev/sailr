@@ -1015,7 +1015,7 @@ fn default_build_command(env: &Environment, build_cfg: &ServiceBuildConfig) -> S
             platform, dockerfile_segment
         ),
         _ => format!(
-            "docker buildx build --ssh default{} -t {{ registry }}/{{ name }}:{{ version }} .",
+            "docker buildx build --ssh default{} -t {{{{ registry }}}}/{{{{ name }}}}:{{{{ version }}}} .",
             dockerfile_segment
         ),
     }

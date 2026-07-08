@@ -1,6 +1,6 @@
 [workflow.ci]
 environment = "local"
-mode = "check"
+mode = "build"
 interactive = false
 build = "plan"
 generate = "run"
