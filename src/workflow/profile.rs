@@ -739,4 +739,26 @@ mod tests {
         assert_eq!(normalized.approval, ApprovalMode::None);
         assert!(!normalized.apply);
     }
+
+    #[test]
+    fn normalize_local_deploy_profile() {
+        let toml_str = r#"
+            environment = "local"
+            mode = "go"
+            interactive = true
+            deploy = "run"
+            deploy_context = "minikube"
+            namespace = "default"
+            approval = "prompt"
+            apply = true
+        "#;
+        let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
+        let normalized = profile.normalize(false); // not CI
+        assert_eq!(normalized.interactive, true);
+        assert_eq!(normalized.deploy, WorkflowStepMode::Run);
+        assert_eq!(normalized.approval, ApprovalMode::Prompt);
+        assert_eq!(normalized.apply, true);
+        assert_eq!(normalized.deploy_context.as_deref(), Some("minikube"));
+        assert_eq!(normalized.namespace.as_deref(), Some("default"));
+    }
 }

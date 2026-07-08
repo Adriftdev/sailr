@@ -163,15 +163,20 @@ pub fn validate_workflow_safety(
 
     if profile.deploy.is_active() {
         if profile.deploy_context.is_none() {
-            return Err(
-                "Validation Error: deploy_context is required when deploy is active".to_string(),
-            );
+            return Err("deploy_context is required when deploy is active".to_string());
         }
 
-        return Err(
-            "workflow deploy execution is not enabled in this PR; use sailr deploy or sailr go"
-                .to_string(),
-        );
+        if runner.ci && profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
+            return Err("CI deploy workflows are not enabled in this stage".to_string());
+        }
+
+        if profile.deploy == crate::workflow::profile::WorkflowStepMode::Run && !profile.apply {
+            return Err("deploy = run requires apply = true".to_string());
+        }
+    }
+
+    if profile.approval == crate::workflow::profile::ApprovalMode::Prompt && !runner.interactive {
+        return Err("approval prompt cannot run in non-interactive mode".to_string());
     }
 
     Ok(())
@@ -534,5 +539,155 @@ mod tests {
             assert!(!ctx.ci);
             assert!(!ctx.interactive);
         });
+    }
+
+    #[test]
+    fn validate_safety_missing_deploy_context() {
+        use crate::workflow::profile::{
+            ApprovalMode, NormalizedWorkflowProfile, ReportMode, WorkflowEngine, WorkflowMode,
+            WorkflowStepMode,
+        };
+
+        let profile = NormalizedWorkflowProfile {
+            name: "test".to_string(),
+            environment: "local".to_string(),
+            mode: WorkflowMode::Go,
+            engine: WorkflowEngine::Runkernel,
+            interactive: true,
+            build: WorkflowStepMode::Run,
+            generate: WorkflowStepMode::Run,
+            deploy: WorkflowStepMode::Run,
+            test: WorkflowStepMode::Disabled,
+            verify: WorkflowStepMode::Disabled,
+            deploy_context: None,
+            namespace: None,
+            approval: ApprovalMode::Prompt,
+            apply: true,
+            report: ReportMode::Text,
+        };
+
+        let runner = RunnerContext {
+            kind: RunnerKind::Local,
+            ci: false,
+            interactive: true,
+        };
+
+        let res = validate_workflow_safety(&profile, &runner);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("deploy_context is required"));
+    }
+
+    #[test]
+    fn validate_safety_ci_deploy_rejected() {
+        use crate::workflow::profile::{
+            ApprovalMode, NormalizedWorkflowProfile, ReportMode, WorkflowEngine, WorkflowMode,
+            WorkflowStepMode,
+        };
+
+        let profile = NormalizedWorkflowProfile {
+            name: "test".to_string(),
+            environment: "prod".to_string(),
+            mode: WorkflowMode::Deploy,
+            engine: WorkflowEngine::Runkernel,
+            interactive: false,
+            build: WorkflowStepMode::Plan,
+            generate: WorkflowStepMode::Run,
+            deploy: WorkflowStepMode::Run,
+            test: WorkflowStepMode::Disabled,
+            verify: WorkflowStepMode::Disabled,
+            deploy_context: Some("prod-cluster".to_string()),
+            namespace: None,
+            approval: ApprovalMode::External,
+            apply: true,
+            report: ReportMode::Text,
+        };
+
+        let runner = RunnerContext {
+            kind: RunnerKind::GitHubActions,
+            ci: true,
+            interactive: false,
+        };
+
+        let res = validate_workflow_safety(&profile, &runner);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .contains("CI deploy workflows are not enabled"));
+    }
+
+    #[test]
+    fn validate_safety_approval_prompt_non_interactive() {
+        use crate::workflow::profile::{
+            ApprovalMode, NormalizedWorkflowProfile, ReportMode, WorkflowEngine, WorkflowMode,
+            WorkflowStepMode,
+        };
+
+        let profile = NormalizedWorkflowProfile {
+            name: "test".to_string(),
+            environment: "local".to_string(),
+            mode: WorkflowMode::Go,
+            engine: WorkflowEngine::Runkernel,
+            interactive: false,
+            build: WorkflowStepMode::Plan,
+            generate: WorkflowStepMode::Run,
+            deploy: WorkflowStepMode::Plan,
+            test: WorkflowStepMode::Disabled,
+            verify: WorkflowStepMode::Disabled,
+            deploy_context: Some("minikube".to_string()),
+            namespace: None,
+            approval: ApprovalMode::Prompt,
+            apply: false,
+            report: ReportMode::Text,
+        };
+
+        let runner = RunnerContext {
+            kind: RunnerKind::Local,
+            ci: false,
+            interactive: false, // user ran with --non-interactive
+        };
+
+        let res = validate_workflow_safety(&profile, &runner);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .contains("approval prompt cannot run in non-interactive mode"));
+    }
+
+    #[test]
+    fn validate_safety_deploy_run_requires_apply() {
+        use crate::workflow::profile::{
+            ApprovalMode, NormalizedWorkflowProfile, ReportMode, WorkflowEngine, WorkflowMode,
+            WorkflowStepMode,
+        };
+
+        let profile = NormalizedWorkflowProfile {
+            name: "test".to_string(),
+            environment: "local".to_string(),
+            mode: WorkflowMode::Go,
+            engine: WorkflowEngine::Runkernel,
+            interactive: true,
+            build: WorkflowStepMode::Run,
+            generate: WorkflowStepMode::Run,
+            deploy: WorkflowStepMode::Run,
+            test: WorkflowStepMode::Disabled,
+            verify: WorkflowStepMode::Disabled,
+            deploy_context: Some("minikube".to_string()),
+            namespace: None,
+            approval: ApprovalMode::Prompt,
+            apply: false, // apply is false!
+            report: ReportMode::Text,
+        };
+
+        let runner = RunnerContext {
+            kind: RunnerKind::Local,
+            ci: false,
+            interactive: true,
+        };
+
+        let res = validate_workflow_safety(&profile, &runner);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .contains("deploy = run requires apply = true"));
     }
 }

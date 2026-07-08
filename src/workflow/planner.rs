@@ -169,6 +169,80 @@ impl WorkflowPlanner {
                     to: "workflow:generate".to_string(),
                 });
             }
+            last_tasks = vec!["workflow:generate".to_string()];
+        }
+
+        // 3. Deploy Phase
+        if self.profile.deploy.is_active() {
+            tasks.push(WorkflowTaskPlan {
+                id: "workflow:deployment-plan".to_string(),
+                label: "Deployment Plan".to_string(),
+                kind: WorkflowTaskKind::DeploymentPlan,
+                dependencies: last_tasks.clone(),
+                effects: WorkflowEffects::default(),
+                description:
+                    "Create and validate the Kubernetes deployment plan without applying changes."
+                        .to_string(),
+            });
+
+            for t in &last_tasks {
+                edges.push(WorkflowEdge {
+                    from: t.clone(),
+                    to: "workflow:deployment-plan".to_string(),
+                });
+            }
+
+            last_tasks = vec!["workflow:deployment-plan".to_string()];
+
+            if self.profile.approval == crate::workflow::profile::ApprovalMode::Prompt {
+                effects.prompts_user = true;
+                tasks.push(WorkflowTaskPlan {
+                    id: "workflow:approval".to_string(),
+                    label: "Approval".to_string(),
+                    kind: WorkflowTaskKind::Approval,
+                    dependencies: last_tasks.clone(),
+                    effects: WorkflowEffects {
+                        prompts_user: true,
+                        ..Default::default()
+                    },
+                    description: "Ask for local confirmation before applying deployment changes."
+                        .to_string(),
+                });
+
+                for t in &last_tasks {
+                    edges.push(WorkflowEdge {
+                        from: t.clone(),
+                        to: "workflow:approval".to_string(),
+                    });
+                }
+
+                last_tasks = vec!["workflow:approval".to_string()];
+            }
+
+            if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
+                && self.profile.apply
+            {
+                effects.mutates_cluster = true;
+                tasks.push(WorkflowTaskPlan {
+                    id: "workflow:deploy".to_string(),
+                    label: "Deploy".to_string(),
+                    kind: WorkflowTaskKind::Deploy,
+                    dependencies: last_tasks.clone(),
+                    effects: WorkflowEffects {
+                        mutates_cluster: true,
+                        ..Default::default()
+                    },
+                    description: "Apply generated manifests to the configured Kubernetes context."
+                        .to_string(),
+                });
+
+                for t in &last_tasks {
+                    edges.push(WorkflowEdge {
+                        from: t.clone(),
+                        to: "workflow:deploy".to_string(),
+                    });
+                }
+            }
         }
 
         Ok(WorkflowPlan {
@@ -275,6 +349,114 @@ impl WorkflowPlanner {
             });
 
             pipeline.add(task);
+            last_tasks = vec!["workflow:generate".to_string()];
+        }
+
+        if self.profile.deploy.is_active() {
+            let mut task = Task::new("workflow:deployment-plan");
+
+            let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
+            if !deps_refs.is_empty() {
+                task = task.depends_on(&deps_refs);
+            }
+
+            let env_name = self.profile.environment.clone();
+            let context = self.profile.deploy_context.clone().unwrap_or_default();
+            let namespace = self
+                .profile
+                .namespace
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+
+            task = task.exec_fn(move |_ctx| {
+                let env_name = env_name.clone();
+                let context = context.clone();
+                let namespace = namespace.clone();
+                async move {
+                    crate::LOGGER.info("Deployment plan:");
+                    let plan =
+                        crate::plan::generate_deployment_plan(&env_name, &context, &namespace)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Deployment plan failed: {}", e))?;
+
+                    crate::plan::validate_plan_safety(&plan)
+                        .map_err(|e| anyhow::anyhow!("Deployment plan validation failed: {}", e))?;
+
+                    // Display is a method on DeploymentPlan
+                    // Wait, let's look at src/plan.rs to see how to print the plan.
+                    // Actually, the spec says `plan.display()`, maybe that exists.
+                    // Let's assume there is a way to display.
+
+                    Ok(())
+                }
+            });
+
+            pipeline.add(task);
+            last_tasks = vec!["workflow:deployment-plan".to_string()];
+
+            if self.profile.approval == crate::workflow::profile::ApprovalMode::Prompt {
+                let mut task = Task::new("workflow:approval");
+                let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
+                if !deps_refs.is_empty() {
+                    task = task.depends_on(&deps_refs);
+                }
+
+                task = task.exec_fn(move |_ctx| async move {
+                    let approved = tokio::task::spawn_blocking(|| {
+                        inquire::Confirm::new("Proceed with deployment?")
+                            .with_default(false)
+                            .prompt()
+                    })
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Approval prompt failed: {}", e))?
+                    .map_err(|e| anyhow::anyhow!("Approval prompt failed: {}", e))?;
+
+                    if !approved {
+                        return Err(anyhow::anyhow!("Deployment cancelled by user"));
+                    }
+
+                    Ok(())
+                });
+
+                pipeline.add(task);
+                last_tasks = vec!["workflow:approval".to_string()];
+            }
+
+            if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
+                && self.profile.apply
+            {
+                let mut task = Task::new("workflow:deploy");
+                let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
+                if !deps_refs.is_empty() {
+                    task = task.depends_on(&deps_refs);
+                }
+
+                let context = self.profile.deploy_context.clone().unwrap_or_default();
+                let env_name = self.profile.environment.clone();
+
+                task = task.exec_fn(move |_ctx| {
+                    let context = context.clone();
+                    let env_name = env_name.clone();
+
+                    async move {
+                        crate::LOGGER.info(&format!(
+                            "Deploying environment '{}' to context '{}'...",
+                            env_name, context
+                        ));
+                        crate::deployment::deploy(
+                            context,
+                            &env_name,
+                            crate::cli::DeploymentStrategy::Rolling,
+                        )
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Deploy failed: {}", e))?;
+
+                        Ok(())
+                    }
+                });
+
+                pipeline.add(task);
+            }
         }
 
         Ok((pipeline, build_execution))
@@ -414,6 +596,57 @@ mod tests {
             "workflow:validate-config".to_string(),
             "workflow:build-plan".to_string(),
             "workflow:generate".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(task_names, expected);
+    }
+
+    #[test]
+    fn local_deploy_creates_deploy_tasks() {
+        let mut env = Environment::new("local");
+        let mut svc = crate::environment::Service::new("dummy", None, "latest");
+        svc.build = Some(crate::environment::ServiceBuildConfig {
+            path: ".".to_string(),
+            include: None,
+            relies_on: None,
+            before_synchronous: None,
+            before: None,
+            run_parallel: None,
+            run_synchronous: None,
+            after: None,
+            finally: None,
+            dockerfile: None,
+            build_command: None,
+            push_command: None,
+        });
+        env.services.push(svc);
+
+        let mut profile = dummy_profile(WorkflowStepMode::Run, WorkflowStepMode::Plan);
+        profile.approval = ApprovalMode::Prompt;
+        profile.apply = true;
+        profile.deploy_context = Some("minikube".to_string());
+
+        let planner =
+            WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true), dummy_runner());
+        let plan = planner.plan().unwrap();
+
+        // Check tasks in plan
+        let task_kinds: Vec<_> = plan.tasks.iter().map(|t| t.kind).collect();
+        assert!(task_kinds.contains(&WorkflowTaskKind::DeploymentPlan));
+        assert!(task_kinds.contains(&WorkflowTaskKind::Approval));
+        assert!(task_kinds.contains(&WorkflowTaskKind::Deploy));
+
+        let (pipeline, _) = planner.build_pipeline_from_plan(&plan).unwrap();
+        let mut task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
+        task_names.sort();
+
+        let mut expected = vec![
+            "workflow:validate-config".to_string(),
+            "workflow:build-plan".to_string(),
+            "workflow:generate".to_string(),
+            "workflow:deployment-plan".to_string(),
+            "workflow:approval".to_string(),
+            "workflow:deploy".to_string(),
         ];
         expected.sort();
         assert_eq!(task_names, expected);

@@ -216,13 +216,26 @@ mod tests {
             deploy_context = "prod"
             approval = "external"
             apply = false
+
+            [workflow.local-deploy]
+            environment = "local"
+            mode = "go"
+            interactive = true
+            build = "plan"
+            generate = "run"
+            deploy = "run"
+            deploy_context = "minikube"
+            namespace = "default"
+            approval = "prompt"
+            apply = true
+            report = "text"
         "#;
 
         let config = WorkflowConfig::parse(toml_str).unwrap();
 
         assert_eq!(
             config.list_profiles(),
-            vec!["local", "pr", "production", "staging"]
+            vec!["local", "local-deploy", "pr", "production", "staging"]
         );
 
         // Local profile
@@ -249,6 +262,17 @@ mod tests {
         let prod = config.get_profile("production").unwrap();
         assert_eq!(prod.approval, ApprovalMode::External);
         assert_eq!(prod.apply, Some(false));
+
+        // Local deploy profile
+        let local_deploy = config.get_profile("local-deploy").unwrap();
+        assert_eq!(local_deploy.name, "local-deploy");
+        assert_eq!(local_deploy.environment, "local");
+        assert_eq!(local_deploy.mode, WorkflowMode::Go);
+        assert_eq!(local_deploy.build, Some(WorkflowStepMode::Plan));
+        assert_eq!(local_deploy.deploy, Some(WorkflowStepMode::Run));
+        assert_eq!(local_deploy.approval, ApprovalMode::Prompt);
+        assert_eq!(local_deploy.apply, Some(true));
+        assert_eq!(local_deploy.namespace.as_deref(), Some("default"));
     }
 
     #[test]

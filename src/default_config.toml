@@ -7,3 +7,16 @@ registry = "{{default_registry}}"
 
 service = []
 environment_variables = []
+
+[workflow.local-deploy]
+environment = "local"
+mode = "go"
+interactive = true
+build = "plan"
+generate = "run"
+deploy = "run"
+deploy_context = "minikube"
+namespace = "default"
+approval = "prompt"
+apply = true
+report = "text"

@@ -28,6 +28,7 @@ pub enum WorkflowTaskKind {
     BuildPlan,
     ServiceBuild,
     Generate,
+    DeploymentPlan,
     Deploy,
     Verify,
     Approval,
