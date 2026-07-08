@@ -1,8 +1,8 @@
 [workflow.ci]
 environment = "local"
-mode = "build"
+mode = "check"
 interactive = false
-build = "run"
+build = "plan"
 generate = "run"
 deploy = "disabled"
 report = "text"
