@@ -10,7 +10,10 @@ on:
         description: "Run experimental ci-build profile"
         required: false
         default: "false"
-
+      run_staging_deploy:
+        description: "Run staging deploy workflow"
+        required: false
+        default: "false"
 jobs:
   sailr-workflow:
     runs-on: ubuntu-latest
@@ -51,4 +54,30 @@ jobs:
 
       - name: Run experimental CI build
         run: sailr workflow run ci-build --non-interactive
+
+  staging-deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_staging_deploy == 'true'
+    environment: staging
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Sailr
+        run: cargo install --path .
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.STAGING_KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Run staging deploy
+        run: sailr workflow run staging-deploy --non-interactive --apply
+
+      - name: Upload Sailr report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sailr-staging-deploy-report
+          path: .sailr/reports/staging-deploy/latest.json
        

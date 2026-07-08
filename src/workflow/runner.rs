@@ -173,35 +173,47 @@ fn write_workflow_report(
 pub fn validate_workflow_safety(
     profile: &crate::workflow::profile::NormalizedWorkflowProfile,
     runner: &RunnerContext,
+    args: &crate::cli::WorkflowRunArgs,
 ) -> Result<(), String> {
     if runner.ci && profile.interactive {
         return Err("workflow cannot be interactive in CI".to_string());
-    }
-
-    if runner.ci && profile.apply {
-        return Err("apply=true is not allowed in CI deploy-plan workflows".to_string());
     }
 
     if runner.ci && profile.approval == crate::workflow::profile::ApprovalMode::Prompt {
         return Err("approval prompt cannot run in CI".to_string());
     }
 
-    if profile.deploy.is_active() {
-        if profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
-            match profile.deploy_context.as_deref() {
-                Some("none") | None => {
-                    return Err("deploy=run requires an explicit real deploy_context".to_string());
-                }
-                Some(_) => {}
+    if profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
+        let context = profile.deploy_context.as_deref();
+
+        if context.is_none() || context == Some("none") {
+            return Err("deploy=run requires an explicit real deploy_context".to_string());
+        }
+
+        if profile.environment == "production" {
+            return Err("production deploy is not enabled in this stage".to_string());
+        }
+
+        if runner.ci {
+            if profile.approval != crate::workflow::profile::ApprovalMode::External {
+                return Err("CI deploy requires approval=external".to_string());
             }
-        }
 
-        if runner.ci && profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
-            return Err("CI deploy workflows are not enabled in this stage".to_string());
-        }
+            if !profile.apply {
+                return Err("CI deploy requires profile apply=true".to_string());
+            }
 
-        if profile.deploy == crate::workflow::profile::WorkflowStepMode::Run && !profile.apply {
-            return Err("deploy = run requires apply = true".to_string());
+            if !args.apply {
+                return Err("deploy=run in CI requires --apply".to_string());
+            }
+        } else {
+            if !profile.apply {
+                return Err("deploy=run requires apply=true".to_string());
+            }
+
+            if !runner.interactive && !args.apply {
+                return Err("non-interactive deploy requires --apply".to_string());
+            }
         }
     }
 
@@ -239,11 +251,13 @@ impl WorkflowRunner {
         // 5. Construct BuildOptions (incorporating CLI overrides)
         let only = args
             .only
-            .map(|s| crate::builder::split_matches(Some(s)))
+            .as_ref()
+            .map(|s| crate::builder::split_matches(Some(s.clone())))
             .unwrap_or_default();
         let ignore = args
             .ignore
-            .map(|s| crate::builder::split_matches(Some(s)))
+            .as_ref()
+            .map(|s| crate::builder::split_matches(Some(s.clone())))
             .unwrap_or_default();
 
         let options = BuildOptions {
@@ -260,7 +274,7 @@ impl WorkflowRunner {
         };
 
         // 6. Safety validation
-        validate_workflow_safety(&normalized_profile, &runner_ctx)?;
+        validate_workflow_safety(&normalized_profile, &runner_ctx, &args)?;
 
         // 7. Plan Pipeline
         let planner = WorkflowPlanner::new(
@@ -602,7 +616,7 @@ mod tests {
             interactive: true,
         };
 
-        let res = validate_workflow_safety(&profile, &runner);
+        let res = validate_workflow_safety(&profile, &runner, &crate::cli::WorkflowRunArgs { profile: "test".to_string(), only: None, ignore: None, non_interactive: true, plan: false, dry_run: false, apply: false });
         assert!(res.is_err());
         assert!(res
             .unwrap_err()
@@ -640,7 +654,7 @@ mod tests {
             interactive: false,
         };
 
-        let res = validate_workflow_safety(&profile, &runner);
+        let res = validate_workflow_safety(&profile, &runner, &crate::cli::WorkflowRunArgs { profile: "test".to_string(), only: None, ignore: None, non_interactive: true, plan: false, dry_run: false, apply: false });
         assert!(res.is_err());
         // Since we added a check for apply=true in CI first, it'll hit that instead.
         // Let's just check that it fails correctly.
@@ -677,7 +691,7 @@ mod tests {
             interactive: false, // user ran with --non-interactive
         };
 
-        let res = validate_workflow_safety(&profile, &runner);
+        let res = validate_workflow_safety(&profile, &runner, &crate::cli::WorkflowRunArgs { profile: "test".to_string(), only: None, ignore: None, non_interactive: true, plan: false, dry_run: false, apply: false });
         assert!(res.is_err());
         assert!(res
             .unwrap_err()
@@ -715,10 +729,54 @@ mod tests {
             interactive: true,
         };
 
-        let res = validate_workflow_safety(&profile, &runner);
+        let res = validate_workflow_safety(&profile, &runner, &crate::cli::WorkflowRunArgs { profile: "test".to_string(), only: None, ignore: None, non_interactive: true, plan: false, dry_run: false, apply: false });
         assert!(res.is_err());
         assert!(res
             .unwrap_err()
-            .contains("deploy = run requires apply = true"));
+            .contains("deploy=run requires apply=true"));
+    }
+    #[test]
+    fn validate_safety_ci_staging_deploy_allowed() {
+        use crate::workflow::profile::{
+            ApprovalMode, NormalizedWorkflowProfile, ReportMode, WorkflowEngine, WorkflowMode,
+            WorkflowStepMode,
+        };
+
+        let profile = NormalizedWorkflowProfile {
+            name: "staging-deploy".to_string(),
+            environment: "staging".to_string(),
+            mode: WorkflowMode::Deploy,
+            engine: WorkflowEngine::Runkernel,
+            interactive: false,
+            build: WorkflowStepMode::Plan,
+            generate: WorkflowStepMode::Run,
+            deploy: WorkflowStepMode::Run,
+            test: WorkflowStepMode::Disabled,
+            verify: WorkflowStepMode::Disabled,
+            deploy_context: Some("staging".to_string()),
+            namespace: Some("default".to_string()),
+            approval: ApprovalMode::External,
+            apply: true,
+            report: ReportMode::Both,
+        };
+
+        let runner = RunnerContext {
+            kind: RunnerKind::GitHubActions,
+            ci: true,
+            interactive: false,
+        };
+
+        let args = crate::cli::WorkflowRunArgs {
+            profile: "staging-deploy".to_string(),
+            only: None,
+            ignore: None,
+            non_interactive: true,
+            plan: false,
+            dry_run: false,
+            apply: true,
+        };
+
+        let res = validate_workflow_safety(&profile, &runner, &args);
+        assert!(res.is_ok());
     }
 }

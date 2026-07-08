@@ -32,3 +32,16 @@ namespace = "default"
 approval = "none"
 apply = false
 report = "both"
+
+[workflow.staging-deploy]
+environment = "staging"
+mode = "deploy"
+interactive = false
+build = "plan"
+generate = "run"
+deploy = "run"
+deploy_context = "staging"
+namespace = "default"
+approval = "external"
+apply = true
+report = "both"

@@ -21,6 +21,13 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
         out.push('\n');
     }
 
+    if plan.profile.approval == crate::workflow::profile::ApprovalMode::External {
+        out.push_str("Approval:\n");
+        out.push_str("  mode: external\n");
+        out.push_str("  provider: GitHub Environment\n");
+        out.push_str(&format!("  environment: {}\n\n", plan.profile.environment));
+    }
+
     out.push_str("Overall Effects:\n");
     out.push_str(&format!(
         " - Mutates Filesystem: {}\n",
@@ -109,6 +116,25 @@ pub fn render_workflow_explain_text(plan: &WorkflowPlan, task_id: &str) -> Resul
         out.push_str("Dependencies: (none)\n");
     } else {
         out.push_str(&format!("Dependencies: {}\n", task.dependencies.join(", ")));
+    }
+
+    if task.kind == crate::workflow::plan::WorkflowTaskKind::Deploy {
+        if plan.profile.approval == crate::workflow::profile::ApprovalMode::External {
+            out.push_str("\nApproval:\n");
+            out.push_str("  mode: external\n");
+            out.push_str("  provider: GitHub Environment\n");
+            out.push_str(&format!("  environment: {}\n", plan.profile.environment));
+        }
+
+        if let Some(ctx) = &plan.profile.deploy_context {
+            out.push_str("\nContext:\n");
+            out.push_str(&format!("  {}\n", ctx));
+        }
+
+        if let Some(ns) = &plan.profile.namespace {
+            out.push_str("\nNamespace:\n");
+            out.push_str(&format!("  {}\n", ns));
+        }
     }
 
     out.push_str("\nSide Effects:\n");

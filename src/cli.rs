@@ -152,6 +152,9 @@ pub struct WorkflowRunArgs {
 
     #[arg(long)]
     pub dry_run: bool,
+
+    #[arg(long)]
+    pub apply: bool,
 }
 
 #[derive(Debug, Args)]

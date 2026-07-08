@@ -754,10 +754,10 @@ mod tests {
         "#;
         let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
         let normalized = profile.normalize(false); // not CI
-        assert_eq!(normalized.interactive, true);
+        assert!(normalized.interactive);
         assert_eq!(normalized.deploy, WorkflowStepMode::Run);
         assert_eq!(normalized.approval, ApprovalMode::Prompt);
-        assert_eq!(normalized.apply, true);
+        assert!(normalized.apply);
         assert_eq!(normalized.deploy_context.as_deref(), Some("minikube"));
         assert_eq!(normalized.namespace.as_deref(), Some("default"));
     }
