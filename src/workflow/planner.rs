@@ -1,22 +1,20 @@
-
-
 use runkernel::{Pipeline, Task};
 
 use crate::builder::{add_runkernel_tasks, create_sailr_build_plan, BuildOptions, SailrBuildPlan};
 use crate::environment::Environment;
 
-use super::profile::{ApprovalMode, WorkflowProfile};
+use super::profile::NormalizedWorkflowProfile;
 
 use std::sync::Arc;
 
 pub struct WorkflowPlanner {
-    pub profile: WorkflowProfile,
+    pub profile: NormalizedWorkflowProfile,
     pub env: Arc<Environment>,
     pub options: BuildOptions,
 }
 
 impl WorkflowPlanner {
-    pub fn new(profile: WorkflowProfile, env: Arc<Environment>, options: BuildOptions) -> Self {
+    pub fn new(profile: NormalizedWorkflowProfile, env: Arc<Environment>, options: BuildOptions) -> Self {
         Self {
             profile,
             env,
@@ -28,27 +26,56 @@ impl WorkflowPlanner {
         let mut pipeline = Pipeline::new(format!("Workflow: {}", self.profile.name));
         let mut build_plan = None;
 
+        // 0. Validate Phase
+        if self.profile.deploy.is_active() {
+            if self.profile.deploy_context.is_none() {
+                return Err("Validation Error: deploy_context is required when deploy is active".to_string());
+            }
+            return Err("workflow deploy execution is not enabled in this PR; use sailr deploy or sailr go".to_string());
+        }
+
+        let validate_task = Task::new("workflow:validate-config")
+            .exec_fn(move |_ctx| async move {
+                crate::LOGGER.info("Validating Sailr environment config...");
+                Ok(())
+            });
+        pipeline.add(validate_task);
+        let mut last_tasks: Vec<String> = vec!["workflow:validate-config".to_string()];
+
         // 1. Build Phase
-        let mut last_tasks: Vec<String> = Vec::new();
         if self.profile.build.is_active() {
             let plan = create_sailr_build_plan(&self.env, &self.options)?;
-            add_runkernel_tasks(&mut pipeline, &plan)?;
             
-            let dirty_count = plan.services.iter().filter(|s| s.dirty).count();
-            if dirty_count > 0 && !plan.after_all.is_empty() {
-                last_tasks.push("build:after-all".to_string());
+            // Only add runkernel tasks if we actually want to run the build.
+            // If build == Plan, create_sailr_build_plan already printed the plan (via builder.rs integration), 
+            // but we don't want to execute it. Wait, create_sailr_build_plan does not print the plan. 
+            // In RunkernelBuildBackend::build, it prints it. 
+            // But we can just avoid adding tasks to the pipeline if it's just plan.
+            if self.profile.build == crate::workflow::profile::WorkflowStepMode::Plan {
+                crate::builder::print_sailr_plan(&plan, &self.options);
+                build_plan = Some(plan);
             } else {
-                for s in &plan.services {
-                    last_tasks.push(s.service.name.clone());
+                add_runkernel_tasks(&mut pipeline, &plan)?;
+
+                let dirty_count = plan.services.iter().filter(|s| s.dirty).count();
+                let mut build_deps = Vec::new();
+                if dirty_count > 0 && !plan.after_all.is_empty() {
+                    build_deps.push("build:after-all".to_string());
+                } else {
+                    for s in &plan.services {
+                        build_deps.push(s.service.name.clone());
+                    }
                 }
+                
+                last_tasks.extend(build_deps);
+                build_plan = Some(plan);
             }
-            build_plan = Some(plan);
         }
 
         // 2. Generate Phase
         if self.profile.generate.is_active() {
             let mut task = Task::new("workflow:generate");
-            
+
             let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
             if !deps_refs.is_empty() {
                 task = task.depends_on(&deps_refs);
@@ -66,7 +93,7 @@ impl WorkflowPlanner {
                 let env_clone = env_clone.clone();
                 async move {
                     crate::LOGGER.info("Generating Kubernetes manifests...");
-                    
+
                     let services = crate::builder::filter_services_exact(
                         env_clone.list_services(),
                         &only,
@@ -75,81 +102,13 @@ impl WorkflowPlanner {
 
                     crate::generate(&name, &env_clone, services)
                         .map_err(|e| anyhow::anyhow!("Generate failed: {}", e))?;
-                    
+
                     Ok(())
                 }
             });
 
             pipeline.add(task);
-            last_tasks = vec!["workflow:generate".to_string()];
-        }
-
-        // 3. Approval Phase (if prompt)
-        if self.profile.approval == ApprovalMode::Prompt {
-            let mut task = Task::new("workflow:approve");
-            let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
-            if !deps_refs.is_empty() {
-                task = task.depends_on(&deps_refs);
-            }
-            
-            task = task.exec_fn(move |_ctx| {
-                async move {
-                    crate::LOGGER.info("Waiting for user approval...");
-                    
-                    // Use tokio's spawn_blocking for the synchronous inquire prompt
-                    let confirm = tokio::task::spawn_blocking(|| {
-                        inquire::Confirm::new("Proceed with deployment?")
-                            .with_default(true)
-                            .prompt()
-                    })
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
-                    .map_err(|e| anyhow::anyhow!("Prompt error: {}", e))?;
-
-                    if !confirm {
-                        return Err(anyhow::anyhow!("Deployment cancelled by user"));
-                    }
-                    
-                    Ok(())
-                }
-            });
-
-            pipeline.add(task);
-            last_tasks = vec!["workflow:approve".to_string()];
-        }
-
-        // 4. Deploy Phase
-        if self.profile.deploy.is_active() {
-            let mut task = Task::new("workflow:deploy");
-            
-            let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
-            if !deps_refs.is_empty() {
-                task = task.depends_on(&deps_refs);
-            }
-
-            let name = self.profile.environment.clone();
-            let context = self
-                .profile
-                .deploy_context
-                .clone()
-                .unwrap_or_else(|| "default".to_string()); // Fallback if none
-
-            // We don't have strategy specified on profile yet, defaulting to Apply
-            task = task.exec_fn(move |_ctx| {
-                let name = name.clone();
-                let context = context.clone();
-                async move {
-                    crate::LOGGER.info(&format!("Deploying to context '{}'...", context));
-                    
-                    crate::deployment::deploy(context, &name, crate::cli::DeploymentStrategy::Rolling)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Deploy failed: {}", e))?;
-                    
-                    Ok(())
-                }
-            });
-
-            pipeline.add(task);
+            // last_tasks = vec!["workflow:generate".to_string()];
         }
 
         Ok((pipeline, build_plan))

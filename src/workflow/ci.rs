@@ -17,7 +17,10 @@ impl std::str::FromStr for CiProvider {
             "github" => Ok(CiProvider::GitHub),
             "circleci" => Ok(CiProvider::CircleCi),
             "travis" => Ok(CiProvider::Travis),
-            _ => Err(WorkflowError::ConfigError(format!("Unsupported CI provider: {}", s))),
+            _ => Err(WorkflowError::ConfigError(format!(
+                "Unsupported CI provider: {}",
+                s
+            ))),
         }
     }
 }
@@ -25,10 +28,7 @@ impl std::str::FromStr for CiProvider {
 pub struct CiTemplateGenerator;
 
 impl CiTemplateGenerator {
-    pub fn generate(
-        profile_name: &str,
-        provider: &CiProvider,
-    ) -> String {
+    pub fn generate(profile_name: &str, provider: &CiProvider) -> String {
         match provider {
             CiProvider::GitHub => Self::generate_github(profile_name),
             CiProvider::CircleCi => Self::generate_circleci(profile_name),
@@ -38,7 +38,9 @@ impl CiTemplateGenerator {
 
     pub fn default_output_path(profile_name: &str, provider: &CiProvider) -> PathBuf {
         match provider {
-            CiProvider::GitHub => PathBuf::from(format!(".github/workflows/sailr-{}.yml", profile_name)),
+            CiProvider::GitHub => {
+                PathBuf::from(format!(".github/workflows/sailr-{}.yml", profile_name))
+            }
             CiProvider::CircleCi => PathBuf::from(".circleci/config.yml"),
             CiProvider::Travis => PathBuf::from(".travis.yml"),
         }
@@ -55,7 +57,10 @@ impl CiTemplateGenerator {
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                WorkflowError::ConfigError(format!("Failed to create directories for CI template: {}", e))
+                WorkflowError::ConfigError(format!(
+                    "Failed to create directories for CI template: {}",
+                    e
+                ))
             })?;
         }
 
@@ -72,23 +77,21 @@ impl CiTemplateGenerator {
             r#"name: Sailr Workflow - {profile_name}
 
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+  push:
+    branches: [main]
 
 jobs:
   sailr-workflow:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
+      - uses: actions/checkout@v4
+
       - name: Install Sailr
-        run: curl -sSL https://sailr.dev/install.sh | bash
-      
+        run: cargo install --path .
+
       - name: Run Workflow
-        run: sailr workflow run {profile_name}
+        run: sailr workflow run {profile_name} --non-interactive
 "#,
             profile_name = profile_name
         )
@@ -143,9 +146,18 @@ mod tests {
 
     #[test]
     fn test_parse_ci_provider() {
-        assert!(matches!(CiProvider::from_str("github").unwrap(), CiProvider::GitHub));
-        assert!(matches!(CiProvider::from_str("CIRCLECI").unwrap(), CiProvider::CircleCi));
-        assert!(matches!(CiProvider::from_str("Travis").unwrap(), CiProvider::Travis));
+        assert!(matches!(
+            CiProvider::from_str("github").unwrap(),
+            CiProvider::GitHub
+        ));
+        assert!(matches!(
+            CiProvider::from_str("CIRCLECI").unwrap(),
+            CiProvider::CircleCi
+        ));
+        assert!(matches!(
+            CiProvider::from_str("Travis").unwrap(),
+            CiProvider::Travis
+        ));
         assert!(CiProvider::from_str("jenkins").is_err());
     }
 
@@ -154,7 +166,8 @@ mod tests {
         let profile_name = "edge";
         let yaml = CiTemplateGenerator::generate(profile_name, &CiProvider::GitHub);
         assert!(yaml.contains("name: Sailr Workflow - edge"));
-        assert!(yaml.contains("sailr workflow run edge"));
+        assert!(yaml.contains("sailr workflow run edge --non-interactive"));
+        assert!(yaml.contains("cargo install --path ."));
     }
 
     #[test]

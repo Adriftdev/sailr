@@ -1,6 +1,6 @@
-use std::process::Command;
-use std::env;
 use crate::LOGGER;
+use std::env;
+use std::process::Command;
 
 pub struct RemoteBuilderContext {
     builder_name: String,
@@ -73,7 +73,7 @@ impl Drop for RemoteBuilderContext {
                 ));
             }
         }
-        
+
         // Unset the environment variable
         env::remove_var("BUILDX_BUILDER");
     }

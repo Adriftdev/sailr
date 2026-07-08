@@ -154,8 +154,7 @@ impl WorkflowConfig {
 mod tests {
     use super::*;
     use crate::workflow::profile::{
-        ApprovalMode, PromotionStrategy, ReportMode, WorkflowEngine, WorkflowMode,
-        WorkflowStepMode,
+        ApprovalMode, PromotionStrategy, ReportMode, WorkflowEngine, WorkflowMode, WorkflowStepMode,
     };
     use std::io::Write;
 
@@ -199,7 +198,10 @@ mod tests {
 
         let config = WorkflowConfig::parse(toml_str).unwrap();
 
-        assert_eq!(config.list_profiles(), vec!["local", "pr", "production", "staging"]);
+        assert_eq!(
+            config.list_profiles(),
+            vec!["local", "pr", "production", "staging"]
+        );
 
         // Local profile
         let local = config.get_profile("local").unwrap();

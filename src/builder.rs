@@ -439,7 +439,10 @@ pub(crate) fn create_sailr_build_plan(
     })
 }
 
-pub(crate) fn add_runkernel_tasks(pipeline: &mut Pipeline, plan: &SailrBuildPlan) -> Result<(), String> {
+pub(crate) fn add_runkernel_tasks(
+    pipeline: &mut Pipeline,
+    plan: &SailrBuildPlan,
+) -> Result<(), String> {
     let dirty_services = plan
         .services
         .iter()
@@ -1220,7 +1223,7 @@ fn print_roomservice_plan(plan: &RoomservicePlan, options: &BuildOptions) {
     }
 }
 
-fn print_sailr_plan(plan: &SailrBuildPlan, options: &BuildOptions) {
+pub(crate) fn print_sailr_plan(plan: &SailrBuildPlan, options: &BuildOptions) {
     if !(options.plan || options.dry_run || options.explain) {
         let dirty_services = plan
             .services

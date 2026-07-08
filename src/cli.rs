@@ -80,23 +80,32 @@ pub enum WorkflowCommands {
 pub struct WorkflowRunArgs {
     /// Name of the workflow profile to run
     pub profile: String,
-    
+
     #[arg(long)]
     pub only: Option<String>,
-    
+
     #[arg(long)]
     pub ignore: Option<String>,
+    
+    #[arg(long)]
+    pub non_interactive: bool,
+
+    #[arg(long)]
+    pub plan: bool,
+
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct WorkflowGenerateCiArgs {
     /// Name of the workflow profile to run
     pub profile: String,
-    
+
     /// CI provider to generate for (github, circleci, travis)
     #[arg(long)]
     pub provider: String,
-    
+
     /// Optional output file path
     #[arg(long)]
     pub output: Option<String>,

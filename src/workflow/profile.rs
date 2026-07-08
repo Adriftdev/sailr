@@ -93,6 +93,94 @@ impl WorkflowProfile {
             interactive_label,
         )
     }
+
+    /// Normalizes the profile by applying mode-aware defaults based on whether it is running in CI.
+    pub fn normalize(&self, runner_is_ci: bool) -> NormalizedWorkflowProfile {
+        let mut interactive = self.interactive.unwrap_or(!runner_is_ci);
+
+        let mut build = self.build;
+        let mut generate = self.generate;
+        let mut deploy = self.deploy;
+        let mut test = self.test;
+        let mut verify = self.verify;
+        let mut approval = self.approval;
+        let mut apply = self.apply.unwrap_or(false);
+
+        match self.mode {
+            WorkflowMode::Check => {
+                interactive = false;
+                if build == WorkflowStepMode::Disabled { build = WorkflowStepMode::Plan; }
+                if generate == WorkflowStepMode::Disabled { generate = WorkflowStepMode::Run; }
+                deploy = WorkflowStepMode::Disabled;
+                test = WorkflowStepMode::Disabled;
+                verify = WorkflowStepMode::Disabled;
+                approval = ApprovalMode::None;
+                apply = false;
+            }
+            WorkflowMode::Build => {
+                if build == WorkflowStepMode::Disabled { build = WorkflowStepMode::Run; }
+                generate = WorkflowStepMode::Disabled;
+                deploy = WorkflowStepMode::Disabled;
+                approval = ApprovalMode::None;
+                apply = false;
+            }
+            WorkflowMode::Go => {
+                if build == WorkflowStepMode::Disabled { build = WorkflowStepMode::Run; }
+                if generate == WorkflowStepMode::Disabled { generate = WorkflowStepMode::Run; }
+                if deploy == WorkflowStepMode::Disabled { deploy = if apply { WorkflowStepMode::Run } else { WorkflowStepMode::Plan }; }
+                if approval == ApprovalMode::None {
+                    approval = if runner_is_ci { ApprovalMode::External } else { ApprovalMode::Prompt };
+                }
+            }
+            WorkflowMode::Deploy => {
+                build = WorkflowStepMode::Disabled;
+                if generate == WorkflowStepMode::Disabled { generate = WorkflowStepMode::Run; }
+                if deploy == WorkflowStepMode::Disabled { deploy = if apply { WorkflowStepMode::Run } else { WorkflowStepMode::Plan }; }
+                if approval == ApprovalMode::None {
+                    approval = if runner_is_ci { ApprovalMode::External } else { ApprovalMode::Prompt };
+                }
+            }
+            _ => {}
+        }
+
+        NormalizedWorkflowProfile {
+            name: self.name.clone(),
+            environment: self.environment.clone(),
+            mode: self.mode,
+            engine: self.engine,
+            interactive,
+            build,
+            generate,
+            deploy,
+            test,
+            verify,
+            deploy_context: self.deploy_context.clone(),
+            namespace: self.namespace.clone(),
+            approval,
+            apply,
+            report: self.report,
+        }
+    }
+}
+
+/// A normalized version of the WorkflowProfile with all implicit defaults explicitly resolved.
+#[derive(Debug, Clone)]
+pub struct NormalizedWorkflowProfile {
+    pub name: String,
+    pub environment: String,
+    pub mode: WorkflowMode,
+    pub engine: WorkflowEngine,
+    pub interactive: bool,
+    pub build: WorkflowStepMode,
+    pub generate: WorkflowStepMode,
+    pub deploy: WorkflowStepMode,
+    pub test: WorkflowStepMode,
+    pub verify: WorkflowStepMode,
+    pub deploy_context: Option<String>,
+    pub namespace: Option<String>,
+    pub approval: ApprovalMode,
+    pub apply: bool,
+    pub report: ReportMode,
 }
 
 fn default_engine() -> WorkflowEngine {

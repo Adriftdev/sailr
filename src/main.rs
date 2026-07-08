@@ -813,10 +813,7 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
                     "No workflow profiles found. Create a sailr.workflow.toml to define profiles.",
                 );
             } else {
-                LOGGER.info(&format!(
-                    "Found {} workflow profile(s):\n",
-                    profiles.len()
-                ));
+                LOGGER.info(&format!("Found {} workflow profile(s):\n", profiles.len()));
                 for name in &profiles {
                     if let Some(profile) = config.get_profile(name) {
                         println!("  {}", profile.summary_line());
@@ -825,26 +822,33 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
             }
         }
         WorkflowCommands::Show(args) => {
-            let profile = config
-                .get_profile(&args.profile)
-                .ok_or_else(|| CliError::Other(format!("Workflow profile '{}' not found", args.profile)))?;
-            println!("{:#?}", profile);
+            let profile = config.get_profile(&args.profile).ok_or_else(|| {
+                CliError::Other(format!("Workflow profile '{}' not found", args.profile))
+            })?;
+            println!("{}", sailr::workflow::config::WorkflowConfig::format_profile_detail(profile));
         }
         WorkflowCommands::GenerateCi(args) => {
-            let profile = config
-                .get_profile(&args.profile)
-                .ok_or_else(|| CliError::Other(format!("Workflow profile '{}' not found", args.profile)))?;
-            
+            let profile = config.get_profile(&args.profile).ok_or_else(|| {
+                CliError::Other(format!("Workflow profile '{}' not found", args.profile))
+            })?;
+
             use sailr::workflow::ci::{CiProvider, CiTemplateGenerator};
             use std::str::FromStr;
-            
-            let provider = CiProvider::from_str(&args.provider)
-                .map_err(|e| CliError::Other(e.to_string()))?;
-                
-            let path = CiTemplateGenerator::write_template(&profile.name, &provider, args.output.as_deref())
-                .map_err(|e| CliError::Other(e.to_string()))?;
-                
-            LOGGER.info(&format!("Successfully generated CI template at {}", path.display()));
+
+            let provider =
+                CiProvider::from_str(&args.provider).map_err(|e| CliError::Other(e.to_string()))?;
+
+            let path = CiTemplateGenerator::write_template(
+                &profile.name,
+                &provider,
+                args.output.as_deref(),
+            )
+            .map_err(|e| CliError::Other(e.to_string()))?;
+
+            LOGGER.info(&format!(
+                "Successfully generated CI template at {}",
+                path.display()
+            ));
         }
         WorkflowCommands::Run(_) => unreachable!(),
     }
