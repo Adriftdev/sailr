@@ -20,3 +20,15 @@ namespace = "default"
 approval = "prompt"
 apply = true
 report = "text"
+[workflow.ci-deploy-plan]
+environment = "local"
+mode = "deploy"
+interactive = false
+build = "plan"
+generate = "run"
+deploy = "plan"
+deploy_context = "none"
+namespace = "default"
+approval = "none"
+apply = false
+report = "both"

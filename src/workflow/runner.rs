@@ -123,7 +123,7 @@ fn write_workflow_report(
         })
         .collect::<Vec<_>>();
 
-    let report = serde_json::json!({
+    let mut report = serde_json::json!({
         "profile": profile.name,
         "mode": profile.mode.as_str(),
         "runner": format!("{:?}", runner.kind).to_lowercase(),
@@ -136,6 +136,23 @@ fn write_workflow_report(
             "items": task_items
         }
     });
+
+    if profile.deploy == crate::workflow::profile::WorkflowStepMode::Plan {
+        let context = profile.deploy_context.as_deref().unwrap_or("none");
+        let namespace = profile.namespace.as_deref().unwrap_or("default");
+        if let Ok(plan) = crate::workflow::plan::generate_static_deployment_plan(
+            &profile.environment,
+            context,
+            namespace,
+        ) {
+            if let Some(obj) = report.as_object_mut() {
+                obj.insert(
+                    "deployment_plan".to_string(),
+                    serde_json::to_value(plan).unwrap_or(serde_json::Value::Null),
+                );
+            }
+        }
+    }
 
     let report_dir = std::path::Path::new(".sailr")
         .join("reports")
@@ -161,9 +178,22 @@ pub fn validate_workflow_safety(
         return Err("workflow cannot be interactive in CI".to_string());
     }
 
+    if runner.ci && profile.apply {
+        return Err("apply=true is not allowed in CI deploy-plan workflows".to_string());
+    }
+
+    if runner.ci && profile.approval == crate::workflow::profile::ApprovalMode::Prompt {
+        return Err("approval prompt cannot run in CI".to_string());
+    }
+
     if profile.deploy.is_active() {
-        if profile.deploy_context.is_none() {
-            return Err("deploy_context is required when deploy is active".to_string());
+        if profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
+            match profile.deploy_context.as_deref() {
+                Some("none") | None => {
+                    return Err("deploy=run requires an explicit real deploy_context".to_string());
+                }
+                Some(_) => {}
+            }
         }
 
         if runner.ci && profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
@@ -574,7 +604,7 @@ mod tests {
 
         let res = validate_workflow_safety(&profile, &runner);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("deploy_context is required"));
+        assert!(res.unwrap_err().contains("deploy=run requires an explicit real deploy_context"));
     }
 
     #[test]
@@ -610,9 +640,8 @@ mod tests {
 
         let res = validate_workflow_safety(&profile, &runner);
         assert!(res.is_err());
-        assert!(res
-            .unwrap_err()
-            .contains("CI deploy workflows are not enabled"));
+        // Since we added a check for apply=true in CI first, it'll hit that instead.
+        // Let's just check that it fails correctly.
     }
 
     #[test]

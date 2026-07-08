@@ -194,53 +194,55 @@ impl WorkflowPlanner {
 
             last_tasks = vec!["workflow:deployment-plan".to_string()];
 
-            if self.profile.approval == crate::workflow::profile::ApprovalMode::Prompt {
-                effects.prompts_user = true;
-                tasks.push(WorkflowTaskPlan {
-                    id: "workflow:approval".to_string(),
-                    label: "Approval".to_string(),
-                    kind: WorkflowTaskKind::Approval,
-                    dependencies: last_tasks.clone(),
-                    effects: WorkflowEffects {
-                        prompts_user: true,
-                        ..Default::default()
-                    },
-                    description: "Ask for local confirmation before applying deployment changes."
-                        .to_string(),
-                });
-
-                for t in &last_tasks {
-                    edges.push(WorkflowEdge {
-                        from: t.clone(),
-                        to: "workflow:approval".to_string(),
+            if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
+                if self.profile.approval == crate::workflow::profile::ApprovalMode::Prompt {
+                    effects.prompts_user = true;
+                    tasks.push(WorkflowTaskPlan {
+                        id: "workflow:approval".to_string(),
+                        label: "Approval".to_string(),
+                        kind: WorkflowTaskKind::Approval,
+                        dependencies: last_tasks.clone(),
+                        effects: WorkflowEffects {
+                            prompts_user: true,
+                            ..Default::default()
+                        },
+                        description:
+                            "Ask for local confirmation before applying deployment changes."
+                                .to_string(),
                     });
+
+                    for t in &last_tasks {
+                        edges.push(WorkflowEdge {
+                            from: t.clone(),
+                            to: "workflow:approval".to_string(),
+                        });
+                    }
+
+                    last_tasks = vec!["workflow:approval".to_string()];
                 }
 
-                last_tasks = vec!["workflow:approval".to_string()];
-            }
-
-            if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
-                && self.profile.apply
-            {
-                effects.mutates_cluster = true;
-                tasks.push(WorkflowTaskPlan {
-                    id: "workflow:deploy".to_string(),
-                    label: "Deploy".to_string(),
-                    kind: WorkflowTaskKind::Deploy,
-                    dependencies: last_tasks.clone(),
-                    effects: WorkflowEffects {
-                        mutates_cluster: true,
-                        ..Default::default()
-                    },
-                    description: "Apply generated manifests to the configured Kubernetes context."
-                        .to_string(),
-                });
-
-                for t in &last_tasks {
-                    edges.push(WorkflowEdge {
-                        from: t.clone(),
-                        to: "workflow:deploy".to_string(),
+                if self.profile.apply {
+                    effects.mutates_cluster = true;
+                    tasks.push(WorkflowTaskPlan {
+                        id: "workflow:deploy".to_string(),
+                        label: "Deploy".to_string(),
+                        kind: WorkflowTaskKind::Deploy,
+                        dependencies: last_tasks.clone(),
+                        effects: WorkflowEffects {
+                            mutates_cluster: true,
+                            ..Default::default()
+                        },
+                        description:
+                            "Apply generated manifests to the configured Kubernetes context."
+                                .to_string(),
                     });
+
+                    for t in &last_tasks {
+                        edges.push(WorkflowEdge {
+                            from: t.clone(),
+                            to: "workflow:deploy".to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -368,24 +370,48 @@ impl WorkflowPlanner {
                 .clone()
                 .unwrap_or_else(|| "default".to_string());
 
+            let is_static_plan =
+                self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Plan;
+
             task = task.exec_fn(move |_ctx| {
                 let env_name = env_name.clone();
                 let context = context.clone();
                 let namespace = namespace.clone();
                 async move {
                     crate::LOGGER.info("Deployment plan:");
-                    let plan =
-                        crate::plan::generate_deployment_plan(&env_name, &context, &namespace)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("Deployment plan failed: {}", e))?;
 
-                    crate::plan::validate_plan_safety(&plan)
-                        .map_err(|e| anyhow::anyhow!("Deployment plan validation failed: {}", e))?;
+                    if is_static_plan {
+                        let plan = crate::workflow::plan::generate_static_deployment_plan(
+                            &env_name, &context, &namespace,
+                        )
+                        .map_err(|e| anyhow::anyhow!("Static deployment plan failed: {}", e))?;
 
-                    // Display is a method on DeploymentPlan
-                    // Wait, let's look at src/plan.rs to see how to print the plan.
-                    // Actually, the spec says `plan.display()`, maybe that exists.
-                    // Let's assume there is a way to display.
+                        println!("Sailr deployment plan:");
+                        println!("  environment: {}", plan.environment);
+                        println!("  context: {}", plan.context);
+                        println!("  namespace: {}", plan.namespace);
+                        println!("  mode: static");
+                        println!("  requires cluster: no");
+                        println!("  mutates cluster: no\n");
+                        println!("Resources:");
+                        for res in plan.resources {
+                            println!("  - {} {} \twould apply", res.kind, res.name);
+                        }
+                    } else {
+                        let plan =
+                            crate::plan::generate_deployment_plan(&env_name, &context, &namespace)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("Deployment plan failed: {}", e))?;
+
+                        crate::plan::validate_plan_safety(&plan).map_err(|e| {
+                            anyhow::anyhow!("Deployment plan validation failed: {}", e)
+                        })?;
+
+                        // Display is a method on DeploymentPlan
+                        // Wait, let's look at src/plan.rs to see how to print the plan.
+                        // Actually, the spec says `plan.display()`, maybe that exists.
+                        // Let's assume there is a way to display.
+                    }
 
                     Ok(())
                 }

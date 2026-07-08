@@ -165,7 +165,7 @@ impl WorkflowProfile {
                 apply = false;
             }
             WorkflowMode::Go | WorkflowMode::Deploy => {
-                if approval == ApprovalMode::None {
+                if approval == ApprovalMode::None && deploy == WorkflowStepMode::Run {
                     approval = if runner_is_ci {
                         ApprovalMode::External
                     } else {
@@ -760,5 +760,21 @@ mod tests {
         assert_eq!(normalized.apply, true);
         assert_eq!(normalized.deploy_context.as_deref(), Some("minikube"));
         assert_eq!(normalized.namespace.as_deref(), Some("default"));
+    }
+    #[test]
+    fn normalize_ci_deploy_plan_profile() {
+        let toml_str = r#"
+            environment = "local"
+            mode = "deploy"
+            interactive = false
+            deploy = "plan"
+            deploy_context = "none"
+            apply = false
+        "#;
+        let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
+        let normalized = profile.normalize(true);
+        assert_eq!(normalized.deploy, WorkflowStepMode::Plan);
+        assert_eq!(normalized.deploy_context.as_deref(), Some("none"));
+        assert!(!normalized.apply);
     }
 }
