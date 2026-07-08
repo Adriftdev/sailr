@@ -97,13 +97,35 @@ impl WorkflowConfig {
             }
         ));
 
+        fn format_optional_step(step: Option<super::profile::WorkflowStepMode>) -> String {
+            match step {
+                Some(mode) => mode.to_string(),
+                None => "auto".to_string(),
+            }
+        }
+
         lines.push(String::new());
         lines.push("Steps:".to_string());
-        lines.push(format!("  build:        {}", profile.build));
-        lines.push(format!("  generate:     {}", profile.generate));
-        lines.push(format!("  deploy:       {}", profile.deploy));
-        lines.push(format!("  test:         {}", profile.test));
-        lines.push(format!("  verify:       {}", profile.verify));
+        lines.push(format!(
+            "  build:        {}",
+            format_optional_step(profile.build)
+        ));
+        lines.push(format!(
+            "  generate:     {}",
+            format_optional_step(profile.generate)
+        ));
+        lines.push(format!(
+            "  deploy:       {}",
+            format_optional_step(profile.deploy)
+        ));
+        lines.push(format!(
+            "  test:         {}",
+            format_optional_step(profile.test)
+        ));
+        lines.push(format!(
+            "  verify:       {}",
+            format_optional_step(profile.verify)
+        ));
 
         if profile.deploy_context.is_some()
             || profile.namespace.is_some()
@@ -219,9 +241,9 @@ mod tests {
         assert_eq!(pr.environment, "preview");
         assert_eq!(pr.mode, WorkflowMode::Check);
         assert_eq!(pr.interactive, Some(false));
-        assert_eq!(pr.build, WorkflowStepMode::Plan);
-        assert_eq!(pr.generate, WorkflowStepMode::Run);
-        assert_eq!(pr.deploy, WorkflowStepMode::Plan);
+        assert_eq!(pr.build, Some(WorkflowStepMode::Plan));
+        assert_eq!(pr.generate, Some(WorkflowStepMode::Run));
+        assert_eq!(pr.deploy, Some(WorkflowStepMode::Plan));
 
         // Production profile
         let prod = config.get_profile("production").unwrap();

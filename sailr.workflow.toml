@@ -2,6 +2,15 @@
 environment = "local"
 mode = "check"
 interactive = false
+build = "disabled"
+generate = "disabled"
+deploy = "disabled"
+report = "text"
+
+[workflow.ci-build-plan]
+environment = "local"
+mode = "check"
+interactive = false
 build = "plan"
 generate = "disabled"
 deploy = "disabled"
@@ -13,15 +22,6 @@ mode = "check"
 interactive = false
 build = "plan"
 generate = "run"
-deploy = "disabled"
-report = "text"
-
-[workflow.ci-build-plan]
-environment = "local"
-mode = "check"
-interactive = false
-build = "plan"
-generate = "disabled"
 deploy = "disabled"
 report = "text"
 

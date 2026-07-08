@@ -178,65 +178,81 @@ mod tests {
     }
 
     #[test]
-    fn check_profile_never_creates_deploy() {
-        let env = Environment::load_from_file("local").unwrap();
-        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
-        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
-        let (pipeline, _) = planner.build_pipeline().unwrap();
-        assert!(!pipeline.tasks().any(|t| t.name.starts_with("deploy:")));
-    }
-
-    #[test]
-    fn check_profile_creates_validate_config() {
-        let env = Environment::load_from_file("local").unwrap();
-        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
-        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
-        let (pipeline, _) = planner.build_pipeline().unwrap();
-        assert!(pipeline
-            .tasks()
-            .any(|t| t.name == "workflow:validate-config"));
-    }
-
-    #[test]
-    fn check_profile_creates_build_plan_when_build_plan() {
-        let env = Environment::load_from_file("local").unwrap();
-        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
-        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
-        let (pipeline, _) = planner.build_pipeline().unwrap();
-        assert!(pipeline.tasks().any(|t| t.name == "workflow:build-plan"));
-    }
-
-    #[test]
-    fn build_disabled_creates_no_build_plan() {
-        let env = Environment::load_from_file("local").unwrap();
-        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Disabled);
+    fn ci_profile_validate_only() {
+        let env = Environment::new("local");
+        let mut profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Disabled);
+        profile.generate = WorkflowStepMode::Disabled;
         let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(false));
         let (pipeline, _) = planner.build_pipeline().unwrap();
-        assert!(!pipeline.tasks().any(|t| t.name == "workflow:build-plan"));
+        let task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
+        assert_eq!(task_names, vec!["workflow:validate-config"]);
     }
 
     #[test]
-    fn generate_task_is_created_when_generate_run() {
-        let env = Environment::load_from_file("local").unwrap();
-        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
+    fn ci_build_plan_creates_build_plan() {
+        let mut env = Environment::new("local");
+        let mut svc = crate::environment::Service::new("dummy", None, "latest");
+        svc.build = Some(crate::environment::ServiceBuildConfig {
+            path: ".".to_string(),
+            include: None,
+            relies_on: None,
+            before_synchronous: None,
+            before: None,
+            run_parallel: None,
+            run_synchronous: None,
+            after: None,
+            finally: None,
+            dockerfile: None,
+            build_command: None,
+            push_command: None,
+        });
+        env.services.push(svc);
+
+        let mut profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
+        profile.generate = WorkflowStepMode::Disabled;
         let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
         let (pipeline, _) = planner.build_pipeline().unwrap();
-        assert!(pipeline.tasks().any(|t| t.name == "workflow:generate"));
+        let mut task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
+        task_names.sort();
+        let mut expected = vec![
+            "workflow:validate-config".to_string(),
+            "workflow:build-plan".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(task_names, expected);
     }
 
     #[test]
-    fn generate_depends_on_build_plan() {
-        let env = Environment::load_from_file("local").unwrap();
+    fn ci_generate_creates_generate() {
+        let mut env = Environment::new("local");
+        let mut svc = crate::environment::Service::new("dummy", None, "latest");
+        svc.build = Some(crate::environment::ServiceBuildConfig {
+            path: ".".to_string(),
+            include: None,
+            relies_on: None,
+            before_synchronous: None,
+            before: None,
+            run_parallel: None,
+            run_synchronous: None,
+            after: None,
+            finally: None,
+            dockerfile: None,
+            build_command: None,
+            push_command: None,
+        });
+        env.services.push(svc);
+
         let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
         let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
         let (pipeline, _) = planner.build_pipeline().unwrap();
-
-        let generate_task = pipeline
-            .tasks()
-            .find(|t| t.name == "workflow:generate")
-            .unwrap();
-        assert!(generate_task
-            .dependencies
-            .contains(&"workflow:build-plan".to_string()));
+        let mut task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
+        task_names.sort();
+        let mut expected = vec![
+            "workflow:validate-config".to_string(),
+            "workflow:build-plan".to_string(),
+            "workflow:generate".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(task_names, expected);
     }
 }

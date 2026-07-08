@@ -57,6 +57,29 @@ fn print_failed_tasks(result: &runkernel::PipelineResult) {
     }
 }
 
+fn print_tasks_by_status(
+    label: &str,
+    result: &runkernel::PipelineResult,
+    status: runkernel::TaskStatus,
+) {
+    let tasks = result
+        .tasks
+        .iter()
+        .filter(|task| task.status == status)
+        .map(|task| task.name.as_str())
+        .collect::<Vec<_>>();
+
+    if tasks.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("  {}:", label);
+    for task in tasks {
+        println!("    - {}", task);
+    }
+}
+
 fn print_workflow_result(
     profile: &super::profile::NormalizedWorkflowProfile,
     runner: &RunnerContext,
@@ -70,6 +93,11 @@ fn print_workflow_result(
     println!("  tasks failed: {}", result.summary.failed);
     println!("  tasks skipped: {}", result.summary.skipped);
     println!("  duration: {:?}", result.duration);
+
+    print_tasks_by_status("completed tasks", result, runkernel::TaskStatus::Completed);
+    print_tasks_by_status("failed tasks", result, runkernel::TaskStatus::Failed);
+    print_tasks_by_status("skipped tasks", result, runkernel::TaskStatus::Skipped);
+    print_tasks_by_status("cancelled tasks", result, runkernel::TaskStatus::Cancelled);
 }
 
 fn write_workflow_report(
@@ -84,6 +112,17 @@ fn write_workflow_report(
         return Ok(());
     }
 
+    let task_items = result
+        .tasks
+        .iter()
+        .map(|task| {
+            serde_json::json!({
+                "name": task.name,
+                "status": format!("{:?}", task.status).to_lowercase()
+            })
+        })
+        .collect::<Vec<_>>();
+
     let report = serde_json::json!({
         "profile": profile.name,
         "mode": profile.mode.as_str(),
@@ -93,7 +132,8 @@ fn write_workflow_report(
             "completed": result.summary.completed,
             "failed": result.summary.failed,
             "skipped": result.summary.skipped,
-            "cancelled": result.summary.cancelled
+            "cancelled": result.summary.cancelled,
+            "items": task_items
         }
     });
 

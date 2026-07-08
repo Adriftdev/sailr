@@ -26,23 +26,23 @@ pub struct WorkflowProfile {
 
     /// How to handle the build step.
     #[serde(default)]
-    pub build: WorkflowStepMode,
+    pub build: Option<WorkflowStepMode>,
 
     /// How to handle the generate step.
     #[serde(default)]
-    pub generate: WorkflowStepMode,
+    pub generate: Option<WorkflowStepMode>,
 
     /// How to handle the deploy step.
     #[serde(default)]
-    pub deploy: WorkflowStepMode,
+    pub deploy: Option<WorkflowStepMode>,
 
     /// How to handle the test step.
     #[serde(default)]
-    pub test: WorkflowStepMode,
+    pub test: Option<WorkflowStepMode>,
 
     /// How to handle the verify step.
     #[serde(default)]
-    pub verify: WorkflowStepMode,
+    pub verify: Option<WorkflowStepMode>,
 
     /// Kubernetes context to deploy to.
     #[serde(default)]
@@ -97,53 +97,74 @@ impl WorkflowProfile {
     /// Normalizes the profile by applying mode-aware defaults based on whether it is running in CI.
     pub fn normalize(&self, runner_is_ci: bool) -> NormalizedWorkflowProfile {
         let mut interactive = self.interactive.unwrap_or(!runner_is_ci);
-
-        let mut build = self.build;
-        let mut generate = self.generate;
-        let mut deploy = self.deploy;
-        let mut test = self.test;
-        let mut verify = self.verify;
         let mut approval = self.approval;
         let mut apply = self.apply.unwrap_or(false);
+
+        let (default_build, default_generate, default_deploy, default_test, default_verify) =
+            match self.mode {
+                WorkflowMode::Check => (
+                    WorkflowStepMode::Plan,
+                    WorkflowStepMode::Run,
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                ),
+                WorkflowMode::Build => (
+                    WorkflowStepMode::Run,
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                ),
+                WorkflowMode::Go => (
+                    WorkflowStepMode::Run,
+                    WorkflowStepMode::Run,
+                    if apply {
+                        WorkflowStepMode::Run
+                    } else {
+                        WorkflowStepMode::Plan
+                    },
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                ),
+                WorkflowMode::Deploy => (
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Run,
+                    if apply {
+                        WorkflowStepMode::Run
+                    } else {
+                        WorkflowStepMode::Plan
+                    },
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                ),
+                WorkflowMode::Promote | WorkflowMode::Rollback => (
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
+                ),
+            };
+
+        let build = self.build.unwrap_or(default_build);
+        let generate = self.generate.unwrap_or(default_generate);
+        let mut deploy = self.deploy.unwrap_or(default_deploy);
+        let test = self.test.unwrap_or(default_test);
+        let verify = self.verify.unwrap_or(default_verify);
 
         match self.mode {
             WorkflowMode::Check => {
                 interactive = false;
-                if build == WorkflowStepMode::Disabled {
-                    build = WorkflowStepMode::Plan;
-                }
-                if generate == WorkflowStepMode::Disabled {
-                    generate = WorkflowStepMode::Run;
-                }
-                deploy = WorkflowStepMode::Disabled;
-                test = WorkflowStepMode::Disabled;
-                verify = WorkflowStepMode::Disabled;
                 approval = ApprovalMode::None;
                 apply = false;
+                deploy = WorkflowStepMode::Disabled;
             }
             WorkflowMode::Build => {
-                if build == WorkflowStepMode::Disabled {
-                    build = WorkflowStepMode::Run;
-                }
-                generate = WorkflowStepMode::Disabled;
-                deploy = WorkflowStepMode::Disabled;
                 approval = ApprovalMode::None;
                 apply = false;
             }
-            WorkflowMode::Go => {
-                if build == WorkflowStepMode::Disabled {
-                    build = WorkflowStepMode::Run;
-                }
-                if generate == WorkflowStepMode::Disabled {
-                    generate = WorkflowStepMode::Run;
-                }
-                if deploy == WorkflowStepMode::Disabled {
-                    deploy = if apply {
-                        WorkflowStepMode::Run
-                    } else {
-                        WorkflowStepMode::Plan
-                    };
-                }
+            WorkflowMode::Go | WorkflowMode::Deploy => {
                 if approval == ApprovalMode::None {
                     approval = if runner_is_ci {
                         ApprovalMode::External
@@ -152,27 +173,7 @@ impl WorkflowProfile {
                     };
                 }
             }
-            WorkflowMode::Deploy => {
-                build = WorkflowStepMode::Disabled;
-                if generate == WorkflowStepMode::Disabled {
-                    generate = WorkflowStepMode::Run;
-                }
-                if deploy == WorkflowStepMode::Disabled {
-                    deploy = if apply {
-                        WorkflowStepMode::Run
-                    } else {
-                        WorkflowStepMode::Plan
-                    };
-                }
-                if approval == ApprovalMode::None {
-                    approval = if runner_is_ci {
-                        ApprovalMode::External
-                    } else {
-                        ApprovalMode::Prompt
-                    };
-                }
-            }
-            _ => {}
+            WorkflowMode::Promote | WorkflowMode::Rollback => {}
         }
 
         NormalizedWorkflowProfile {
@@ -447,9 +448,9 @@ mod tests {
         assert_eq!(profile.environment, "dev");
         assert_eq!(profile.mode, WorkflowMode::Go);
         assert_eq!(profile.engine, WorkflowEngine::Runkernel);
-        assert_eq!(profile.build, WorkflowStepMode::Disabled);
-        assert_eq!(profile.generate, WorkflowStepMode::Disabled);
-        assert_eq!(profile.deploy, WorkflowStepMode::Disabled);
+        assert_eq!(profile.build, None);
+        assert_eq!(profile.generate, None);
+        assert_eq!(profile.deploy, None);
         assert_eq!(profile.approval, ApprovalMode::None);
         assert_eq!(profile.report, ReportMode::Text);
         assert!(profile.interactive.is_none());
@@ -492,11 +493,11 @@ mod tests {
         assert_eq!(profile.mode, WorkflowMode::Go);
         assert_eq!(profile.engine, WorkflowEngine::Runkernel);
         assert_eq!(profile.interactive, Some(false));
-        assert_eq!(profile.build, WorkflowStepMode::Disabled);
-        assert_eq!(profile.generate, WorkflowStepMode::Run);
-        assert_eq!(profile.deploy, WorkflowStepMode::Plan);
-        assert_eq!(profile.test, WorkflowStepMode::Run);
-        assert_eq!(profile.verify, WorkflowStepMode::Run);
+        assert_eq!(profile.build, Some(WorkflowStepMode::Disabled));
+        assert_eq!(profile.generate, Some(WorkflowStepMode::Run));
+        assert_eq!(profile.deploy, Some(WorkflowStepMode::Plan));
+        assert_eq!(profile.test, Some(WorkflowStepMode::Run));
+        assert_eq!(profile.verify, Some(WorkflowStepMode::Run));
         assert_eq!(profile.deploy_context.as_deref(), Some("prod"));
         assert_eq!(profile.namespace.as_deref(), Some("production"));
         assert_eq!(profile.approval, ApprovalMode::External);
@@ -547,7 +548,7 @@ mod tests {
                 input
             );
             let profile: WorkflowProfile = toml::from_str(&toml_str).unwrap();
-            assert_eq!(profile.build, expected, "failed for input: {}", input);
+            assert_eq!(profile.build, Some(expected), "failed for input: {}", input);
         }
     }
 
@@ -691,6 +692,37 @@ mod tests {
         assert_eq!(normalized.verify, WorkflowStepMode::Disabled);
         assert_eq!(normalized.approval, ApprovalMode::None);
         assert!(!normalized.apply);
+    }
+
+    #[test]
+    fn check_profile_respects_explicit_build_disabled() {
+        let toml_str = r#"
+            name = "ci"
+            environment = "local"
+            mode = "check"
+            build = "disabled"
+            generate = "disabled"
+            deploy = "disabled"
+        "#;
+        let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
+        let normalized = profile.normalize(true);
+        assert_eq!(normalized.build, WorkflowStepMode::Disabled);
+        assert_eq!(normalized.generate, WorkflowStepMode::Disabled);
+        assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
+    }
+
+    #[test]
+    fn check_profile_defaults_omitted_build_to_plan() {
+        let toml_str = r#"
+            name = "default-check"
+            environment = "local"
+            mode = "check"
+        "#;
+        let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
+        let normalized = profile.normalize(true);
+        assert_eq!(normalized.build, WorkflowStepMode::Plan);
+        assert_eq!(normalized.generate, WorkflowStepMode::Run);
+        assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
     }
 
     #[test]
