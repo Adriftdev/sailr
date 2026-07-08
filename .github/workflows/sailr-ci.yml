@@ -46,12 +46,6 @@ jobs:
       - name: Install Sailr
         run: cargo install --path .
 
-      #- name: Setup Kubeconfig
-      #  run: |
-      #    mkdir -p ~/.kube
-      #    echo "${{ secrets.DEVELOP_CLUSTER_KUBECONFIG }}" > ~/.kube/config
-      #    chmod 600 ~/.kube/config
-
       - name: Run experimental CI build
         run: sailr workflow run ci-build --non-interactive
 
