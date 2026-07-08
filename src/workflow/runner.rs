@@ -46,7 +46,18 @@ impl RunnerContext {
     }
 }
 
-fn validate_workflow_safety(
+fn print_failed_tasks(result: &runkernel::PipelineResult) {
+    for task in &result.tasks {
+        if matches!(task.status, runkernel::TaskStatus::Failed) {
+            println!("Failed task: {}", task.name);
+            if let Some(error) = &task.error {
+                println!("  error: {}", error);
+            }
+        }
+    }
+}
+
+pub fn validate_workflow_safety(
     profile: &crate::workflow::profile::NormalizedWorkflowProfile,
     runner: &RunnerContext,
 ) -> Result<(), String> {
@@ -126,7 +137,7 @@ impl WorkflowRunner {
             std::sync::Arc::new(env),
             options,
         );
-        let (mut pipeline, build_plan) = planner.build_pipeline()?;
+        let (mut pipeline, build_execution) = planner.build_pipeline()?;
 
         // 8. Run Pipeline
         attach_pipeline_logging(&mut pipeline);
@@ -141,14 +152,21 @@ impl WorkflowRunner {
             .map_err(|e| format!("Pipeline execution failed: {:?}", e))?;
 
         // 9. Finalize
-        if let Some(plan) = build_plan {
-            crate::builder::print_pipeline_result(&plan, &result);
-            if result.summary.success {
-                write_successful_service_caches(&plan, &result)?;
+        match build_execution {
+            crate::workflow::planner::WorkflowBuildExecution::None => {}
+            crate::workflow::planner::WorkflowBuildExecution::PlanOnly(_) => {
+                // Do not print build results or write caches
+            }
+            crate::workflow::planner::WorkflowBuildExecution::Executed(plan) => {
+                crate::builder::print_pipeline_result(&plan, &result);
+                if result.summary.success {
+                    write_successful_service_caches(&plan, &result)?;
+                }
             }
         }
 
         if !result.summary.success {
+            print_failed_tasks(&result);
             return Err(format!(
                 "Workflow failed: {} failed, {} skipped, {} cancelled",
                 result.summary.failed, result.summary.skipped, result.summary.cancelled

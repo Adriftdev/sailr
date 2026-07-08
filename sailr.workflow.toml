@@ -3,6 +3,33 @@ environment = "local"
 mode = "check"
 interactive = false
 build = "plan"
+generate = "disabled"
+deploy = "disabled"
+report = "text"
+
+[workflow.ci-generate]
+environment = "local"
+mode = "check"
+interactive = false
+build = "plan"
 generate = "run"
+deploy = "disabled"
+report = "text"
+
+[workflow.ci-build-plan]
+environment = "local"
+mode = "check"
+interactive = false
+build = "plan"
+generate = "disabled"
+deploy = "disabled"
+report = "text"
+
+[workflow.ci-build]
+environment = "local"
+mode = "build"
+interactive = false
+build = "run"
+generate = "disabled"
 deploy = "disabled"
 report = "text"

@@ -7,3 +7,4 @@ k8s/environments/dev
 .kube
 netrc
 .roomservice/
+.sailr/

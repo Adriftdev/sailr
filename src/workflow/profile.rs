@@ -683,14 +683,14 @@ mod tests {
         "#;
         let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
         let normalized = profile.normalize(false);
-        assert_eq!(normalized.interactive, false);
+        assert!(!normalized.interactive);
         assert_eq!(normalized.build, WorkflowStepMode::Plan);
         assert_eq!(normalized.generate, WorkflowStepMode::Run);
         assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
         assert_eq!(normalized.test, WorkflowStepMode::Disabled);
         assert_eq!(normalized.verify, WorkflowStepMode::Disabled);
         assert_eq!(normalized.approval, ApprovalMode::None);
-        assert_eq!(normalized.apply, false);
+        assert!(!normalized.apply);
     }
 
     #[test]
@@ -705,6 +705,6 @@ mod tests {
         assert_eq!(normalized.generate, WorkflowStepMode::Disabled);
         assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
         assert_eq!(normalized.approval, ApprovalMode::None);
-        assert_eq!(normalized.apply, false);
+        assert!(!normalized.apply);
     }
 }

@@ -7,6 +7,12 @@ use super::profile::NormalizedWorkflowProfile;
 
 use std::sync::Arc;
 
+pub enum WorkflowBuildExecution {
+    None,
+    PlanOnly(SailrBuildPlan),
+    Executed(SailrBuildPlan),
+}
+
 pub struct WorkflowPlanner {
     pub profile: NormalizedWorkflowProfile,
     pub env: Arc<Environment>,
@@ -26,9 +32,9 @@ impl WorkflowPlanner {
         }
     }
 
-    pub fn build_pipeline(&self) -> Result<(Pipeline, Option<SailrBuildPlan>), String> {
+    pub fn build_pipeline(&self) -> Result<(Pipeline, WorkflowBuildExecution), String> {
         let mut pipeline = Pipeline::new(format!("Workflow: {}", self.profile.name));
-        let mut build_plan = None;
+        let mut build_execution = WorkflowBuildExecution::None;
 
         // 0. Validate Phase
 
@@ -40,15 +46,13 @@ impl WorkflowPlanner {
         let mut last_tasks: Vec<String> = vec!["workflow:validate-config".to_string()];
 
         // 1. Build Phase
-        if self.profile.build.is_active() {
-            let plan = create_sailr_build_plan(&self.env, &self.options)?;
-
-            // Only add runkernel tasks if we actually want to run the build.
-            // If build == Plan, create_sailr_build_plan already printed the plan (via builder.rs integration),
-            // but we don't want to execute it. Wait, create_sailr_build_plan does not print the plan.
-            // In RunkernelBuildBackend::build, it prints it.
-            // But we can just avoid adding tasks to the pipeline if it's just plan.
-            if self.profile.build == crate::workflow::profile::WorkflowStepMode::Plan {
+        match self.profile.build {
+            crate::workflow::profile::WorkflowStepMode::Disabled => {}
+            crate::workflow::profile::WorkflowStepMode::DryRun => {
+                return Err("workflow build dry-run is not enabled in this PR".to_string());
+            }
+            crate::workflow::profile::WorkflowStepMode::Plan => {
+                let plan = create_sailr_build_plan(&self.env, &self.options)?;
                 let plan_for_task = plan.clone();
                 let options_for_task = self.options.clone();
 
@@ -65,8 +69,10 @@ impl WorkflowPlanner {
 
                 pipeline.add(task);
                 last_tasks = vec!["workflow:build-plan".to_string()];
-                build_plan = Some(plan);
-            } else {
+                build_execution = WorkflowBuildExecution::PlanOnly(plan);
+            }
+            crate::workflow::profile::WorkflowStepMode::Run => {
+                let plan = create_sailr_build_plan(&self.env, &self.options)?;
                 add_runkernel_tasks(&mut pipeline, &plan)?;
 
                 let dirty_count = plan.services.iter().filter(|s| s.dirty).count();
@@ -80,7 +86,7 @@ impl WorkflowPlanner {
                 }
 
                 last_tasks.extend(build_deps);
-                build_plan = Some(plan);
+                build_execution = WorkflowBuildExecution::Executed(plan);
             }
         }
 
@@ -123,7 +129,7 @@ impl WorkflowPlanner {
             // last_tasks = vec!["workflow:generate".to_string()];
         }
 
-        Ok((pipeline, build_plan))
+        Ok((pipeline, build_execution))
     }
 }
 
@@ -216,5 +222,21 @@ mod tests {
         let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
         let (pipeline, _) = planner.build_pipeline().unwrap();
         assert!(pipeline.tasks().any(|t| t.name == "workflow:generate"));
+    }
+
+    #[test]
+    fn generate_depends_on_build_plan() {
+        let env = Environment::load_from_file("local").unwrap();
+        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
+        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
+        let (pipeline, _) = planner.build_pipeline().unwrap();
+
+        let generate_task = pipeline
+            .tasks()
+            .find(|t| t.name == "workflow:generate")
+            .unwrap();
+        assert!(generate_task
+            .dependencies
+            .contains(&"workflow:build-plan".to_string()));
     }
 }

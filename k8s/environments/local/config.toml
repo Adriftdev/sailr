@@ -10,6 +10,14 @@ name = "hello-sailr"
 version = "latest"
 path = "hello-sailr"
 
+
+[[service]]
+name = "ci-build-hello"
+version = "ci"
+path = "examples/ci-build/hello"
+
 [service.build]
-path = "."
-dockerfile = "Dockerfile"
+path = "examples/ci-build/hello"
+include = ["Dockerfile", "index.html"]
+build_command = "docker build -t hello-sailr:ci ."
+push_command = "true"
