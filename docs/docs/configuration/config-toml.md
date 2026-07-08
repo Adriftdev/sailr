@@ -86,6 +86,44 @@ Merge behavior:
 *   Inheritance can be chained. Cycles are rejected.
 *   `sailr add-service` and `sailr bump` write local child overrides instead of flattening the resolved environment.
 
+## Build Policy (`[build]`)
+
+The optional top-level `[build]` table controls global build behavior.
+
+```toml
+[build]
+engine = "runkernel"
+fail_fast = false
+max_parallelism = 4
+before_all = "echo preparing build"
+after_all = "echo finished build"
+```
+
+### `engine` (string)
+*   **Optional**
+*   Selects the build backend for `sailr build` and the build step of `sailr go`.
+*   Valid values: `roomservice`, `runkernel`.
+*   Default: `roomservice`.
+*   The CLI flag wins over config. Selection order is:
+    1. CLI `--engine`
+    2. `[build].engine`
+    3. default Roomservice
+*   Example: `engine = "runkernel"`
+
+### `fail_fast` (boolean)
+*   **Optional**
+*   When enabled, the build backend stops scheduling remaining work after a build failure.
+
+### `max_parallelism` (integer)
+*   **Optional**
+*   Accepted by Sailr build policy.
+*   Roomservice uses this where supported.
+*   The runkernel backend currently accepts this setting but does not enforce it yet; Sailr emits a warning when `max_parallelism` is set with `engine = "runkernel"`.
+
+### `before_all` and `after_all` (string or array of strings)
+*   **Optional**
+*   Commands that run before all selected dirty service builds and after all selected dirty service builds complete successfully.
+
 ## Service Whitelist (`[[service_whitelist]]`)
 
 This is an array of tables, where each table defines a service to be managed by Sailr.
@@ -117,18 +155,18 @@ Each service entry can have the following properties:
 
 ### Build Configuration (within `[[service_whitelist]]` entry)
 
-Sailr integrates a build system (based on Roomservice) to build your service's container images. These fields control the build process for a specific service. The actual build commands and lifecycle are defined within a `roomservice.toml` file located in the `build` path of the service, or directly within these fields if Sailr has merged Roomservice's config structure (as suggested by the README). The following fields are based on the merged structure described in the Sailr README.
+Sailr integrates a build system to build your service's container images. Roomservice is the current default backend, and the experimental runkernel backend can be selected with `--engine runkernel` or `[build].engine = "runkernel"`. These fields control the build process for a specific service.
 
 #### `build` (string)
 *   **Optional**
 *   The path to the service's build context directory, relative to the Sailr project root. This directory should typically contain the `Dockerfile` (or the specified `dockerfile`) and all source code needed to build the image.
-*   If this field is present, Sailr will attempt to build an image for this service using the Roomservice build process. If absent, Sailr assumes it's a pre-built image to be pulled from a registry.
+*   If this field is present, Sailr will attempt to build an image for this service using the selected build backend. If absent, Sailr assumes it's a pre-built image to be pulled from a registry.
 *   Example: `build = "./services/backend-api/"`
 
 #### `dockerfile` (string)
 *   **Optional**
 *   The path to the Dockerfile, relative to the `build` context directory.
-*   Defaults to `Dockerfile` at the root of the `build` path. (This is a common convention for build systems like Roomservice; confirm if Sailr's implementation allows override).
+*   Defaults to `Dockerfile` at the root of the `build` path.
 *   Example: `dockerfile = "path/to/custom.Dockerfile"`
 
 #### `run_parallel` (string or array of strings)

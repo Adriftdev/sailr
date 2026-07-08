@@ -88,10 +88,24 @@ sailr generate <environment_name>
 
 ### Building
 
- Builds container images for services in the <environment_name> environment. Optionally excludes services listed in <service1,service2,...> (comma-separated) from the build process.
+Builds container images for services in the <environment_name> environment. Optionally excludes services listed in <service1,service2,...> (comma-separated) from the build process.
+
+Sailr supports two build backends:
+
+- Roomservice: current default backend.
+- runkernel: experimental workflow-backed backend.
+
+Use `--engine runkernel` or `[build].engine = "runkernel"` to try the new backend. Roomservice remains available with `--engine roomservice`.
 
 ```bash 
 sailr build <environment_name> [--ignore <service1,service2,...>]
+sailr build --name dev --engine runkernel
+```
+
+```toml
+[build]
+engine = "runkernel"
+fail_fast = false
 ```
 
 ### Combined Workflow

@@ -1,7 +1,7 @@
 use std::{io, process::exit};
 
 use sailr::{
-    builder::{split_matches, Builder},
+    builder::{filter_services_exact, split_matches, Builder},
     cli::{Cli, Commands, EnvType, InfraCommands, Provider},
     create_default_env_config,
     create_default_env_infra,
@@ -329,15 +329,11 @@ async fn main() -> Result<(), CliError> {
                 }
             };
 
-            let mut services = env.list_services();
-
-            if let Some(only_services) = arg.only {
-                services.retain(|s| only_services.contains(&s.name));
-            }
-
-            if let Some(ignored_services) = arg.ignore {
-                services.retain(|s| !ignored_services.contains(&s.name));
-            }
+            let services = filter_services_exact(
+                env.list_services(),
+                &split_matches(arg.only),
+                &split_matches(arg.ignore),
+            );
 
             generate(&arg.name, &env, services).map_err(|e| CliError::Other(e.to_string()))?;
 
@@ -388,15 +384,11 @@ async fn main() -> Result<(), CliError> {
                 }
             };
 
-            let mut services = env.list_services();
-
-            if let Some(ref ignored_services) = arg.ignore {
-                services.retain(|s| !ignored_services.contains(&s.name));
-            }
-
-            if let Some(ref only_services) = arg.only {
-                services.retain(|s| only_services.contains(&s.name));
-            }
+            let services = filter_services_exact(
+                env.list_services(),
+                &split_matches(arg.only.clone()),
+                &split_matches(arg.ignore.clone()),
+            );
 
             if !arg.skip_build {
                 let mut builder = Builder::new(

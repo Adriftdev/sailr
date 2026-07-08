@@ -8,7 +8,7 @@ use crate::roomservice::{
 use async_trait::async_trait;
 use checksums::{hash_file, Algorithm::BLAKE2S};
 use ignore::{overrides::OverrideBuilder, WalkBuilder};
-use runkernel::{FailurePolicy, Pipeline, PipelineEvent, PipelineResult, Task};
+use runkernel::{FailurePolicy, Pipeline, PipelineEvent, PipelineResult, Task, TaskStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -19,6 +19,7 @@ const RUNKERNEL_PIPELINE_NAME: &str = "Sailr Service Build Pipeline";
 
 pub struct Builder {
     backend: Box<dyn BuildBackend + Send>,
+    engine: BuildEngine,
 }
 
 #[derive(Debug, Clone)]
@@ -87,11 +88,15 @@ impl Builder {
             BuildEngine::Runkernel => Box::new(RunkernelBuildBackend { options }),
         };
 
-        Builder { backend }
+        Builder { backend, engine }
     }
 
     pub async fn build(&mut self, env: &Environment) -> Result<BuildRunResult, String> {
         self.backend.build(env).await
+    }
+
+    pub fn engine(&self) -> BuildEngine {
+        self.engine
     }
 }
 
@@ -168,7 +173,7 @@ impl BuildBackend for RunkernelBuildBackend {
             .await
             .map_err(|e| format!("runkernel build pipeline execution failed: {:?}", e))?;
 
-        print_pipeline_result(&result);
+        print_pipeline_result(&plan, &result);
         if !result.summary.success {
             return Err(format!(
                 "runkernel build failed: {} failed, {} skipped, {} cancelled",
@@ -176,7 +181,7 @@ impl BuildBackend for RunkernelBuildBackend {
             ));
         }
 
-        write_successful_service_caches(&plan)?;
+        write_successful_service_caches(&plan, &result)?;
 
         Ok(BuildRunResult {
             executed: true,
@@ -643,6 +648,22 @@ pub fn split_matches(val: Option<String>) -> Vec<String> {
     .unwrap_or_default()
 }
 
+pub fn filter_services_exact<'a>(
+    mut services: Vec<&'a Service>,
+    only: &[String],
+    ignore: &[String],
+) -> Vec<&'a Service> {
+    if !ignore.is_empty() {
+        services.retain(|service| !ignore.contains(&service.name));
+    }
+
+    if !only.is_empty() {
+        services.retain(|service| only.contains(&service.name));
+    }
+
+    services
+}
+
 fn select_services<'a>(
     env: &'a Environment,
     only: &[String],
@@ -1097,8 +1118,22 @@ fn load_service_cache(
         .map_err(|error| format!("Failed to parse Sailr service cache: {}", error))
 }
 
-fn write_successful_service_caches(plan: &SailrBuildPlan) -> Result<(), String> {
+fn write_successful_service_caches(
+    plan: &SailrBuildPlan,
+    result: &PipelineResult,
+) -> Result<(), String> {
+    let completed_tasks = result
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.status, TaskStatus::Completed))
+        .map(|task| task.name.as_str())
+        .collect::<HashSet<_>>();
+
     for service in plan.services.iter().filter(|service| service.dirty) {
+        if !completed_tasks.contains(service.service.name.as_str()) {
+            continue;
+        }
+
         let record = ServiceCacheRecord {
             fingerprint: service.fingerprint.clone(),
             last_outcome: "success".to_string(),
@@ -1203,7 +1238,9 @@ fn print_sailr_plan(plan: &SailrBuildPlan, options: &BuildOptions) {
         return;
     }
 
-    println!("Sailr runkernel build plan:");
+    println!("Sailr build plan:");
+    println!("Engine: runkernel");
+    println!();
     for service in &plan.services {
         let status = if service.dirty { "dirty" } else { "clean" };
         println!(" - {} [{}]", service.service.name, status);
@@ -1232,14 +1269,58 @@ fn print_sailr_plan(plan: &SailrBuildPlan, options: &BuildOptions) {
     }
 }
 
-fn print_pipeline_result(result: &PipelineResult) {
+fn print_pipeline_result(plan: &SailrBuildPlan, result: &PipelineResult) {
+    let task_statuses = result
+        .tasks
+        .iter()
+        .map(|task| (task.name.as_str(), &task.status))
+        .collect::<HashMap<_, _>>();
+    let built = plan
+        .services
+        .iter()
+        .filter(|service| {
+            service.dirty
+                && matches!(
+                    task_statuses.get(service.service.name.as_str()),
+                    Some(TaskStatus::Completed)
+                )
+        })
+        .count();
+    let clean = plan
+        .services
+        .iter()
+        .filter(|service| !service.dirty)
+        .count();
+    let failed = plan
+        .services
+        .iter()
+        .filter(|service| {
+            service.dirty
+                && matches!(
+                    task_statuses.get(service.service.name.as_str()),
+                    Some(TaskStatus::Failed)
+                )
+        })
+        .count();
+    let skipped = plan
+        .services
+        .iter()
+        .filter(|service| {
+            service.dirty
+                && matches!(
+                    task_statuses.get(service.service.name.as_str()),
+                    Some(TaskStatus::Skipped | TaskStatus::Cancelled)
+                )
+        })
+        .count();
+
     println!(
-        "Sailr build result: {} completed, {} failed, {} skipped, {} cancelled, {} cached.",
-        result.summary.completed,
-        result.summary.failed,
-        result.summary.skipped,
-        result.summary.cancelled,
-        result.summary.cached
+        "Sailr build result:\n  engine: runkernel\n  built: {}\n  clean: {}\n  failed: {}\n  skipped: {}\n  duration: {:.1}s",
+        built,
+        clean,
+        failed,
+        skipped,
+        result.duration.as_secs_f64()
     );
 }
 
@@ -1296,6 +1377,7 @@ fn attach_pipeline_logging(pipeline: &mut Pipeline) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn options(cache_dir: PathBuf) -> BuildOptions {
@@ -1341,6 +1423,138 @@ mod tests {
             .expect("package should be written");
         fs::write(path.join("src/index.js"), "console.log('hello');")
             .expect("source should be written");
+    }
+
+    fn pipeline_result(statuses: Vec<(&str, TaskStatus)>) -> PipelineResult {
+        PipelineResult {
+            name: RUNKERNEL_PIPELINE_NAME.to_string(),
+            duration: Duration::from_millis(1),
+            summary: runkernel::PipelineSummary {
+                name: RUNKERNEL_PIPELINE_NAME.to_string(),
+                success: statuses
+                    .iter()
+                    .all(|(_, status)| matches!(status, TaskStatus::Completed)),
+                completed: statuses
+                    .iter()
+                    .filter(|(_, status)| matches!(status, TaskStatus::Completed))
+                    .count(),
+                failed: statuses
+                    .iter()
+                    .filter(|(_, status)| matches!(status, TaskStatus::Failed))
+                    .count(),
+                skipped: statuses
+                    .iter()
+                    .filter(|(_, status)| matches!(status, TaskStatus::Skipped))
+                    .count(),
+                cached: 0,
+                cancelled: statuses
+                    .iter()
+                    .filter(|(_, status)| matches!(status, TaskStatus::Cancelled))
+                    .count(),
+                rolled_back: 0,
+                rollback_failed: 0,
+            },
+            tasks: statuses
+                .into_iter()
+                .map(|(name, status)| runkernel::TaskResult {
+                    name: name.to_string(),
+                    status,
+                    duration: Some(Duration::from_millis(1)),
+                    error: None,
+                    cache_hit: false,
+                    cache_reason: None,
+                    rollback_status: None,
+                    rollback_error: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn backend_selection_defaults_to_roomservice() {
+        let builder = Builder::new(
+            ".roomservice".to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(builder.engine(), BuildEngine::Roomservice);
+    }
+
+    #[test]
+    fn backend_selection_uses_config_engine() {
+        let builder = Builder::new(
+            ".roomservice".to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            Some(BuildPolicy {
+                engine: Some(BuildEngine::Runkernel),
+                ..BuildPolicy::default()
+            }),
+            None,
+        );
+        assert_eq!(builder.engine(), BuildEngine::Runkernel);
+    }
+
+    #[test]
+    fn backend_selection_cli_override_beats_config() {
+        let builder = Builder::new(
+            ".roomservice".to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            Some(BuildPolicy {
+                engine: Some(BuildEngine::Runkernel),
+                ..BuildPolicy::default()
+            }),
+            Some(BuildEngine::Roomservice),
+        );
+        assert_eq!(builder.engine(), BuildEngine::Roomservice);
+    }
+
+    #[test]
+    fn exact_service_filtering_does_not_substring_match() {
+        let mut env = Environment::new("dev");
+        env.services = vec![
+            Service::new("api", None, "latest"),
+            Service::new("api-gateway", None, "latest"),
+            Service::new("web", None, "latest"),
+        ];
+
+        let only_api =
+            filter_services_exact(env.list_services(), &["api".to_string()], &Vec::new());
+        assert_eq!(
+            only_api
+                .iter()
+                .map(|service| service.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["api"]
+        );
+
+        let ignore_api =
+            filter_services_exact(env.list_services(), &Vec::new(), &["api".to_string()]);
+        assert_eq!(
+            ignore_api
+                .iter()
+                .map(|service| service.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["api-gateway", "web"]
+        );
     }
 
     #[test]
@@ -1509,5 +1723,198 @@ mod tests {
             .await
             .expect_err("failed task should fail build");
         assert!(err.contains("runkernel build failed"));
+    }
+
+    #[tokio::test]
+    async fn successful_dirty_service_writes_cache() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let service_path = temp.path().join("api");
+        write_project(&service_path);
+        let cache_dir = temp.path().join(".sailr/cache/build");
+
+        let mut env = Environment::new("dev");
+        env.services = vec![service("api", &service_path, "true".to_string())];
+
+        let mut builder = Builder::new(
+            cache_dir.to_string_lossy().to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            None,
+            Some(BuildEngine::Runkernel),
+        );
+        builder.build(&env).await.expect("build should succeed");
+
+        let cache = load_service_cache(&cache_dir, "api")
+            .expect("cache should load")
+            .expect("cache should be written");
+        let plan =
+            create_sailr_build_plan(&env, &options(cache_dir)).expect("plan should be created");
+        assert_eq!(
+            cache.fingerprint.full_hash,
+            plan.services[0].fingerprint.full_hash
+        );
+    }
+
+    #[tokio::test]
+    async fn failing_dirty_service_does_not_write_cache() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let service_path = temp.path().join("api");
+        write_project(&service_path);
+        let cache_dir = temp.path().join(".sailr/cache/build");
+
+        let mut env = Environment::new("dev");
+        env.services = vec![service("api", &service_path, "exit 9".to_string())];
+
+        let mut builder = Builder::new(
+            cache_dir.to_string_lossy().to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            None,
+            Some(BuildEngine::Runkernel),
+        );
+        assert!(builder.build(&env).await.is_err());
+        assert!(load_service_cache(&cache_dir, "api")
+            .expect("cache lookup should succeed")
+            .is_none());
+    }
+
+    #[test]
+    fn skipped_dirty_service_does_not_write_cache() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let api_path = temp.path().join("api");
+        let web_path = temp.path().join("web");
+        write_project(&api_path);
+        write_project(&web_path);
+        let cache_dir = temp.path().join(".sailr/cache/build");
+
+        let mut api = service("api", &api_path, "true".to_string());
+        let mut web = service("web", &web_path, "true".to_string());
+        web.build.as_mut().unwrap().relies_on = Some(vec!["api".to_string()]);
+        api.version = "1.0.0".to_string();
+
+        let mut env = Environment::new("dev");
+        env.services = vec![api, web];
+        let plan =
+            create_sailr_build_plan(&env, &options(cache_dir.clone())).expect("plan should build");
+
+        write_successful_service_caches(
+            &plan,
+            &pipeline_result(vec![
+                ("api", TaskStatus::Completed),
+                ("web", TaskStatus::Skipped),
+            ]),
+        )
+        .expect("cache write should succeed");
+
+        assert!(load_service_cache(&cache_dir, "api")
+            .expect("api cache lookup should succeed")
+            .is_some());
+        assert!(load_service_cache(&cache_dir, "web")
+            .expect("web cache lookup should succeed")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn clean_service_does_not_rewrite_cache() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let service_path = temp.path().join("api");
+        write_project(&service_path);
+        let cache_dir = temp.path().join(".sailr/cache/build");
+
+        let mut env = Environment::new("dev");
+        env.services = vec![service("api", &service_path, "true".to_string())];
+
+        let mut first = Builder::new(
+            cache_dir.to_string_lossy().to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            None,
+            Some(BuildEngine::Runkernel),
+        );
+        first.build(&env).await.expect("first build should succeed");
+        let cache_path = service_cache_path(&cache_dir, "api");
+        let before = fs::read_to_string(&cache_path).expect("cache should exist");
+
+        let mut second = Builder::new(
+            cache_dir.to_string_lossy().to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            None,
+            Some(BuildEngine::Runkernel),
+        );
+        second
+            .build(&env)
+            .await
+            .expect("second build should succeed");
+        let after = fs::read_to_string(&cache_path).expect("cache should still exist");
+
+        assert_eq!(before, after);
+    }
+
+    #[tokio::test]
+    async fn before_all_and_after_all_wrap_dirty_services() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let service_path = temp.path().join("api");
+        write_project(&service_path);
+        let log = temp.path().join("order.log");
+
+        let mut env = Environment::new("dev");
+        env.services = vec![service(
+            "api",
+            &service_path,
+            format!("printf service >> {}", log.display()),
+        )];
+        env.build = Some(BuildPolicy {
+            engine: Some(BuildEngine::Runkernel),
+            before_all: Some(CommandSpec::Single(format!(
+                "printf -- before- > {}",
+                log.display()
+            ))),
+            after_all: Some(CommandSpec::Single(format!(
+                "printf -- -after >> {}",
+                log.display()
+            ))),
+            ..BuildPolicy::default()
+        });
+
+        let mut builder = Builder::new(
+            temp.path()
+                .join(".sailr/cache/build")
+                .to_string_lossy()
+                .to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            env.build.clone(),
+            None,
+        );
+        builder.build(&env).await.expect("build should succeed");
+
+        let contents = fs::read_to_string(log).expect("log should exist");
+        assert_eq!(contents, "before-service-after");
     }
 }
