@@ -86,7 +86,7 @@ pub struct WorkflowRunArgs {
 
     #[arg(long)]
     pub ignore: Option<String>,
-    
+
     #[arg(long)]
     pub non_interactive: bool,
 

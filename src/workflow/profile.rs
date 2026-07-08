@@ -109,8 +109,12 @@ impl WorkflowProfile {
         match self.mode {
             WorkflowMode::Check => {
                 interactive = false;
-                if build == WorkflowStepMode::Disabled { build = WorkflowStepMode::Plan; }
-                if generate == WorkflowStepMode::Disabled { generate = WorkflowStepMode::Run; }
+                if build == WorkflowStepMode::Disabled {
+                    build = WorkflowStepMode::Plan;
+                }
+                if generate == WorkflowStepMode::Disabled {
+                    generate = WorkflowStepMode::Run;
+                }
                 deploy = WorkflowStepMode::Disabled;
                 test = WorkflowStepMode::Disabled;
                 verify = WorkflowStepMode::Disabled;
@@ -118,26 +122,54 @@ impl WorkflowProfile {
                 apply = false;
             }
             WorkflowMode::Build => {
-                if build == WorkflowStepMode::Disabled { build = WorkflowStepMode::Run; }
+                if build == WorkflowStepMode::Disabled {
+                    build = WorkflowStepMode::Run;
+                }
                 generate = WorkflowStepMode::Disabled;
                 deploy = WorkflowStepMode::Disabled;
                 approval = ApprovalMode::None;
                 apply = false;
             }
             WorkflowMode::Go => {
-                if build == WorkflowStepMode::Disabled { build = WorkflowStepMode::Run; }
-                if generate == WorkflowStepMode::Disabled { generate = WorkflowStepMode::Run; }
-                if deploy == WorkflowStepMode::Disabled { deploy = if apply { WorkflowStepMode::Run } else { WorkflowStepMode::Plan }; }
+                if build == WorkflowStepMode::Disabled {
+                    build = WorkflowStepMode::Run;
+                }
+                if generate == WorkflowStepMode::Disabled {
+                    generate = WorkflowStepMode::Run;
+                }
+                if deploy == WorkflowStepMode::Disabled {
+                    deploy = if apply {
+                        WorkflowStepMode::Run
+                    } else {
+                        WorkflowStepMode::Plan
+                    };
+                }
                 if approval == ApprovalMode::None {
-                    approval = if runner_is_ci { ApprovalMode::External } else { ApprovalMode::Prompt };
+                    approval = if runner_is_ci {
+                        ApprovalMode::External
+                    } else {
+                        ApprovalMode::Prompt
+                    };
                 }
             }
             WorkflowMode::Deploy => {
                 build = WorkflowStepMode::Disabled;
-                if generate == WorkflowStepMode::Disabled { generate = WorkflowStepMode::Run; }
-                if deploy == WorkflowStepMode::Disabled { deploy = if apply { WorkflowStepMode::Run } else { WorkflowStepMode::Plan }; }
+                if generate == WorkflowStepMode::Disabled {
+                    generate = WorkflowStepMode::Run;
+                }
+                if deploy == WorkflowStepMode::Disabled {
+                    deploy = if apply {
+                        WorkflowStepMode::Run
+                    } else {
+                        WorkflowStepMode::Plan
+                    };
+                }
                 if approval == ApprovalMode::None {
-                    approval = if runner_is_ci { ApprovalMode::External } else { ApprovalMode::Prompt };
+                    approval = if runner_is_ci {
+                        ApprovalMode::External
+                    } else {
+                        ApprovalMode::Prompt
+                    };
                 }
             }
             _ => {}
@@ -641,5 +673,38 @@ mod tests {
         assert!(line.contains("staging"));
         assert!(line.contains("go"));
         assert!(line.contains("auto"));
+    }
+
+    #[test]
+    fn normalize_check_profile() {
+        let toml_str = r#"
+            environment = "test"
+            mode = "check"
+        "#;
+        let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
+        let normalized = profile.normalize(false);
+        assert_eq!(normalized.interactive, false);
+        assert_eq!(normalized.build, WorkflowStepMode::Plan);
+        assert_eq!(normalized.generate, WorkflowStepMode::Run);
+        assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
+        assert_eq!(normalized.test, WorkflowStepMode::Disabled);
+        assert_eq!(normalized.verify, WorkflowStepMode::Disabled);
+        assert_eq!(normalized.approval, ApprovalMode::None);
+        assert_eq!(normalized.apply, false);
+    }
+
+    #[test]
+    fn normalize_build_profile() {
+        let toml_str = r#"
+            environment = "test"
+            mode = "build"
+        "#;
+        let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
+        let normalized = profile.normalize(false);
+        assert_eq!(normalized.build, WorkflowStepMode::Run);
+        assert_eq!(normalized.generate, WorkflowStepMode::Disabled);
+        assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
+        assert_eq!(normalized.approval, ApprovalMode::None);
+        assert_eq!(normalized.apply, false);
     }
 }

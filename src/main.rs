@@ -825,7 +825,10 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
             let profile = config.get_profile(&args.profile).ok_or_else(|| {
                 CliError::Other(format!("Workflow profile '{}' not found", args.profile))
             })?;
-            println!("{}", sailr::workflow::config::WorkflowConfig::format_profile_detail(profile));
+            println!(
+                "{}",
+                sailr::workflow::config::WorkflowConfig::format_profile_detail(profile)
+            );
         }
         WorkflowCommands::GenerateCi(args) => {
             let profile = config.get_profile(&args.profile).ok_or_else(|| {

@@ -14,7 +14,11 @@ pub struct WorkflowPlanner {
 }
 
 impl WorkflowPlanner {
-    pub fn new(profile: NormalizedWorkflowProfile, env: Arc<Environment>, options: BuildOptions) -> Self {
+    pub fn new(
+        profile: NormalizedWorkflowProfile,
+        env: Arc<Environment>,
+        options: BuildOptions,
+    ) -> Self {
         Self {
             profile,
             env,
@@ -27,32 +31,40 @@ impl WorkflowPlanner {
         let mut build_plan = None;
 
         // 0. Validate Phase
-        if self.profile.deploy.is_active() {
-            if self.profile.deploy_context.is_none() {
-                return Err("Validation Error: deploy_context is required when deploy is active".to_string());
-            }
-            return Err("workflow deploy execution is not enabled in this PR; use sailr deploy or sailr go".to_string());
-        }
 
-        let validate_task = Task::new("workflow:validate-config")
-            .exec_fn(move |_ctx| async move {
-                crate::LOGGER.info("Validating Sailr environment config...");
-                Ok(())
-            });
+        let validate_task = Task::new("workflow:validate-config").exec_fn(move |_ctx| async move {
+            crate::LOGGER.info("Validating Sailr environment config...");
+            Ok(())
+        });
         pipeline.add(validate_task);
         let mut last_tasks: Vec<String> = vec!["workflow:validate-config".to_string()];
 
         // 1. Build Phase
         if self.profile.build.is_active() {
             let plan = create_sailr_build_plan(&self.env, &self.options)?;
-            
+
             // Only add runkernel tasks if we actually want to run the build.
-            // If build == Plan, create_sailr_build_plan already printed the plan (via builder.rs integration), 
-            // but we don't want to execute it. Wait, create_sailr_build_plan does not print the plan. 
-            // In RunkernelBuildBackend::build, it prints it. 
+            // If build == Plan, create_sailr_build_plan already printed the plan (via builder.rs integration),
+            // but we don't want to execute it. Wait, create_sailr_build_plan does not print the plan.
+            // In RunkernelBuildBackend::build, it prints it.
             // But we can just avoid adding tasks to the pipeline if it's just plan.
             if self.profile.build == crate::workflow::profile::WorkflowStepMode::Plan {
-                crate::builder::print_sailr_plan(&plan, &self.options);
+                let plan_for_task = plan.clone();
+                let options_for_task = self.options.clone();
+
+                let task = Task::new("workflow:build-plan")
+                    .depends_on(&["workflow:validate-config"])
+                    .exec_fn(move |_ctx| {
+                        let p = plan_for_task.clone();
+                        let o = options_for_task.clone();
+                        async move {
+                            crate::builder::print_sailr_plan(&p, &o);
+                            Ok(())
+                        }
+                    });
+
+                pipeline.add(task);
+                last_tasks = vec!["workflow:build-plan".to_string()];
                 build_plan = Some(plan);
             } else {
                 add_runkernel_tasks(&mut pipeline, &plan)?;
@@ -66,7 +78,7 @@ impl WorkflowPlanner {
                         build_deps.push(s.service.name.clone());
                     }
                 }
-                
+
                 last_tasks.extend(build_deps);
                 build_plan = Some(plan);
             }
@@ -112,5 +124,95 @@ impl WorkflowPlanner {
         }
 
         Ok((pipeline, build_plan))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::profile::{
+        ApprovalMode, ReportMode, WorkflowEngine, WorkflowMode, WorkflowStepMode,
+    };
+
+    fn dummy_profile(
+        deploy_mode: WorkflowStepMode,
+        build_mode: WorkflowStepMode,
+    ) -> NormalizedWorkflowProfile {
+        NormalizedWorkflowProfile {
+            name: "test".to_string(),
+            environment: "local".to_string(),
+            mode: WorkflowMode::Check,
+            engine: WorkflowEngine::Runkernel,
+            interactive: false,
+            build: build_mode,
+            generate: WorkflowStepMode::Run,
+            deploy: deploy_mode,
+            test: WorkflowStepMode::Disabled,
+            verify: WorkflowStepMode::Disabled,
+            deploy_context: Some("local".to_string()),
+            namespace: Some("default".to_string()),
+            approval: ApprovalMode::None,
+            apply: false,
+            report: ReportMode::Text,
+        }
+    }
+
+    fn dummy_options(plan: bool) -> BuildOptions {
+        BuildOptions {
+            cache_dir: ".sailr".to_string(),
+            force: false,
+            only: vec![],
+            ignore: vec![],
+            plan,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: Default::default(),
+        }
+    }
+
+    #[test]
+    fn check_profile_never_creates_deploy() {
+        let env = Environment::load_from_file("local").unwrap();
+        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
+        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
+        let (pipeline, _) = planner.build_pipeline().unwrap();
+        assert!(!pipeline.tasks().any(|t| t.name.starts_with("deploy:")));
+    }
+
+    #[test]
+    fn check_profile_creates_validate_config() {
+        let env = Environment::load_from_file("local").unwrap();
+        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
+        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
+        let (pipeline, _) = planner.build_pipeline().unwrap();
+        assert!(pipeline.tasks().any(|t| t.name == "workflow:validate-config"));
+    }
+
+    #[test]
+    fn check_profile_creates_build_plan_when_build_plan() {
+        let env = Environment::load_from_file("local").unwrap();
+        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
+        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
+        let (pipeline, _) = planner.build_pipeline().unwrap();
+        assert!(pipeline.tasks().any(|t| t.name == "workflow:build-plan"));
+    }
+
+    #[test]
+    fn build_disabled_creates_no_build_plan() {
+        let env = Environment::load_from_file("local").unwrap();
+        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Disabled);
+        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(false));
+        let (pipeline, _) = planner.build_pipeline().unwrap();
+        assert!(!pipeline.tasks().any(|t| t.name == "workflow:build-plan"));
+    }
+
+    #[test]
+    fn generate_task_is_created_when_generate_run() {
+        let env = Environment::load_from_file("local").unwrap();
+        let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
+        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
+        let (pipeline, _) = planner.build_pipeline().unwrap();
+        assert!(pipeline.tasks().any(|t| t.name == "workflow:generate"));
     }
 }

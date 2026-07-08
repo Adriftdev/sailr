@@ -4,3 +4,12 @@ log_level = "info"
 domain = "local.dev"
 default_replicas = 1
 registry = "local.registry"
+
+[[service]]
+name = "hello-sailr"
+version = "latest"
+path = "hello-sailr"
+
+[service.build]
+path = "."
+dockerfile = "Dockerfile"
