@@ -604,7 +604,9 @@ mod tests {
 
         let res = validate_workflow_safety(&profile, &runner);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("deploy=run requires an explicit real deploy_context"));
+        assert!(res
+            .unwrap_err()
+            .contains("deploy=run requires an explicit real deploy_context"));
     }
 
     #[test]
