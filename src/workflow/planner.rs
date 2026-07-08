@@ -407,10 +407,7 @@ impl WorkflowPlanner {
                             anyhow::anyhow!("Deployment plan validation failed: {}", e)
                         })?;
 
-                        // Display is a method on DeploymentPlan
-                        // Wait, let's look at src/plan.rs to see how to print the plan.
-                        // Actually, the spec says `plan.display()`, maybe that exists.
-                        // Let's assume there is a way to display.
+
                     }
 
                     Ok(())
