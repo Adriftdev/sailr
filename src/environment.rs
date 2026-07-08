@@ -236,7 +236,7 @@ impl Environment {
 
     // Loads the environment configuration from the `./k8s/environments/<name>/config.toml` file, overriding default values set in the constructor.
     // An error is returned if the file is missing, cannot be read, or contains an incompatible schema version.
-    pub fn load_from_file(name: &String) -> Result<Self, Box<dyn Error>> {
+    pub fn load_from_file(name: &str) -> Result<Self, Box<dyn Error>> {
         let (raw, inherited) = Self::resolve_raw_environment(name, &mut Vec::new(), &|env_name| {
             Self::read_environment_contents(env_name)
         })?;
@@ -266,7 +266,7 @@ impl Environment {
     fn resolve_raw_environment(
         name: &str,
         stack: &mut Vec<String>,
-        read_config: &dyn Fn(&str) -> Result<String, Box<dyn Error>>,
+        read_config: &EnvironmentReader<'_>,
     ) -> Result<(Value, bool), Box<dyn Error>> {
         if let Some(cycle_start) = stack.iter().position(|entry| entry == name) {
             let mut cycle = stack[cycle_start..].to_vec();
@@ -564,6 +564,8 @@ impl Environment {
     }
 }
 
+type EnvironmentReader<'a> = dyn Fn(&str) -> Result<String, Box<dyn Error>> + 'a;
+
 fn merge_environment_value(base: &mut Value, child: Value) -> Result<(), Box<dyn Error>> {
     let (Some(base_table), Some(child_table)) = (base.as_table_mut(), child.as_table()) else {
         *base = child;
@@ -801,6 +803,8 @@ fn command_spec_to_shell(command: CommandSpec) -> String {
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Default)]
 pub struct BuildPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<BuildEngine>,
     #[serde(default, alias = "beforeAll", skip_serializing_if = "Option::is_none")]
     pub before_all: Option<CommandSpec>,
     #[serde(default, alias = "afterAll", skip_serializing_if = "Option::is_none")]
@@ -809,6 +813,15 @@ pub struct BuildPolicy {
     pub max_parallelism: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fail_fast: Option<bool>,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, clap::ValueEnum,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuildEngine {
+    Roomservice,
+    Runkernel,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]

@@ -147,7 +147,7 @@ pub async fn deploy(
         &format!("{} → {} ({:?})", env_name, ctx, strategy),
     );
 
-    let env = Environment::load_from_file(&env_name.to_string()).map_err(|e| {
+    let env = Environment::load_from_file(env_name).map_err(|e| {
         DeployError::EnvironmentDeploymentFailed(format!(
             "Failed to load environment '{}': {}",
             env_name, e

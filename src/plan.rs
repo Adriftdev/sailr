@@ -189,7 +189,7 @@ pub async fn generate_deployment_plan(
     ));
 
     // Load environment configuration
-    let env = Environment::load_from_file(&env_name.to_string())
+    let env = Environment::load_from_file(env_name)
         .map_err(|e| anyhow::anyhow!("Failed to load environment: {}", e))?;
 
     // Get current cluster state from actual Kubernetes cluster
@@ -818,13 +818,11 @@ pub fn validate_plan_safety(plan: &DeploymentPlan) -> Result<()> {
                     change.resource_type, change.name
                 ));
             }
-            ChangeAction::Update => {
-                if change.resource_type == "Deployment" {
-                    warnings.push(format!(
-                        "⚠️  Updating deployment/{} - may cause pod restarts",
-                        change.name
-                    ));
-                }
+            ChangeAction::Update if change.resource_type == "Deployment" => {
+                warnings.push(format!(
+                    "⚠️  Updating deployment/{} - may cause pod restarts",
+                    change.name
+                ));
             }
             _ => {}
         }

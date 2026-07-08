@@ -1,5 +1,6 @@
 use std::io;
 
+use crate::environment::BuildEngine;
 use clap::{clap_derive::Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Generator, Shell};
 
@@ -357,6 +358,9 @@ pub struct BuildArgs {
 
     #[arg(long, help = "Dump the resolved file scope for each room")]
     pub dump_scope: bool,
+
+    #[arg(long, value_enum, help = "Build engine to use")]
+    pub engine: Option<BuildEngine>,
 }
 
 #[derive(Debug, Args)]
@@ -428,6 +432,9 @@ pub struct GoArgs {
     #[arg(long, help = "Dump the resolved file scope for each room")]
     pub dump_scope: bool,
 
+    #[arg(long, value_enum, help = "Build engine to use")]
+    pub engine: Option<BuildEngine>,
+
     #[arg(long = "strategy", help = "Deployment strategy to use for the deploy step", default_value_t = DeploymentStrategy::Rolling, value_enum)]
     pub strategy: DeploymentStrategy,
 
@@ -472,7 +479,7 @@ mod tests {
 
     #[test]
     fn test_deploy_args_strategy_restart() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "sailr",
             "deploy",
             "--context",
@@ -495,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_deploy_args_strategy_rolling() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "sailr",
             "deploy",
             "--context",
@@ -519,7 +526,7 @@ mod tests {
     #[test]
     fn test_deploy_args_strategy_default() {
         // Assumes DeploymentStrategy::Rolling is the default
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "sailr",
             "deploy",
             "--context",
@@ -540,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_deploy_args_strategy_invalid() {
-        let result = Cli::try_parse_from(&[
+        let result = Cli::try_parse_from([
             "sailr",
             "deploy",
             "--context",
@@ -555,7 +562,7 @@ mod tests {
 
     #[test]
     fn test_migrate_args_parse() {
-        let cli = Cli::try_parse_from(&["sailr", "migrate", "--name", "edge"]).unwrap();
+        let cli = Cli::try_parse_from(["sailr", "migrate", "--name", "edge"]).unwrap();
         match cli.commands {
             Commands::Migrate(args) => {
                 assert_eq!(args.name, "edge");
@@ -566,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_build_args_parse_plan_flags() {
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "sailr",
             "build",
             "--name",
@@ -577,6 +584,8 @@ mod tests {
             "--dump-scope",
             "--only",
             "api,web",
+            "--engine",
+            "runkernel",
         ])
         .unwrap();
         match cli.commands {
@@ -587,6 +596,7 @@ mod tests {
                 assert!(args.explain);
                 assert!(args.dump_scope);
                 assert_eq!(args.only.as_deref(), Some("api,web"));
+                assert_eq!(args.engine, Some(BuildEngine::Runkernel));
             }
             _ => panic!("Expected Build command"),
         }

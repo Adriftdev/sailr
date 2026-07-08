@@ -1,5 +1,5 @@
-use rote::cache::CacheManager;
-use rote::Task;
+use runkernel::cache::{CacheEligibility, CacheManager};
+use runkernel::Task;
 use std::fs::{self, File};
 use std::io::Write;
 use tempfile::TempDir;
@@ -28,7 +28,7 @@ fn test_root_files_are_hashed_with_standard_include() {
         &format!("{}/src/index.js", root.to_string_lossy()),
     ]);
 
-    let hash1 = cache_manager.compute_hash(&task).unwrap();
+    let hash1 = enabled_hash(cache_manager.compute_hash("sailr-test", &task).unwrap());
 
     // Modify a file
     File::create(root.join("package.json"))
@@ -36,10 +36,17 @@ fn test_root_files_are_hashed_with_standard_include() {
         .write_all(b"{\"version\":\"1.0.1\"}")
         .unwrap();
 
-    let hash2 = cache_manager.compute_hash(&task).unwrap();
+    let hash2 = enabled_hash(cache_manager.compute_hash("sailr-test", &task).unwrap());
 
     assert_ne!(
         hash1, hash2,
         "Hash should change when package.json is modified"
     );
+}
+
+fn enabled_hash(eligibility: CacheEligibility) -> String {
+    match eligibility {
+        CacheEligibility::Enabled { hash, .. } => hash,
+        CacheEligibility::Disabled(reason) => panic!("expected cache hash, got disabled: {reason}"),
+    }
 }

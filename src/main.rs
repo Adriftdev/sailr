@@ -364,6 +364,7 @@ async fn main() -> Result<(), CliError> {
                 arg.explain,
                 arg.dump_scope,
                 env.build.clone(),
+                arg.engine,
             );
 
             builder
@@ -408,6 +409,7 @@ async fn main() -> Result<(), CliError> {
                     arg.explain,
                     arg.dump_scope,
                     env.build.clone(),
+                    arg.engine,
                 );
 
                 match builder.build(&env).await {
