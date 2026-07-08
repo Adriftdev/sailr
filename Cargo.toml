@@ -25,17 +25,13 @@ kube = { version = "~1.1.0", features = [
     "openssl-tls",
     "jsonpatch",
 ] }
-async-recursion = "1.1.1"
 thiserror = "1.0.69"
 anyhow = "1.0.95"
 serde_json = "1.0.138"
 clap_complete = "4.5.44"
 checksums = "0.9"
-rayon = "1.10.0"
-serde_derive = "1.0.217"
 subprocess = "0.1.20"
 ignore = "0.4.23"
-libc = "0.2.169"
 once_cell = "1.20.3"
 diffy = "0.4.2"
 walkdir = "2.5.0"
