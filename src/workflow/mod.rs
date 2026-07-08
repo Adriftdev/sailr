@@ -2,6 +2,8 @@ pub mod builder_context;
 pub mod ci;
 pub mod config;
 pub mod error;
+pub mod plan;
 pub mod planner;
 pub mod profile;
+pub mod render;
 pub mod runner;

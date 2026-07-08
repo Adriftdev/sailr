@@ -74,6 +74,63 @@ pub enum WorkflowCommands {
     Run(WorkflowRunArgs),
     /// Generate a CI template for a workflow profile
     GenerateCi(WorkflowGenerateCiArgs),
+    /// Plan a workflow profile
+    Plan(WorkflowPlanArgs),
+    /// View workflow graph
+    Graph(WorkflowGraphArgs),
+    /// Explain a workflow task
+    Explain(WorkflowExplainArgs),
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum WorkflowOutputFormat {
+    Text,
+    Json,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum WorkflowGraphFormat {
+    Text,
+    Mermaid,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowPlanArgs {
+    /// Name of the workflow profile to plan
+    pub profile: String,
+
+    #[arg(long, default_value = "text", value_enum)]
+    pub format: WorkflowOutputFormat,
+
+    #[arg(long)]
+    pub only: Option<String>,
+
+    #[arg(long)]
+    pub ignore: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowGraphArgs {
+    /// Name of the workflow profile to graph
+    pub profile: String,
+
+    #[arg(long, default_value = "text", value_enum)]
+    pub format: WorkflowGraphFormat,
+
+    #[arg(long)]
+    pub only: Option<String>,
+
+    #[arg(long)]
+    pub ignore: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowExplainArgs {
+    /// Name of the workflow profile
+    pub profile: String,
+
+    /// ID of the task to explain
+    pub task: String,
 }
 
 #[derive(Debug, Args)]

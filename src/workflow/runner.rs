@@ -232,8 +232,10 @@ impl WorkflowRunner {
             normalized_profile.clone(),
             std::sync::Arc::new(env),
             options,
+            runner_ctx.clone(),
         );
-        let (mut pipeline, build_execution) = planner.build_pipeline()?;
+        let plan = planner.plan()?;
+        let (mut pipeline, build_execution) = planner.build_pipeline_from_plan(&plan)?;
 
         // 8. Run Pipeline
         attach_pipeline_logging(&mut pipeline);
@@ -273,6 +275,164 @@ impl WorkflowRunner {
         }
 
         crate::LOGGER.info("✅ Workflow completed successfully.");
+        Ok(())
+    }
+    pub async fn plan(args: crate::cli::WorkflowPlanArgs) -> Result<(), String> {
+        let runner_ctx = RunnerContext::detect(false);
+        let config = WorkflowConfig::load().map_err(|e| e.to_string())?;
+        let profile = config
+            .get_profile(&args.profile)
+            .ok_or_else(|| format!("Workflow profile '{}' not found", args.profile))?;
+        let normalized_profile = profile.normalize(runner_ctx.ci);
+        let env = Environment::load_from_file(&normalized_profile.environment).map_err(|e| {
+            format!(
+                "Failed to load environment '{}': {}",
+                normalized_profile.environment, e
+            )
+        })?;
+
+        let only = args
+            .only
+            .map(|s| crate::builder::split_matches(Some(s)))
+            .unwrap_or_default();
+        let ignore = args
+            .ignore
+            .map(|s| crate::builder::split_matches(Some(s)))
+            .unwrap_or_default();
+
+        let options = BuildOptions {
+            cache_dir: ".sailr/cache/build".to_string(),
+            force: false,
+            only,
+            ignore,
+            plan: true,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: env.build.clone(),
+        };
+
+        let planner = WorkflowPlanner::new(
+            normalized_profile.clone(),
+            std::sync::Arc::new(env),
+            options,
+            runner_ctx.clone(),
+        );
+        let plan = planner.plan()?;
+
+        match args.format {
+            crate::cli::WorkflowOutputFormat::Text => {
+                println!(
+                    "{}",
+                    crate::workflow::render::render_workflow_plan_text(&plan)
+                );
+            }
+            crate::cli::WorkflowOutputFormat::Json => {
+                return Err("JSON plan format not yet implemented".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn graph(args: crate::cli::WorkflowGraphArgs) -> Result<(), String> {
+        let runner_ctx = RunnerContext::detect(false);
+        let config = WorkflowConfig::load().map_err(|e| e.to_string())?;
+        let profile = config
+            .get_profile(&args.profile)
+            .ok_or_else(|| format!("Workflow profile '{}' not found", args.profile))?;
+        let normalized_profile = profile.normalize(runner_ctx.ci);
+        let env = Environment::load_from_file(&normalized_profile.environment).map_err(|e| {
+            format!(
+                "Failed to load environment '{}': {}",
+                normalized_profile.environment, e
+            )
+        })?;
+
+        let only = args
+            .only
+            .map(|s| crate::builder::split_matches(Some(s)))
+            .unwrap_or_default();
+        let ignore = args
+            .ignore
+            .map(|s| crate::builder::split_matches(Some(s)))
+            .unwrap_or_default();
+
+        let options = BuildOptions {
+            cache_dir: ".sailr/cache/build".to_string(),
+            force: false,
+            only,
+            ignore,
+            plan: true,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: env.build.clone(),
+        };
+
+        let planner = WorkflowPlanner::new(
+            normalized_profile.clone(),
+            std::sync::Arc::new(env),
+            options,
+            runner_ctx.clone(),
+        );
+        let plan = planner.plan()?;
+
+        match args.format {
+            crate::cli::WorkflowGraphFormat::Text => {
+                println!(
+                    "{}",
+                    crate::workflow::render::render_workflow_graph_text(&plan)
+                );
+            }
+            crate::cli::WorkflowGraphFormat::Mermaid => {
+                println!(
+                    "{}",
+                    crate::workflow::render::render_workflow_graph_mermaid(&plan)
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn explain(args: crate::cli::WorkflowExplainArgs) -> Result<(), String> {
+        let runner_ctx = RunnerContext::detect(false);
+        let config = WorkflowConfig::load().map_err(|e| e.to_string())?;
+        let profile = config
+            .get_profile(&args.profile)
+            .ok_or_else(|| format!("Workflow profile '{}' not found", args.profile))?;
+        let normalized_profile = profile.normalize(runner_ctx.ci);
+        let env = Environment::load_from_file(&normalized_profile.environment).map_err(|e| {
+            format!(
+                "Failed to load environment '{}': {}",
+                normalized_profile.environment, e
+            )
+        })?;
+
+        let options = BuildOptions {
+            cache_dir: ".sailr/cache/build".to_string(),
+            force: false,
+            only: vec![],
+            ignore: vec![],
+            plan: true,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: env.build.clone(),
+        };
+
+        let planner = WorkflowPlanner::new(
+            normalized_profile.clone(),
+            std::sync::Arc::new(env),
+            options,
+            runner_ctx.clone(),
+        );
+        let plan = planner.plan()?;
+
+        let text = crate::workflow::render::render_workflow_explain_text(&plan, &args.task)?;
+        println!("{}", text);
+
         Ok(())
     }
 }

@@ -2,6 +2,10 @@ use runkernel::{Pipeline, Task};
 
 use crate::builder::{add_runkernel_tasks, create_sailr_build_plan, BuildOptions, SailrBuildPlan};
 use crate::environment::Environment;
+use crate::workflow::plan::{
+    WorkflowEdge, WorkflowEffects, WorkflowPlan, WorkflowTaskKind, WorkflowTaskPlan,
+};
+use crate::workflow::runner::RunnerContext;
 
 use super::profile::NormalizedWorkflowProfile;
 
@@ -17,6 +21,7 @@ pub struct WorkflowPlanner {
     pub profile: NormalizedWorkflowProfile,
     pub env: Arc<Environment>,
     pub options: BuildOptions,
+    pub runner: RunnerContext,
 }
 
 impl WorkflowPlanner {
@@ -24,26 +29,32 @@ impl WorkflowPlanner {
         profile: NormalizedWorkflowProfile,
         env: Arc<Environment>,
         options: BuildOptions,
+        runner: RunnerContext,
     ) -> Self {
         Self {
             profile,
             env,
             options,
+            runner,
         }
     }
 
-    pub fn build_pipeline(&self) -> Result<(Pipeline, WorkflowBuildExecution), String> {
-        let mut pipeline = Pipeline::new(format!("Workflow: {}", self.profile.name));
-        let mut build_execution = WorkflowBuildExecution::None;
+    pub fn plan(&self) -> Result<WorkflowPlan, String> {
+        let mut tasks = Vec::new();
+        let mut edges = Vec::new();
+        let mut effects = WorkflowEffects::default();
+        let mut build_plan_opt = None;
 
         // 0. Validate Phase
-
-        let validate_task = Task::new("workflow:validate-config").exec_fn(move |_ctx| async move {
-            crate::LOGGER.info("Validating Sailr environment config...");
-            Ok(())
+        tasks.push(WorkflowTaskPlan {
+            id: "workflow:validate-config".to_string(),
+            label: "Validate Config".to_string(),
+            kind: WorkflowTaskKind::ValidateConfig,
+            dependencies: vec![],
+            effects: WorkflowEffects::default(),
+            description: "Validates Sailr environment configuration.".to_string(),
         });
-        pipeline.add(validate_task);
-        let mut last_tasks: Vec<String> = vec!["workflow:validate-config".to_string()];
+        let mut last_tasks = vec!["workflow:validate-config".to_string()];
 
         // 1. Build Phase
         match self.profile.build {
@@ -53,14 +64,152 @@ impl WorkflowPlanner {
             }
             crate::workflow::profile::WorkflowStepMode::Plan => {
                 let plan = create_sailr_build_plan(&self.env, &self.options)?;
-                let plan_for_task = plan.clone();
-                let options_for_task = self.options.clone();
+                build_plan_opt = Some(plan.clone());
+
+                let task_effects = WorkflowEffects::default();
+                tasks.push(WorkflowTaskPlan {
+                    id: "workflow:build-plan".to_string(),
+                    label: "Build Plan".to_string(),
+                    kind: WorkflowTaskKind::BuildPlan,
+                    dependencies: vec!["workflow:validate-config".to_string()],
+                    effects: task_effects,
+                    description: "Analyzes services to determine what needs to be built."
+                        .to_string(),
+                });
+                edges.push(WorkflowEdge {
+                    from: "workflow:validate-config".to_string(),
+                    to: "workflow:build-plan".to_string(),
+                });
+
+                last_tasks = vec!["workflow:build-plan".to_string()];
+            }
+            crate::workflow::profile::WorkflowStepMode::Run => {
+                let plan = create_sailr_build_plan(&self.env, &self.options)?;
+                build_plan_opt = Some(plan.clone());
+
+                let dirty_count = plan.services.iter().filter(|s| s.dirty).count();
+
+                effects.mutates_docker = true;
+                effects.mutates_registry = true;
+
+                let mut build_tasks = Vec::new();
+                for s in &plan.services {
+                    if s.dirty {
+                        let service_effects = WorkflowEffects {
+                            mutates_docker: true,
+                            mutates_registry: true,
+                            ..Default::default()
+                        };
+
+                        tasks.push(WorkflowTaskPlan {
+                            id: format!("build:{}", s.service.name),
+                            label: format!("Build {}", s.service.name),
+                            kind: WorkflowTaskKind::ServiceBuild,
+                            dependencies: vec!["workflow:validate-config".to_string()],
+                            effects: service_effects,
+                            description: format!(
+                                "Builds and pushes Docker image for {}.",
+                                s.service.name
+                            ),
+                        });
+                        edges.push(WorkflowEdge {
+                            from: "workflow:validate-config".to_string(),
+                            to: format!("build:{}", s.service.name),
+                        });
+                        build_tasks.push(format!("build:{}", s.service.name));
+                    }
+                }
+
+                if build_tasks.is_empty() {
+                    build_tasks = vec!["workflow:validate-config".to_string()];
+                }
+
+                if dirty_count > 0 && !plan.after_all.is_empty() {
+                    tasks.push(WorkflowTaskPlan {
+                        id: "build:after-all".to_string(),
+                        label: "After All Build Hooks".to_string(),
+                        kind: WorkflowTaskKind::ServiceBuild,
+                        dependencies: build_tasks.clone(),
+                        effects: WorkflowEffects::default(),
+                        description: "Runs after-all build hooks.".to_string(),
+                    });
+                    for t in &build_tasks {
+                        edges.push(WorkflowEdge {
+                            from: t.clone(),
+                            to: "build:after-all".to_string(),
+                        });
+                    }
+                    build_tasks = vec!["build:after-all".to_string()];
+                }
+
+                last_tasks = build_tasks;
+            }
+        }
+
+        // 2. Generate Phase
+        if self.profile.generate.is_active() {
+            effects.mutates_filesystem = true;
+            let generate_effects = WorkflowEffects {
+                mutates_filesystem: true,
+                ..Default::default()
+            };
+
+            tasks.push(WorkflowTaskPlan {
+                id: "workflow:generate".to_string(),
+                label: "Generate Manifests".to_string(),
+                kind: WorkflowTaskKind::Generate,
+                dependencies: last_tasks.clone(),
+                effects: generate_effects,
+                description: "Generates Kubernetes manifests.".to_string(),
+            });
+
+            for t in &last_tasks {
+                edges.push(WorkflowEdge {
+                    from: t.clone(),
+                    to: "workflow:generate".to_string(),
+                });
+            }
+        }
+
+        Ok(WorkflowPlan {
+            profile: self.profile.clone(),
+            runner: self.runner.clone(),
+            tasks,
+            edges,
+            build_plan: build_plan_opt,
+            effects,
+        })
+    }
+
+    pub fn build_pipeline_from_plan(
+        &self,
+        plan: &WorkflowPlan,
+    ) -> Result<(Pipeline, WorkflowBuildExecution), String> {
+        let mut pipeline = Pipeline::new(format!("Workflow: {}", self.profile.name));
+        let mut build_execution = WorkflowBuildExecution::None;
+
+        let validate_task = Task::new("workflow:validate-config").exec_fn(move |_ctx| async move {
+            crate::LOGGER.info("Validating Sailr environment config...");
+            Ok(())
+        });
+        pipeline.add(validate_task);
+
+        let mut last_tasks: Vec<String> = vec!["workflow:validate-config".to_string()];
+
+        match self.profile.build {
+            crate::workflow::profile::WorkflowStepMode::Disabled => {}
+            crate::workflow::profile::WorkflowStepMode::DryRun => {
+                return Err("workflow build dry-run is not enabled in this PR".to_string());
+            }
+            crate::workflow::profile::WorkflowStepMode::Plan => {
+                let p = plan.build_plan.clone().unwrap();
+                let o = self.options.clone();
 
                 let task = Task::new("workflow:build-plan")
                     .depends_on(&["workflow:validate-config"])
                     .exec_fn(move |_ctx| {
-                        let p = plan_for_task.clone();
-                        let o = options_for_task.clone();
+                        let p = p.clone();
+                        let o = o.clone();
                         async move {
                             crate::builder::print_sailr_plan(&p, &o);
                             Ok(())
@@ -69,28 +218,28 @@ impl WorkflowPlanner {
 
                 pipeline.add(task);
                 last_tasks = vec!["workflow:build-plan".to_string()];
-                build_execution = WorkflowBuildExecution::PlanOnly(plan);
+                build_execution =
+                    WorkflowBuildExecution::PlanOnly(plan.build_plan.clone().unwrap());
             }
             crate::workflow::profile::WorkflowStepMode::Run => {
-                let plan = create_sailr_build_plan(&self.env, &self.options)?;
-                add_runkernel_tasks(&mut pipeline, &plan)?;
+                let bp = plan.build_plan.clone().unwrap();
+                add_runkernel_tasks(&mut pipeline, &bp)?;
 
-                let dirty_count = plan.services.iter().filter(|s| s.dirty).count();
+                let dirty_count = bp.services.iter().filter(|s| s.dirty).count();
                 let mut build_deps = Vec::new();
-                if dirty_count > 0 && !plan.after_all.is_empty() {
+                if dirty_count > 0 && !bp.after_all.is_empty() {
                     build_deps.push("build:after-all".to_string());
                 } else {
-                    for s in &plan.services {
+                    for s in &bp.services {
                         build_deps.push(s.service.name.clone());
                     }
                 }
 
                 last_tasks.extend(build_deps);
-                build_execution = WorkflowBuildExecution::Executed(plan);
+                build_execution = WorkflowBuildExecution::Executed(bp);
             }
         }
 
-        // 2. Generate Phase
         if self.profile.generate.is_active() {
             let mut task = Task::new("workflow:generate");
 
@@ -126,7 +275,6 @@ impl WorkflowPlanner {
             });
 
             pipeline.add(task);
-            // last_tasks = vec!["workflow:generate".to_string()];
         }
 
         Ok((pipeline, build_execution))
@@ -139,6 +287,7 @@ mod tests {
     use crate::workflow::profile::{
         ApprovalMode, ReportMode, WorkflowEngine, WorkflowMode, WorkflowStepMode,
     };
+    use crate::workflow::runner::RunnerKind;
 
     fn dummy_profile(
         deploy_mode: WorkflowStepMode,
@@ -177,13 +326,23 @@ mod tests {
         }
     }
 
+    fn dummy_runner() -> RunnerContext {
+        RunnerContext {
+            kind: RunnerKind::Local,
+            ci: false,
+            interactive: false,
+        }
+    }
+
     #[test]
     fn ci_profile_validate_only() {
         let env = Environment::new("local");
         let mut profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Disabled);
         profile.generate = WorkflowStepMode::Disabled;
-        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(false));
-        let (pipeline, _) = planner.build_pipeline().unwrap();
+        let planner =
+            WorkflowPlanner::new(profile, Arc::new(env), dummy_options(false), dummy_runner());
+        let plan = planner.plan().unwrap();
+        let (pipeline, _) = planner.build_pipeline_from_plan(&plan).unwrap();
         let task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
         assert_eq!(task_names, vec!["workflow:validate-config"]);
     }
@@ -210,8 +369,10 @@ mod tests {
 
         let mut profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
         profile.generate = WorkflowStepMode::Disabled;
-        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
-        let (pipeline, _) = planner.build_pipeline().unwrap();
+        let planner =
+            WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true), dummy_runner());
+        let plan = planner.plan().unwrap();
+        let (pipeline, _) = planner.build_pipeline_from_plan(&plan).unwrap();
         let mut task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
         task_names.sort();
         let mut expected = vec![
@@ -243,8 +404,10 @@ mod tests {
         env.services.push(svc);
 
         let profile = dummy_profile(WorkflowStepMode::Disabled, WorkflowStepMode::Plan);
-        let planner = WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true));
-        let (pipeline, _) = planner.build_pipeline().unwrap();
+        let planner =
+            WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true), dummy_runner());
+        let plan = planner.plan().unwrap();
+        let (pipeline, _) = planner.build_pipeline_from_plan(&plan).unwrap();
         let mut task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
         task_names.sort();
         let mut expected = vec![
