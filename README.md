@@ -1,6 +1,6 @@
 ## Sailr: A Kubernetes Management CLI for Smooth Sailing
-
-[![Release Build and Deploy](https://github.com/Adriftdev/sailr/actions/workflows/release.yml/badge.svg)](https://github.com/Adriftdev/sailr/actions/workflows/release.yml)
+[![Rust CI](https://github.com/Adriftdev/sailr/actions/workflows/rust.yml/badge.svg)](https://github.com/Adriftdev/sailr/actions/workflows/rust.yml)
+[![Sailr Workflow - ci](https://github.com/Adriftdev/sailr/actions/workflows/sailr-ci.yml/badge.svg)](https://github.com/Adriftdev/sailr/actions/workflows/sailr-ci.yml)
 
 ### Sailr: The Calming Force in the Choppy Waters of Kubernetes
 
