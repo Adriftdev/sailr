@@ -2,7 +2,7 @@ use std::{io, process::exit};
 
 use sailr::{
     builder::{filter_services_exact, split_matches, Builder},
-    cli::{Cli, Commands, EnvType, InfraCommands, Provider},
+    cli::{Cli, Commands, EnvType, InfraCommands, Provider, WorkflowCommands},
     create_default_env_config,
     create_default_env_infra,
     environment::{Environment, Service},
@@ -689,6 +689,7 @@ async fn main() -> Result<(), CliError> {
         Commands::Migrate(arg) => handle_migrate(arg)?,
         Commands::Bump(arg) => handle_bump(arg)?,
         Commands::Lint(arg) => handle_lint(arg)?,
+        Commands::Workflow(cmd) => handle_workflow(cmd).await?,
         Commands::Interactive(args) => {
             // Handle interactive commands
             sailr::interactive::main_menu(args)
@@ -789,5 +790,95 @@ fn handle_lint(arg: sailr::cli::LintArgs) -> Result<(), CliError> {
     } else {
         sailr::LOGGER.warn(&format!("Lint finished with {} warnings.", warnings));
     }
+    Ok(())
+}
+
+async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
+    use sailr::workflow::config::WorkflowConfig;
+
+    if let WorkflowCommands::Run(args) = cmd {
+        sailr::workflow::runner::WorkflowRunner::run(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
+    if let WorkflowCommands::Plan(args) = cmd {
+        sailr::workflow::runner::WorkflowRunner::plan(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
+    if let WorkflowCommands::Graph(args) = cmd {
+        sailr::workflow::runner::WorkflowRunner::graph(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
+    if let WorkflowCommands::Explain(args) = cmd {
+        sailr::workflow::runner::WorkflowRunner::explain(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
+    let config = WorkflowConfig::load()?;
+
+    match cmd {
+        WorkflowCommands::List => {
+            let profiles = config.list_profiles();
+            if profiles.is_empty() {
+                LOGGER.info(
+                    "No workflow profiles found. Create a sailr.workflow.toml to define profiles.",
+                );
+            } else {
+                LOGGER.info(&format!("Found {} workflow profile(s):\n", profiles.len()));
+                for name in &profiles {
+                    if let Some(profile) = config.get_profile(name) {
+                        println!("  {}", profile.summary_line());
+                    }
+                }
+            }
+        }
+        WorkflowCommands::Show(args) => {
+            let profile = config.get_profile(&args.profile).ok_or_else(|| {
+                CliError::Other(format!("Workflow profile '{}' not found", args.profile))
+            })?;
+            println!(
+                "{}",
+                sailr::workflow::config::WorkflowConfig::format_profile_detail(profile)
+            );
+        }
+        WorkflowCommands::GenerateCi(args) => {
+            let profile = config.get_profile(&args.profile).ok_or_else(|| {
+                CliError::Other(format!("Workflow profile '{}' not found", args.profile))
+            })?;
+
+            use sailr::workflow::ci::{CiProvider, CiTemplateGenerator};
+            use std::str::FromStr;
+
+            let provider =
+                CiProvider::from_str(&args.provider).map_err(|e| CliError::Other(e.to_string()))?;
+
+            let path = CiTemplateGenerator::write_template(
+                &profile.name,
+                &provider,
+                args.output.as_deref(),
+            )
+            .map_err(|e| CliError::Other(e.to_string()))?;
+
+            LOGGER.info(&format!(
+                "Successfully generated CI template at {}",
+                path.display()
+            ));
+        }
+        WorkflowCommands::Run(_)
+        | WorkflowCommands::Plan(_)
+        | WorkflowCommands::Graph(_)
+        | WorkflowCommands::Explain(_) => unreachable!(),
+    }
+
     Ok(())
 }

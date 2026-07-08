@@ -28,6 +28,7 @@ pub mod templates;
 pub mod tui;
 pub mod ui;
 pub mod utils;
+pub mod workflow;
 
 pub static LOGGER: Lazy<ui::SailrUI> = Lazy::new(|| ui::SailrUI::new(false, false));
 

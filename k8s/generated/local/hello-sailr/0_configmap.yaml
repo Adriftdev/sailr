@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-sailr-config
+  labels:
+    app: hello-sailr
+    type: web-app
+data:
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "80"

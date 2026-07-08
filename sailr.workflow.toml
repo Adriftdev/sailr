@@ -1,12 +1,38 @@
-schema_version = "0.5.0"
-name = "{{name}}"
-log_level = "INFO"
-domain = "{{default_domain}}"
-default_replicas = 1
-registry = "{{default_registry}}"
+[workflow.ci]
+environment = "local"
+mode = "check"
+interactive = false
+build = "disabled"
+generate = "disabled"
+deploy = "disabled"
+report = "text"
 
-service = []
-environment_variables = []
+[workflow.ci-build-plan]
+environment = "local"
+mode = "check"
+interactive = false
+build = "plan"
+generate = "disabled"
+deploy = "disabled"
+report = "text"
+
+[workflow.ci-generate]
+environment = "local"
+mode = "check"
+interactive = false
+build = "plan"
+generate = "run"
+deploy = "disabled"
+report = "text"
+
+[workflow.ci-build]
+environment = "local"
+mode = "build"
+interactive = false
+build = "run"
+generate = "disabled"
+deploy = "disabled"
+report = "text"
 
 [workflow.local-deploy]
 environment = "local"
@@ -20,6 +46,7 @@ namespace = "default"
 approval = "prompt"
 apply = true
 report = "text"
+
 [workflow.ci-deploy-plan]
 environment = "local"
 mode = "deploy"

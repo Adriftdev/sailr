@@ -59,6 +59,122 @@ pub enum Commands {
     Bump(BumpArgs),
     /// Lint an environment configuration
     Lint(LintArgs),
+    /// Manage workflow profiles
+    #[command(subcommand)]
+    Workflow(WorkflowCommands),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkflowCommands {
+    /// List available workflow profiles
+    List,
+    /// Show details of a workflow profile
+    Show(WorkflowShowArgs),
+    /// Run a workflow profile
+    Run(WorkflowRunArgs),
+    /// Generate a CI template for a workflow profile
+    GenerateCi(WorkflowGenerateCiArgs),
+    /// Plan a workflow profile
+    Plan(WorkflowPlanArgs),
+    /// View workflow graph
+    Graph(WorkflowGraphArgs),
+    /// Explain a workflow task
+    Explain(WorkflowExplainArgs),
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum WorkflowOutputFormat {
+    Text,
+    Json,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum WorkflowGraphFormat {
+    Text,
+    Mermaid,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowPlanArgs {
+    /// Name of the workflow profile to plan
+    pub profile: String,
+
+    #[arg(long, default_value = "text", value_enum)]
+    pub format: WorkflowOutputFormat,
+
+    #[arg(long)]
+    pub only: Option<String>,
+
+    #[arg(long)]
+    pub ignore: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowGraphArgs {
+    /// Name of the workflow profile to graph
+    pub profile: String,
+
+    #[arg(long, default_value = "text", value_enum)]
+    pub format: WorkflowGraphFormat,
+
+    #[arg(long)]
+    pub only: Option<String>,
+
+    #[arg(long)]
+    pub ignore: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowExplainArgs {
+    /// Name of the workflow profile
+    pub profile: String,
+
+    /// ID of the task to explain
+    pub task: String,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowRunArgs {
+    /// Name of the workflow profile to run
+    pub profile: String,
+
+    #[arg(long)]
+    pub only: Option<String>,
+
+    #[arg(long)]
+    pub ignore: Option<String>,
+
+    #[arg(long)]
+    pub non_interactive: bool,
+
+    #[arg(long)]
+    pub plan: bool,
+
+    #[arg(long)]
+    pub dry_run: bool,
+
+    #[arg(long)]
+    pub apply: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowGenerateCiArgs {
+    /// Name of the workflow profile to run
+    pub profile: String,
+
+    /// CI provider to generate for (github, circleci, travis)
+    #[arg(long)]
+    pub provider: String,
+
+    /// Optional output file path
+    #[arg(long)]
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowShowArgs {
+    /// Name of the workflow profile to show
+    pub profile: String,
 }
 
 #[derive(Debug, Args, Clone)]
