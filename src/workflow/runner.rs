@@ -57,6 +57,62 @@ fn print_failed_tasks(result: &runkernel::PipelineResult) {
     }
 }
 
+fn print_workflow_result(
+    profile: &super::profile::NormalizedWorkflowProfile,
+    runner: &RunnerContext,
+    result: &runkernel::PipelineResult,
+) {
+    println!("Sailr workflow result:");
+    println!("  profile: {}", profile.name);
+    println!("  mode: {}", profile.mode);
+    println!("  runner: {:?}", runner.kind);
+    println!("  tasks completed: {}", result.summary.completed);
+    println!("  tasks failed: {}", result.summary.failed);
+    println!("  tasks skipped: {}", result.summary.skipped);
+    println!("  duration: {:?}", result.duration);
+}
+
+fn write_workflow_report(
+    profile: &super::profile::NormalizedWorkflowProfile,
+    runner: &RunnerContext,
+    result: &runkernel::PipelineResult,
+) -> Result<(), String> {
+    if !matches!(
+        profile.report,
+        super::profile::ReportMode::Json | super::profile::ReportMode::Both
+    ) {
+        return Ok(());
+    }
+
+    let report = serde_json::json!({
+        "profile": profile.name,
+        "mode": profile.mode.as_str(),
+        "runner": format!("{:?}", runner.kind).to_lowercase(),
+        "success": result.summary.success,
+        "tasks": {
+            "completed": result.summary.completed,
+            "failed": result.summary.failed,
+            "skipped": result.summary.skipped,
+            "cancelled": result.summary.cancelled
+        }
+    });
+
+    let report_dir = std::path::Path::new(".sailr")
+        .join("reports")
+        .join(&profile.name);
+    std::fs::create_dir_all(&report_dir)
+        .map_err(|e| format!("Failed to create report directory: {}", e))?;
+
+    let report_path = report_dir.join("latest.json");
+    let json_string = serde_json::to_string_pretty(&report)
+        .map_err(|e| format!("Failed to serialize report: {}", e))?;
+
+    std::fs::write(&report_path, json_string)
+        .map_err(|e| format!("Failed to write report: {}", e))?;
+
+    Ok(())
+}
+
 pub fn validate_workflow_safety(
     profile: &crate::workflow::profile::NormalizedWorkflowProfile,
     runner: &RunnerContext,
@@ -152,6 +208,9 @@ impl WorkflowRunner {
             .map_err(|e| format!("Pipeline execution failed: {:?}", e))?;
 
         // 9. Finalize
+        print_workflow_result(&normalized_profile, &runner_ctx, &result);
+        write_workflow_report(&normalized_profile, &runner_ctx, &result)?;
+
         match build_execution {
             crate::workflow::planner::WorkflowBuildExecution::None => {}
             crate::workflow::planner::WorkflowBuildExecution::PlanOnly(_) => {

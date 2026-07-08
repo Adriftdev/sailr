@@ -4,15 +4,43 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_ci_build:
+        description: "Run experimental ci-build profile"
+        required: false
+        default: "false"
 
 jobs:
   sailr-workflow:
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - ci
+          - ci-build-plan
+          - ci-generate
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Sailr
         run: cargo install --path .
 
-      - name: Run Workflow
-        run: sailr workflow run ci --non-interactive
+      - name: Run Sailr workflow profile
+        run: sailr workflow run ${{ matrix.profile }} --non-interactive
+
+  sailr-ci-build:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_ci_build == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Sailr
+        run: cargo install --path .
+
+      - name: Run experimental CI build
+        run: sailr workflow run ci-build --non-interactive

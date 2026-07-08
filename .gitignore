@@ -8,3 +8,4 @@ k8s/environments/dev
 netrc
 .roomservice/
 .sailr/
+k8s/generated/
