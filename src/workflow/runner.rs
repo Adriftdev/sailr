@@ -616,7 +616,19 @@ mod tests {
             interactive: true,
         };
 
-        let res = validate_workflow_safety(&profile, &runner, &crate::cli::WorkflowRunArgs { profile: "test".to_string(), only: None, ignore: None, non_interactive: true, plan: false, dry_run: false, apply: false });
+        let res = validate_workflow_safety(
+            &profile,
+            &runner,
+            &crate::cli::WorkflowRunArgs {
+                profile: "test".to_string(),
+                only: None,
+                ignore: None,
+                non_interactive: true,
+                plan: false,
+                dry_run: false,
+                apply: false,
+            },
+        );
         assert!(res.is_err());
         assert!(res
             .unwrap_err()
@@ -654,7 +666,19 @@ mod tests {
             interactive: false,
         };
 
-        let res = validate_workflow_safety(&profile, &runner, &crate::cli::WorkflowRunArgs { profile: "test".to_string(), only: None, ignore: None, non_interactive: true, plan: false, dry_run: false, apply: false });
+        let res = validate_workflow_safety(
+            &profile,
+            &runner,
+            &crate::cli::WorkflowRunArgs {
+                profile: "test".to_string(),
+                only: None,
+                ignore: None,
+                non_interactive: true,
+                plan: false,
+                dry_run: false,
+                apply: false,
+            },
+        );
         assert!(res.is_err());
         // Since we added a check for apply=true in CI first, it'll hit that instead.
         // Let's just check that it fails correctly.
@@ -691,7 +715,19 @@ mod tests {
             interactive: false, // user ran with --non-interactive
         };
 
-        let res = validate_workflow_safety(&profile, &runner, &crate::cli::WorkflowRunArgs { profile: "test".to_string(), only: None, ignore: None, non_interactive: true, plan: false, dry_run: false, apply: false });
+        let res = validate_workflow_safety(
+            &profile,
+            &runner,
+            &crate::cli::WorkflowRunArgs {
+                profile: "test".to_string(),
+                only: None,
+                ignore: None,
+                non_interactive: true,
+                plan: false,
+                dry_run: false,
+                apply: false,
+            },
+        );
         assert!(res.is_err());
         assert!(res
             .unwrap_err()
@@ -729,11 +765,21 @@ mod tests {
             interactive: true,
         };
 
-        let res = validate_workflow_safety(&profile, &runner, &crate::cli::WorkflowRunArgs { profile: "test".to_string(), only: None, ignore: None, non_interactive: true, plan: false, dry_run: false, apply: false });
+        let res = validate_workflow_safety(
+            &profile,
+            &runner,
+            &crate::cli::WorkflowRunArgs {
+                profile: "test".to_string(),
+                only: None,
+                ignore: None,
+                non_interactive: true,
+                plan: false,
+                dry_run: false,
+                apply: false,
+            },
+        );
         assert!(res.is_err());
-        assert!(res
-            .unwrap_err()
-            .contains("deploy=run requires apply=true"));
+        assert!(res.unwrap_err().contains("deploy=run requires apply=true"));
     }
     #[test]
     fn validate_safety_ci_staging_deploy_allowed() {
