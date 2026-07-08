@@ -1,8 +1,8 @@
 use chrono::Local;
+use console::style;
 use futures::stream::{Stream, StreamExt}; // Ensure `StreamExt` is in scope for `.boxed()`
-use std::io::{self, Write};
+use std::io;
 use std::pin::Pin; // Import Pin
-use term::{color, Attr, Terminal};
 
 // Alias for our tagged log format: (PodName, LogContent)
 pub type TaggedLog = (String, String);
@@ -28,32 +28,23 @@ where
 /// A struct that holds the state for grouping logs, equivalent to `LogGrouper`.
 pub struct LogGrouper {
     prev_pod_name: Option<String>,
-    terminal: Option<Box<dyn Terminal<Output = io::Stdout> + Send>>,
 }
 
 impl LogGrouper {
     /// Prints a colored header with the pod name and a local timestamp.
     fn print_header(&mut self, pod_name: &str) {
-        if let Some(t) = self.terminal.as_mut() {
-            let _ = t.fg(color::RED);
-            let _ = write!(t, "[ ");
-            let _ = t.fg(color::YELLOW);
-            let _ = t.attr(Attr::Bold);
-            let _ = write!(t, "{}", pod_name);
-            let _ = t.reset();
-            let _ = t.fg(color::RED);
-            let _ = write!(t, " - ");
-            let _ = t.fg(color::BLUE);
-            let now = Local::now();
-            let _ = write!(t, "{}", now.format("%Y-%m-%d %H:%M:%S"));
-            let _ = t.fg(color::RED);
-            let _ = writeln!(t, " ]");
-            let _ = t.reset();
-            let _ = t.flush();
-        } else {
-            let now = Local::now();
-            println!("[ {} - {} ]", pod_name, now.format("%Y-%m-%d %H:%M:%S"));
-        }
+        let now = Local::now();
+        let formatted_time = now.format("%Y-%m-%d %H:%M:%S").to_string();
+
+        let header = format!(
+            "{} {} {} {} {}",
+            style("[").red(),
+            style(pod_name).yellow().bold(),
+            style("-").red(),
+            style(formatted_time).blue(),
+            style("]").red()
+        );
+        println!("{}", header);
     }
 
     /// Checks if the pod has changed and prints a header if so, then prints the log line.
@@ -70,6 +61,5 @@ impl LogGrouper {
 pub fn log_grouper() -> LogGrouper {
     LogGrouper {
         prev_pod_name: None,
-        terminal: term::stdout(),
     }
 }

@@ -1,7 +1,7 @@
 use std::{io, process::exit};
 
 use sailr::{
-    builder::{split_matches, Builder},
+    builder::{filter_services_exact, split_matches, Builder},
     cli::{Cli, Commands, EnvType, InfraCommands, Provider},
     create_default_env_config,
     create_default_env_infra,
@@ -28,6 +28,8 @@ async fn main() -> Result<(), CliError> {
     dotenvy::dotenv().ok();
 
     let cli = Cli::parse();
+    LOGGER.set_quiet(cli.quiet);
+    LOGGER.set_verbose(cli.verbose);
 
     match cli.commands {
         Commands::Init(arg) => {
@@ -56,8 +58,10 @@ async fn main() -> Result<(), CliError> {
                 let infra = match provider {
                     Provider::Local => Infra::new(Box::new(LocalK8::new(arg.name.clone()))),
                     _ => {
-                        LOGGER.error(&format!("Provider {:?} not supported", provider));
-                        std::process::exit(1);
+                        return Err(CliError::Other(format!(
+                            "Provider {:?} not supported",
+                            provider
+                        )));
                     }
                 };
                 infra.generate(Infra::read_config(arg.name.clone()));
@@ -177,7 +181,7 @@ async fn main() -> Result<(), CliError> {
                 // Update environment configuration with sample service
                 let env_name = arg.name.clone();
                 match Environment::load_from_file(&env_name) {
-                    Ok(mut env) => {
+                    Ok(env) => {
                         let sample_service_entry =
                             Service::new(&sample_service_name, None, "latest");
 
@@ -191,23 +195,22 @@ async fn main() -> Result<(), CliError> {
                                 sample_service_name, env_name
                             ));
                         } else {
-                            env.services.push(sample_service_entry);
-                            match env.save_to_file() {
-                                Ok(_) => LOGGER.info(&format!(
-                                    "✓ Added {} service to environment {} config.",
-                                    sample_service_name, env_name
-                                )),
-                                Err(e) => {
-                                    LOGGER.error(&format!(
-                                        "Failed to save updated config for environment {}: {}",
-                                        env_name, e
-                                    ));
-                                    return Err(CliError::Other(format!(
-                                        "Failed to save config for sample service: {}",
-                                        e
-                                    )));
-                                }
-                            }
+                            let env_path = Path::new("./k8s/environments")
+                                .join(&env_name)
+                                .join("config.toml");
+                            let content = fs::read_to_string(&env_path)
+                                .map_err(|e| CliError::Other(e.to_string()))?;
+                            let updated = Environment::append_service_override_contents(
+                                &content,
+                                &sample_service_entry,
+                            )
+                            .map_err(|e| CliError::Other(e.to_string()))?;
+                            fs::write(&env_path, updated)
+                                .map_err(|e| CliError::Other(e.to_string()))?;
+                            LOGGER.info(&format!(
+                                "✓ Added {} service to environment {} config.",
+                                sample_service_name, env_name
+                            ));
                         }
                     }
                     Err(e) => {
@@ -271,10 +274,11 @@ async fn main() -> Result<(), CliError> {
                 } else if let Some(provider) = arg.provider {
                     let infra = match provider {
                         Provider::Local => Infra::new(Box::new(LocalK8::new(arg.name.clone()))),
-
                         _ => {
-                            LOGGER.error(&format!("Provider {:?} not supported", provider));
-                            std::process::exit(1);
+                            return Err(CliError::Other(format!(
+                                "Provider {:?} not supported",
+                                provider
+                            )));
                         }
                     };
                     infra.generate(Infra::read_config(arg.name.clone()));
@@ -318,22 +322,20 @@ async fn main() -> Result<(), CliError> {
             let env = match Environment::load_from_file(&arg.name) {
                 Ok(env) => env,
                 Err(e) => {
-                    LOGGER.error(&format!("Failed to load environment: {}", e));
-                    std::process::exit(1);
+                    return Err(CliError::Other(format!(
+                        "Failed to load environment: {}",
+                        e
+                    )));
                 }
             };
 
-            let mut services = env.list_services();
+            let services = filter_services_exact(
+                env.list_services(),
+                &split_matches(arg.only),
+                &split_matches(arg.ignore),
+            );
 
-            if let Some(only_services) = arg.only {
-                services.retain(|s| only_services.contains(&s.name));
-            }
-
-            if let Some(ignored_services) = arg.ignore {
-                services.retain(|s| !ignored_services.contains(&s.name));
-            }
-
-            generate(&arg.name, &env, services);
+            generate(&arg.name, &env, services).map_err(|e| CliError::Other(e.to_string()))?;
 
             LOGGER.info("Generation Complete");
         }
@@ -341,8 +343,10 @@ async fn main() -> Result<(), CliError> {
             let env = match Environment::load_from_file(&arg.name) {
                 Ok(env) => env,
                 Err(e) => {
-                    LOGGER.error(&format!("Failed to load environment: {}", e));
-                    std::process::exit(1);
+                    return Err(CliError::Other(format!(
+                        "Failed to load environment: {}",
+                        e
+                    )));
                 }
             };
 
@@ -356,15 +360,13 @@ async fn main() -> Result<(), CliError> {
                 arg.explain,
                 arg.dump_scope,
                 env.build.clone(),
+                arg.engine,
             );
 
-            match builder.build(&env) {
-                Ok(_) => (),
-                Err(e) => {
-                    LOGGER.error(&format!("Failed to build environment: {}", e));
-                    std::process::exit(1);
-                }
-            };
+            builder
+                .build(&env)
+                .await
+                .map_err(|e| CliError::Other(format!("Failed to build environment: {}", e)))?;
         }
         Commands::Go(arg) => {
             LOGGER.info(&format!(
@@ -375,20 +377,18 @@ async fn main() -> Result<(), CliError> {
             let env = match Environment::load_from_file(&arg.name) {
                 Ok(env) => env,
                 Err(e) => {
-                    LOGGER.error(&format!("Failed to load environment: {}", e));
-                    std::process::exit(1);
+                    return Err(CliError::Other(format!(
+                        "Failed to load environment: {}",
+                        e
+                    )));
                 }
             };
 
-            let mut services = env.list_services();
-
-            if let Some(ref ignored_services) = arg.ignore {
-                services.retain(|s| !ignored_services.contains(&s.name));
-            }
-
-            if let Some(ref only_services) = arg.only {
-                services.retain(|s| only_services.contains(&s.name));
-            }
+            let services = filter_services_exact(
+                env.list_services(),
+                &split_matches(arg.only.clone()),
+                &split_matches(arg.ignore.clone()),
+            );
 
             if !arg.skip_build {
                 let mut builder = Builder::new(
@@ -401,9 +401,10 @@ async fn main() -> Result<(), CliError> {
                     arg.explain,
                     arg.dump_scope,
                     env.build.clone(),
+                    arg.engine,
                 );
 
-                match builder.build(&env) {
+                match builder.build(&env).await {
                     Ok(result) => {
                         if !result.executed {
                             LOGGER.info("Build step planned only; skipping generate and deploy.");
@@ -411,13 +412,15 @@ async fn main() -> Result<(), CliError> {
                         }
                     }
                     Err(e) => {
-                        LOGGER.error(&format!("Failed to build environment: {}", e));
-                        std::process::exit(1);
+                        return Err(CliError::Other(format!(
+                            "Failed to build environment: {}",
+                            e
+                        )));
                     }
                 };
             }
 
-            generate(&arg.name, &env, services);
+            generate(&arg.name, &env, services).map_err(|e| CliError::Other(e.to_string()))?;
 
             if !arg.apply {
                 LOGGER.info("🔍 Generating deployment plan for build-generate-deploy workflow...");
@@ -643,7 +646,7 @@ async fn main() -> Result<(), CliError> {
             // config.toml update
             let env_name = args.env_name.to_string(); // Fixed environment name for now
             match Environment::load_from_file(&env_name) {
-                Ok(mut env) => {
+                Ok(env) => {
                     let new_service = Service::new(&args.service_name, None, "latest");
 
                     // Check if service already exists to prevent duplicates
@@ -653,23 +656,20 @@ async fn main() -> Result<(), CliError> {
                             args.service_name, env_name
                         ));
                     } else {
-                        env.services.push(new_service);
-                        match env.save_to_file() {
-                            Ok(_) => LOGGER.info(&format!(
-                                "Updated config.toml for environment {} with new service {}.",
-                                env_name, args.service_name
-                            )),
-                            Err(e) => {
-                                LOGGER.error(&format!(
-                                    "Failed to save updated config.toml for environment {}: {}",
-                                    env_name, e
-                                ));
-                                return Err(CliError::Other(format!(
-                                    "Failed to save config.toml: {}",
-                                    e
-                                )));
-                            }
-                        }
+                        let env_path = Path::new("./k8s/environments")
+                            .join(&env_name)
+                            .join("config.toml");
+                        let content = fs::read_to_string(&env_path)
+                            .map_err(|e| CliError::Other(e.to_string()))?;
+                        let updated =
+                            Environment::append_service_override_contents(&content, &new_service)
+                                .map_err(|e| CliError::Other(e.to_string()))?;
+                        fs::write(&env_path, updated)
+                            .map_err(|e| CliError::Other(e.to_string()))?;
+                        LOGGER.info(&format!(
+                            "Updated config.toml for environment {} with new service {}.",
+                            env_name, args.service_name
+                        ));
                     }
                 }
                 Err(e) => {
@@ -718,43 +718,35 @@ fn handle_migrate(arg: sailr::cli::MigrateArgs) -> Result<(), CliError> {
 }
 
 fn handle_bump(arg: sailr::cli::BumpArgs) -> Result<(), CliError> {
-    use toml_edit::{value, DocumentMut};
     let env_path = std::path::Path::new("./k8s/environments")
         .join(&arg.name)
         .join("config.toml");
     let content = std::fs::read_to_string(&env_path).map_err(|e| CliError::Other(e.to_string()))?;
-    let mut doc = content
-        .parse::<DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let services = if doc["service"].is_array_of_tables() {
-        doc["service"].as_array_of_tables_mut()
-    } else {
-        doc["service_whitelist"].as_array_of_tables_mut()
-    };
-
-    if let Some(services) = services {
-        let mut found = false;
-        for service in services.iter_mut() {
-            if let Some(name) = service.get("name") {
-                if name.as_str() == Some(arg.service.as_str()) {
-                    service["version"] = value(arg.version.clone());
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if !found {
-            return Err(CliError::Other(format!(
-                "Service {} not found in environment {}",
-                arg.service, arg.name
-            )));
-        }
-    } else {
-        return Err(CliError::Other("Invalid config structure".to_string()));
+    if let Some(updated) =
+        Environment::update_local_service_version_contents(&content, &arg.service, &arg.version)
+            .map_err(|e| CliError::Other(e.to_string()))?
+    {
+        std::fs::write(&env_path, updated).map_err(|e| CliError::Other(e.to_string()))?;
+        sailr::LOGGER.info(&format!(
+            "Successfully bumped {} to {} in {}",
+            arg.service, arg.version, arg.name
+        ));
+        return Ok(());
     }
 
-    std::fs::write(&env_path, doc.to_string()).map_err(|e| CliError::Other(e.to_string()))?;
+    let env = Environment::load_from_file(&arg.name).map_err(|e| CliError::Other(e.to_string()))?;
+    if env.get_service(&arg.service).is_none() {
+        return Err(CliError::Other(format!(
+            "Service {} not found in environment {}",
+            arg.service, arg.name
+        )));
+    }
+
+    let updated =
+        Environment::append_service_version_override_contents(&content, &arg.service, &arg.version)
+            .map_err(|e| CliError::Other(e.to_string()))?;
+    std::fs::write(&env_path, updated).map_err(|e| CliError::Other(e.to_string()))?;
     sailr::LOGGER.info(&format!(
         "Successfully bumped {} to {} in {}",
         arg.service, arg.version, arg.name

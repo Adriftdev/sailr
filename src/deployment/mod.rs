@@ -142,12 +142,12 @@ pub async fn deploy(
     env_name: &str,
     strategy: DeploymentStrategy,
 ) -> Result<(), DeployError> {
-    LOGGER.info(&format!(
-        "Deploying to {} for {} with strategy {:?}",
-        ctx, env_name, strategy
-    ));
+    LOGGER.header(
+        "Deploy",
+        &format!("{} → {} ({:?})", env_name, ctx, strategy),
+    );
 
-    let env = Environment::load_from_file(&env_name.to_string()).map_err(|e| {
+    let env = Environment::load_from_file(env_name).map_err(|e| {
         DeployError::EnvironmentDeploymentFailed(format!(
             "Failed to load environment '{}': {}",
             env_name, e
@@ -239,10 +239,14 @@ pub async fn deploy(
         applied_total += applied.len();
     }
 
-    LOGGER.info(&format!(
-        "Deployed successfully! Applied {} manifests.",
-        applied_total
-    ));
+    LOGGER.status(
+        "Finished",
+        &format!(
+            "deployed successfully! Applied {} manifests.",
+            applied_total
+        ),
+        "green",
+    );
 
     Ok(())
 }

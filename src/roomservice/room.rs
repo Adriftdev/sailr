@@ -137,8 +137,7 @@ impl RoomBuilder {
                 continue;
             }
 
-            let path = file.path().to_path_buf();
-            files.push(path);
+            files.push(file.path().to_path_buf());
         }
 
         files.sort();

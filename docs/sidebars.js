@@ -22,6 +22,13 @@ const sidebars = {
 		'configuration/config-toml',
 		{
 			type: 'category',
+			label: 'Migration',
+			items: [
+				'migration/roomservice-to-runkernel',
+			],
+		},
+		{
+			type: 'category',
 			label: 'Getting Started',
 			items: [
 				'getting-started/installation',

@@ -1,8 +1,6 @@
 use std::{collections::BTreeSet, error::Error, path::Path};
 
-use scribe_rust::{log, Color};
-
-use crate::{config::Config, environment::Environment, filesystem::FileSystemManager};
+use crate::{config::Config, environment::Environment, filesystem::FileSystemManager, LOGGER};
 
 pub mod scaffolding;
 
@@ -87,10 +85,10 @@ impl TemplateManager {
                 .create_file(&name.to_string(), &template.to_string())?;
         }
 
-        log(
-            Color::Green,
+        LOGGER.status(
             "Success",
             "Copied Sailr base templates to ./k8s/templates",
+            "green",
         );
 
         Ok(())
@@ -244,21 +242,16 @@ impl TemplateManager {
             content = content.replace(&format!("{{{{{}}}}}", key), value);
         }
 
-        match self.validate_yaml(content.clone()) {
-            Ok(_) => log(
-                Color::Green,
-                "Passed Check",
-                &template.full_path.to_string(),
-            ),
-            Err(e) => {
-                log(
-                    Color::Red,
-                    "Failed Check",
-                    &format!("YAML Validation Error: {}\n {}", template.full_path, e,),
-                );
-                std::process::exit(1);
-            }
-        };
+        if let Err(e) = self.validate_yaml(content.clone()) {
+            LOGGER.status(
+                "Failed Check",
+                &format!("YAML Validation Error: {}\n {}", template.full_path, e),
+                "red",
+            );
+            return Err(anyhow::anyhow!("YAML validation failed: {}", e).into());
+        } else {
+            LOGGER.status("Passed Check", &template.full_path.to_string(), "green");
+        }
         Ok(content)
     }
 
@@ -297,8 +290,12 @@ fn read_line_number(input: &str, line: usize) -> String {
         if line_count >= line - window_size && line_count <= line + window_size {
             if line_count == line {
                 result.push(format!(
-                    "{}: {} {}<< Validation error occurred here{}",
-                    line_count, line_content, "\x1b[1;31m", "\x1b[0m"
+                    "{}: {} {}",
+                    line_count,
+                    line_content,
+                    console::style("<< Validation error occurred here")
+                        .red()
+                        .bold()
                 ));
             // Highlight line
             } else {

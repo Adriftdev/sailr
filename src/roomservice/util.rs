@@ -1,8 +1,7 @@
-use scribe_rust::log;
 use std::fmt::Display;
 
 pub fn fail<T: Display>(message: T) {
-    log(scribe_rust::Color::Red, "Error", &message.to_string());
+    crate::LOGGER.error(&message.to_string());
     std::process::exit(1)
 }
 

@@ -1,7 +1,7 @@
-use std::path::Path;
+use std::{error::Error, path::Path};
 
 use serde::{Deserialize, Deserializer};
-use toml::Value;
+use toml::{map::Map, Value};
 
 use crate::filesystem;
 use crate::roomservice::config::Config;
@@ -236,7 +236,15 @@ impl Environment {
 
     // Loads the environment configuration from the `./k8s/environments/<name>/config.toml` file, overriding default values set in the constructor.
     // An error is returned if the file is missing, cannot be read, or contains an incompatible schema version.
-    pub fn load_from_file(name: &String) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load_from_file(name: &str) -> Result<Self, Box<dyn Error>> {
+        let (raw, inherited) = Self::resolve_raw_environment(name, &mut Vec::new(), &|env_name| {
+            Self::read_environment_contents(env_name)
+        })?;
+
+        Self::environment_from_raw(raw, name, inherited)
+    }
+
+    fn read_environment_contents(name: &str) -> Result<String, Box<dyn Error>> {
         let filemanager = filesystem::FileSystemManager::new(
             Path::new("./k8s/environments")
                 .join(name)
@@ -245,8 +253,60 @@ impl Environment {
                 .to_string(),
         );
 
-        let contents = filemanager.read_file(&"config.toml".to_string(), None)?;
+        filemanager
+            .read_file(&"config.toml".to_string(), None)
+            .map_err(|error| {
+                Box::new(std::io::Error::other(format!(
+                    "Failed to read environment config '{}' at ./k8s/environments/{}/config.toml: {}",
+                    name, name, error
+                ))) as Box<dyn Error>
+            })
+    }
+
+    fn resolve_raw_environment(
+        name: &str,
+        stack: &mut Vec<String>,
+        read_config: &EnvironmentReader<'_>,
+    ) -> Result<(Value, bool), Box<dyn Error>> {
+        if let Some(cycle_start) = stack.iter().position(|entry| entry == name) {
+            let mut cycle = stack[cycle_start..].to_vec();
+            cycle.push(name.to_string());
+            return Err(Box::new(std::io::Error::other(format!(
+                "Environment inheritance cycle detected: {}",
+                cycle.join(" -> ")
+            ))));
+        }
+
+        stack.push(name.to_string());
+        let contents = read_config(name)?;
         let raw = toml::from_str::<Value>(&contents)?;
+        let Some(base_name) = raw.get("extends").and_then(Value::as_str) else {
+            stack.pop();
+            return Ok((raw, false));
+        };
+
+        let child_defines_name = raw
+            .as_table()
+            .is_some_and(|table| table.contains_key("name"));
+        let (mut resolved, _) = Self::resolve_raw_environment(base_name, stack, read_config)?;
+        merge_environment_value(&mut resolved, raw)?;
+
+        if let Some(table) = resolved.as_table_mut() {
+            table.remove("extends");
+            if !child_defines_name {
+                table.insert("name".to_string(), Value::String(name.to_string()));
+            }
+        }
+
+        stack.pop();
+        Ok((resolved, true))
+    }
+
+    fn environment_from_raw(
+        raw: Value,
+        source_name: &str,
+        inherited: bool,
+    ) -> Result<Self, Box<dyn Error>> {
         let schema_version = raw
             .get("schema_version")
             .and_then(Value::as_str)
@@ -263,10 +323,17 @@ impl Environment {
             ))));
         }
 
+        if inherited && schema_version != SCHEMA_V05 {
+            return Err(Box::new(std::io::Error::other(format!(
+                "Inherited environment '{}' must resolve to schema_version = \"{}\"; found {}",
+                source_name, SCHEMA_V05, schema_version
+            ))));
+        }
+
         Self::validate_schema_constraints(&raw, schema_version)?;
         let legacy_build = Self::extract_legacy_build(&raw)?;
 
-        let mut env = toml::from_str::<Self>(&contents)?;
+        let mut env = raw.try_into::<Self>()?;
 
         if env.schema_version == SCHEMA_V02 || env.schema_version == SCHEMA_V03 {
             LOGGER.warn(&format!(
@@ -278,6 +345,54 @@ impl Environment {
         env.apply_legacy_build_fallback(legacy_build);
 
         Ok(env)
+    }
+
+    pub fn update_local_service_version_contents(
+        contents: &str,
+        service_name: &str,
+        version: &str,
+    ) -> Result<Option<String>, Box<dyn Error>> {
+        let mut doc = contents.parse::<toml_edit::DocumentMut>()?;
+        let service_key = local_service_array_key(&doc);
+        let Some(services) = doc
+            .get_mut(service_key)
+            .and_then(toml_edit::Item::as_array_of_tables_mut)
+        else {
+            return Ok(None);
+        };
+
+        let mut updated = false;
+        for service in services.iter_mut() {
+            if service.get("name").and_then(|name| name.as_str()) == Some(service_name) {
+                service["version"] = toml_edit::value(version);
+                updated = true;
+                break;
+            }
+        }
+
+        if updated {
+            Ok(Some(doc.to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn append_service_version_override_contents(
+        contents: &str,
+        service_name: &str,
+        version: &str,
+    ) -> Result<String, Box<dyn Error>> {
+        let service = Service::new(service_name, None, version);
+        Self::append_service_override_contents(contents, &service)
+    }
+
+    pub fn append_service_override_contents(
+        contents: &str,
+        service: &Service,
+    ) -> Result<String, Box<dyn Error>> {
+        let mut doc = contents.parse::<toml_edit::DocumentMut>()?;
+        append_service_to_document(&mut doc, service);
+        Ok(doc.to_string())
     }
 
     pub fn migrate_contents_to_v04(contents: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -449,6 +564,131 @@ impl Environment {
     }
 }
 
+type EnvironmentReader<'a> = dyn Fn(&str) -> Result<String, Box<dyn Error>> + 'a;
+
+fn merge_environment_value(base: &mut Value, child: Value) -> Result<(), Box<dyn Error>> {
+    let (Some(base_table), Some(child_table)) = (base.as_table_mut(), child.as_table()) else {
+        *base = child;
+        return Ok(());
+    };
+
+    merge_environment_table(base_table, child_table.clone());
+    Ok(())
+}
+
+fn merge_environment_table(base: &mut Map<String, Value>, child: Map<String, Value>) {
+    for (key, child_value) in child {
+        if key == "extends" {
+            continue;
+        }
+
+        if key == "service" || key == "environment_variables" {
+            merge_named_array(base, key, child_value);
+            continue;
+        }
+
+        match base.get_mut(&key) {
+            Some(base_value) => merge_value(base_value, child_value),
+            None => {
+                base.insert(key, child_value);
+            }
+        }
+    }
+}
+
+fn merge_value(base: &mut Value, child: Value) {
+    match (base.as_table_mut(), child) {
+        (Some(base_table), Value::Table(child_table)) => {
+            merge_environment_table(base_table, child_table);
+        }
+        (_, child_value) => {
+            *base = child_value;
+        }
+    }
+}
+
+fn merge_named_array(base: &mut Map<String, Value>, key: String, child_value: Value) {
+    let Value::Array(child_items) = child_value else {
+        base.insert(key, child_value);
+        return;
+    };
+
+    let base_items = base
+        .remove(&key)
+        .and_then(|value| match value {
+            Value::Array(items) => Some(items),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    let mut merged_items = base_items;
+
+    for child_item in child_items {
+        let Some(child_name) = named_array_item_name(&child_item) else {
+            merged_items.push(child_item);
+            continue;
+        };
+
+        if let Some(base_item) = merged_items
+            .iter_mut()
+            .find(|item| named_array_item_name(item) == Some(child_name))
+        {
+            merge_value(base_item, child_item);
+        } else {
+            merged_items.push(child_item);
+        }
+    }
+
+    base.insert(key, Value::Array(merged_items));
+}
+
+fn named_array_item_name(item: &Value) -> Option<&str> {
+    item.get("name").and_then(Value::as_str)
+}
+
+fn local_service_array_key(doc: &toml_edit::DocumentMut) -> &'static str {
+    let has_service = doc
+        .get("service")
+        .is_some_and(toml_edit::Item::is_array_of_tables);
+    let has_service_whitelist = doc
+        .get("service_whitelist")
+        .is_some_and(toml_edit::Item::is_array_of_tables);
+
+    if has_service || !has_service_whitelist {
+        "service"
+    } else {
+        "service_whitelist"
+    }
+}
+
+fn append_service_to_document(doc: &mut toml_edit::DocumentMut, service: &Service) {
+    let key = local_service_array_key(doc);
+    if !doc
+        .get(key)
+        .is_some_and(toml_edit::Item::is_array_of_tables)
+    {
+        doc.as_table_mut().insert(
+            key,
+            toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()),
+        );
+    }
+
+    let mut table = toml_edit::Table::new();
+    table["name"] = toml_edit::value(service.name.clone());
+    if let Some(namespace) = &service.namespace {
+        table["namespace"] = toml_edit::value(namespace.clone());
+    }
+    table["version"] = toml_edit::value(service.version.clone());
+    if let Some(template_path) = &service.template_path {
+        table["path"] = toml_edit::value(template_path.clone());
+    }
+
+    doc[key]
+        .as_array_of_tables_mut()
+        .expect("service item should be an array of tables")
+        .push(table);
+}
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct EnvironmentVariable {
     pub name: String,
@@ -563,6 +803,8 @@ fn command_spec_to_shell(command: CommandSpec) -> String {
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Default)]
 pub struct BuildPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<BuildEngine>,
     #[serde(default, alias = "beforeAll", skip_serializing_if = "Option::is_none")]
     pub before_all: Option<CommandSpec>,
     #[serde(default, alias = "afterAll", skip_serializing_if = "Option::is_none")]
@@ -571,6 +813,15 @@ pub struct BuildPolicy {
     pub max_parallelism: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fail_fast: Option<bool>,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, clap::ValueEnum,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuildEngine {
+    Roomservice,
+    Runkernel,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq)]
@@ -768,6 +1019,38 @@ impl Service {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn load_environment_from_sources(
+        name: &str,
+        sources: BTreeMap<&str, &str>,
+    ) -> Result<Environment, Box<dyn Error>> {
+        let (raw, inherited) =
+            Environment::resolve_raw_environment(name, &mut Vec::new(), &|env_name| {
+                sources
+                    .get(env_name)
+                    .map(|content| content.to_string())
+                    .ok_or_else(|| {
+                        Box::new(std::io::Error::other(format!(
+                            "missing environment {}",
+                            env_name
+                        ))) as Box<dyn Error>
+                    })
+            })?;
+
+        Environment::environment_from_raw(raw, name, inherited)
+    }
+
+    fn env_var_value(env: &Environment, name: &str) -> String {
+        match env
+            .get_environment_variable(name)
+            .and_then(|env_var| env_var.value.as_ref())
+        {
+            Some(Value::String(value)) => value.clone(),
+            Some(value) => value.to_string(),
+            None => String::new(),
+        }
+    }
 
     #[test]
     fn test_deserialize_legacy_service_build_string() {
@@ -933,6 +1216,214 @@ version = "latest"
 
         let env: Environment = toml::from_str(content).unwrap();
         assert_eq!(env.platform.as_deref(), Some("linux/amd64,linux/arm64"));
+    }
+
+    #[test]
+    fn test_environment_extends_merges_named_sections() {
+        let base = r#"
+schema_version = "0.5.0"
+name = "base"
+log_level = "INFO"
+domain = "base.example.com"
+default_replicas = 1
+registry = "docker.io/base"
+platform = "linux/amd64"
+
+[build]
+max_parallelism = 2
+fail_fast = true
+
+[[service]]
+name = "api"
+version = "1.0.0"
+path = "api"
+[service.build]
+path = "./services/api"
+include = ["src/**"]
+build_command = "docker build api"
+
+[[service]]
+name = "worker"
+version = "1.0.0"
+
+[[environment_variables]]
+name = "API_URL"
+value = "https://base.example.com"
+
+[[environment_variables]]
+name = "SHARED"
+value = "base"
+"#;
+        let child = r#"
+schema_version = "0.5.0"
+extends = "base"
+domain = "child.example.com"
+default_replicas = 3
+
+[build]
+fail_fast = false
+
+[[service]]
+name = "api"
+version = "2.0.0"
+[service.build]
+push_command = "docker push api"
+
+[[service]]
+name = "web"
+version = "latest"
+
+[[environment_variables]]
+name = "API_URL"
+value = "https://child.example.com"
+
+[[environment_variables]]
+name = "NEW_VAR"
+value = "enabled"
+"#;
+
+        let env = load_environment_from_sources(
+            "child",
+            BTreeMap::from([("base", base), ("child", child)]),
+        )
+        .unwrap();
+
+        assert_eq!(env.name, "child");
+        assert_eq!(env.domain, "child.example.com");
+        assert_eq!(env.default_replicas, 3);
+        assert_eq!(env.registry, "docker.io/base");
+        assert_eq!(env.platform.as_deref(), Some("linux/amd64"));
+        assert_eq!(env.build.as_ref().unwrap().max_parallelism, Some(2));
+        assert_eq!(env.build.as_ref().unwrap().fail_fast, Some(false));
+
+        let api = env.get_service("api").unwrap();
+        assert_eq!(api.version, "2.0.0");
+        assert_eq!(api.template_path.as_deref(), Some("api"));
+        let api_build = api.build.as_ref().unwrap();
+        assert_eq!(api_build.path, "./services/api");
+        assert_eq!(api_build.include, Some(vec!["src/**".to_string()]));
+        assert_eq!(api_build.build_command.as_deref(), Some("docker build api"));
+        assert_eq!(api_build.push_command.as_deref(), Some("docker push api"));
+
+        assert!(env.get_service("worker").is_some());
+        assert!(env.get_service("web").is_some());
+        assert_eq!(env_var_value(&env, "API_URL"), "https://child.example.com");
+        assert_eq!(env_var_value(&env, "SHARED"), "base");
+        assert_eq!(env_var_value(&env, "NEW_VAR"), "enabled");
+    }
+
+    #[test]
+    fn test_environment_extends_supports_chains() {
+        let base = r#"
+schema_version = "0.5.0"
+name = "base"
+log_level = "INFO"
+domain = "base.example.com"
+default_replicas = 1
+registry = "docker.io/base"
+"#;
+        let staging = r#"
+schema_version = "0.5.0"
+extends = "base"
+registry = "docker.io/staging"
+"#;
+        let prod = r#"
+schema_version = "0.5.0"
+extends = "staging"
+domain = "prod.example.com"
+"#;
+
+        let env = load_environment_from_sources(
+            "prod",
+            BTreeMap::from([("base", base), ("staging", staging), ("prod", prod)]),
+        )
+        .unwrap();
+
+        assert_eq!(env.name, "prod");
+        assert_eq!(env.domain, "prod.example.com");
+        assert_eq!(env.registry, "docker.io/staging");
+    }
+
+    #[test]
+    fn test_environment_extends_reports_missing_base() {
+        let child = r#"
+schema_version = "0.5.0"
+extends = "missing"
+domain = "child.example.com"
+"#;
+
+        let err =
+            load_environment_from_sources("child", BTreeMap::from([("child", child)])).unwrap_err();
+        assert!(err.to_string().contains("missing environment missing"));
+    }
+
+    #[test]
+    fn test_environment_extends_detects_cycles() {
+        let a = r#"
+schema_version = "0.5.0"
+extends = "b"
+"#;
+        let b = r#"
+schema_version = "0.5.0"
+extends = "a"
+"#;
+
+        let err =
+            load_environment_from_sources("a", BTreeMap::from([("a", a), ("b", b)])).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Environment inheritance cycle detected: a -> b -> a"));
+    }
+
+    #[test]
+    fn test_environment_extends_requires_resolved_v05_schema() {
+        let base = r#"
+schema_version = "0.4.0"
+name = "base"
+log_level = "INFO"
+domain = "base.example.com"
+default_replicas = 1
+registry = "docker.io/base"
+"#;
+        let child = r#"
+extends = "base"
+domain = "child.example.com"
+"#;
+
+        let err = load_environment_from_sources(
+            "child",
+            BTreeMap::from([("base", base), ("child", child)]),
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must resolve to schema_version = \"0.5.0\""));
+    }
+
+    #[test]
+    fn test_bump_helpers_append_minimal_inherited_service_override() {
+        let child = r#"
+schema_version = "0.5.0"
+extends = "base"
+domain = "child.example.com"
+"#;
+
+        assert!(
+            Environment::update_local_service_version_contents(child, "api", "2.0.0")
+                .unwrap()
+                .is_none()
+        );
+
+        let updated =
+            Environment::append_service_version_override_contents(child, "api", "2.0.0").unwrap();
+        assert!(updated.contains("[[service]]"));
+        assert!(updated.contains("name = \"api\""));
+        assert!(updated.contains("version = \"2.0.0\""));
+
+        let bumped = Environment::update_local_service_version_contents(&updated, "api", "3.0.0")
+            .unwrap()
+            .unwrap();
+        assert!(bumped.contains("version = \"3.0.0\""));
     }
 
     #[test]

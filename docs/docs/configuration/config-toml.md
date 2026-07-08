@@ -18,12 +18,19 @@ These settings define the overall behavior and metadata for your environment.
 ### `schema_version` (string)
 *   **Required**
 *   Specifies the version of the configuration file schema Sailr should expect.
-*   Example: `schema_version = "0.2.0"`
+*   Example: `schema_version = "0.5.0"`
 *   Changing this version might indicate breaking changes or new features in the Sailr config specification. Consult the Sailr release notes if you need to change this.
 
+### `extends` (string)
+*   **Optional**
+*   Names another environment under `k8s/environments/<name>/config.toml` to use as this environment's base.
+*   Layered environments must resolve to `schema_version = "0.5.0"`.
+*   Example: `extends = "develop"`
+
 ### `name` (string)
-*   **Required**
+*   **Required unless `extends` is set**
 *   The name of the environment. This is used for identification purposes and can be used as a variable in your templates (e.g., `{{name}}` or `{{env_name}}` - Sailr provides it as `{{name}}` as per `Environment::get_variables`).
+*   If an environment extends another environment and omits `name`, Sailr uses the child environment directory name.
 *   Example: `name = "production"`
 
 ### `log_level` (string)
@@ -50,9 +57,78 @@ These settings define the overall behavior and metadata for your environment.
 *   Defaults to `"docker.io"`.
 *   Example: `registry = "gcr.io/my-project"` or `registry = "quay.io/my-org"`
 
-## Service Whitelist (`[[service_whitelist]]`)
+## Layered Environments
+
+Layered environments let you keep a complete base environment and define small overrides for derived environments. When Sailr loads the child environment, it resolves the base first and then applies the child values in memory.
+
+```toml
+# k8s/environments/production-eu/config.toml
+schema_version = "0.5.0"
+extends = "production"
+domain = "eu.example.com"
+
+[[environment_variables]]
+name = "REGION"
+value = "eu"
+
+[[service]]
+name = "api"
+version = "2.1.0"
+```
+
+Merge behavior:
+
+*   Top-level scalar values override the base.
+*   Tables merge field by field.
+*   `[[service]]` entries merge by `name`; child fields override matching base fields, and new services are appended.
+*   `[[environment_variables]]` entries merge by `name`; child values override matching base values, and new variables are appended.
+*   Other arrays replace the base array.
+*   Inheritance can be chained. Cycles are rejected.
+*   `sailr add-service` and `sailr bump` write local child overrides instead of flattening the resolved environment.
+
+## Build Policy (`[build]`)
+
+The optional top-level `[build]` table controls global build behavior.
+
+```toml
+[build]
+engine = "runkernel"
+fail_fast = false
+max_parallelism = 4
+before_all = "echo preparing build"
+after_all = "echo finished build"
+```
+
+### `engine` (string)
+*   **Optional**
+*   Selects the build backend for `sailr build` and the build step of `sailr go`.
+*   Valid values: `roomservice`, `runkernel`.
+*   Default: `roomservice`.
+*   The CLI flag wins over config. Selection order is:
+    1. CLI `--engine`
+    2. `[build].engine`
+    3. default Roomservice
+*   Example: `engine = "runkernel"`
+
+### `fail_fast` (boolean)
+*   **Optional**
+*   When enabled, the build backend stops scheduling remaining work after a build failure.
+
+### `max_parallelism` (integer)
+*   **Optional**
+*   Accepted by Sailr build policy.
+*   Roomservice uses this where supported.
+*   The runkernel backend currently accepts this setting but does not enforce it yet; Sailr emits a warning when `max_parallelism` is set with `engine = "runkernel"`.
+
+### `before_all` and `after_all` (string or array of strings)
+*   **Optional**
+*   Commands that run before all selected dirty service builds and after all selected dirty service builds complete successfully.
+
+## Services (`[[service]]`)
 
 This is an array of tables, where each table defines a service to be managed by Sailr.
+
+Older configs may still use `[[service_whitelist]]`; prefer `schema_version = "0.5.0"` and `[[service]]` for new projects.
 
 Each service entry can have the following properties:
 
@@ -79,33 +155,33 @@ Each service entry can have the following properties:
 *   If omitted, Sailr defaults this to the environment `name` (from the global settings).
 *   Example: `namespace = "web-services"`
 
-### Build Configuration (within `[[service_whitelist]]` entry)
+### Build Configuration (within a `[[service]]` entry)
 
-Sailr integrates a build system (based on Roomservice) to build your service's container images. These fields control the build process for a specific service. The actual build commands and lifecycle are defined within a `roomservice.toml` file located in the `build` path of the service, or directly within these fields if Sailr has merged Roomservice's config structure (as suggested by the README). The following fields are based on the merged structure described in the Sailr README.
+Sailr integrates a build system to build your service's container images. Roomservice is the current default backend, and the experimental runkernel backend can be selected with `--engine runkernel` or `[build].engine = "runkernel"`. These fields control the build process for a specific service.
 
 #### `build` (string)
 *   **Optional**
 *   The path to the service's build context directory, relative to the Sailr project root. This directory should typically contain the `Dockerfile` (or the specified `dockerfile`) and all source code needed to build the image.
-*   If this field is present, Sailr will attempt to build an image for this service using the Roomservice build process. If absent, Sailr assumes it's a pre-built image to be pulled from a registry.
+*   If this field is present, Sailr will attempt to build an image for this service using the selected build backend. If absent, Sailr assumes it's a pre-built image to be pulled from a registry.
 *   Example: `build = "./services/backend-api/"`
 
 #### `dockerfile` (string)
 *   **Optional**
 *   The path to the Dockerfile, relative to the `build` context directory.
-*   Defaults to `Dockerfile` at the root of the `build` path. (This is a common convention for build systems like Roomservice; confirm if Sailr's implementation allows override).
+*   Defaults to `Dockerfile` at the root of the `build` path.
 *   Example: `dockerfile = "path/to/custom.Dockerfile"`
 
 #### `run_parallel` (string or array of strings)
 *   **Optional**
 *   A shell command or list of shell commands to run in parallel during the build phase for this service. These commands are executed within the `build` context directory.
-*   These tasks are intended for operations that can run concurrently with similar tasks for *other services* if the build orchestrator (Roomservice core) supports this level of parallelism.
+*   These commands run concurrently within the service when using the runkernel backend. Backend-level inter-service parallelism depends on the selected build backend.
 *   Example: `run_parallel = "npm install && npm run build"`
 *   Example: `run_parallel = ["yarn install", "yarn build:assets"]`
 
 #### `run_synchronous` (string or array of strings)
 *   **Optional**
 *   A shell command or list of shell commands to run synchronously during the build phase for this service. These commands are executed within the `build` context directory.
-*   These commands will run sequentially for this service. If multiple services have synchronous commands, their execution order relative to each other depends on the build orchestrator.
+*   These commands run sequentially for this service.
 *   Example: `run_synchronous = "./scripts/prepare_data.sh"`
 
 #### `before` (string or array of strings)
@@ -125,17 +201,16 @@ Sailr integrates a build system (based on Roomservice) to build your service's c
 *   Useful for cleanup tasks, notifications, or pushing images to a staging registry.
 *   Example: `after = "./scripts/post_build_cleanup.sh"`
 
-**Build Execution Order (Typical for a Roomservice-like system):**
-For a single service, the assumed order of execution for these hooks is:
+**Build Execution Order:**
+For a single service, Sailr runs build hooks in this order:
 1.  `before_synchronous` commands (sequentially)
-2.  `before` commands (can be parallel with other services' `before` hooks, if applicable)
-3.  `run_parallel` commands (can be parallel with other services' `run_parallel` hooks)
+2.  `before` commands
+3.  `run_parallel` commands
 4.  `run_synchronous` commands (sequentially for this service)
 5.  Docker image build (using the specified `build` context and `dockerfile`).
-6.  `after` commands (can be parallel with other services' `after` hooks, if applicable)
+6.  `after` commands
 
-*Note: The exact parallelism between different services depends on the Roomservice core implementation within Sailr.*
-*Global `beforeAll` and `afterAll` hooks might also be configurable if Sailr exposes the full Roomservice configuration schema, but these are not detailed in the current Sailr `README.md` for `config.toml`.*
+Inter-service ordering follows service build dependencies. Global `before_all` and `after_all` hooks are configured in the top-level `[build]` table.
 
 ## Environment Variables (`[[environment_variables]]`)
 
@@ -155,42 +230,4 @@ Each environment variable entry has the following properties:
 
 ---
 
-This guide should provide a solid understanding of how to configure your Sailr environments using `config.toml`. For information on how these configurations are used in practice, refer to the [Getting Started Tutorial](../getting-started/tutorial.md). For details on template syntax and available variables, please see the (forthcoming) Templating Guide.Okay, I've drafted the "Comprehensive `config.toml` Guide".
-
-Here's a summary of the steps and considerations:
-
-1.  **Reviewed Source Information:**
-    *   Primarily used the `README.md` content provided in the prompt for the structure of `config.toml`.
-    *   Cross-referenced with insights from previous analysis of `src/environment.rs` (for `Environment` and `Service` structs) and `src/roomservice/config.rs` (for `Config` and `RoomConfig` structs that define build hooks) to ensure field names and types were consistent.
-    *   Noted the `scribe-rust` logger from `src/lib.rs` to infer possible log levels.
-
-2.  **Structured the Document:**
-    *   Followed the requested Docusaurus page structure with frontmatter (`sidebar_position`, `title`).
-    *   Organized the guide into logical sections: File Location, Top-Level Settings, Service Whitelist (including Build Configuration), and Environment Variables.
-
-3.  **Detailed Each Field:**
-    *   For each field, provided:
-        *   Whether it's **Required** or **Optional**.
-        *   A clear description of its purpose.
-        *   An illustrative example.
-        *   Default values where applicable (e.g., `log_level`, `default_replicas`, `registry`).
-        *   How it might be used in templates (e.g., `{{env_name}}`, `{{service_name}}`).
-    *   **Log Levels:** Listed common log levels (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`) assuming standard `scribe-rust` behavior.
-    *   **Build Configuration:**
-        *   Acknowledged that the build system is based on Roomservice.
-        *   Detailed each build hook field (`build`, `dockerfile`, `run_parallel`, `run_synchronous`, `before`, `before_synchronous`, `after`) as described in the Sailr `README.md`.
-        *   Clarified that `before_synchronous` is treated as a distinct field based on `src/roomservice/config.rs`.
-        *   Provided an assumed execution order for these hooks for a single service, with a note that inter-service parallelism depends on the Roomservice core.
-        *   Mentioned that global `beforeAll`/`afterAll` are not covered as they weren't in the `config.toml` section of the README.
-    *   **`dockerfile` field:** Retained it as optional and noted it's a common convention that needs confirmation for Sailr's specific implementation if it can be overridden.
-    *   **Service `name`:** Added a note about the internal `namespace/name` representation vs. user definition.
-
-4.  **Maintained Clarity and Placeholders:**
-    *   Used clear, concise language.
-    *   Included placeholders for links to other guides (like a future Templating Guide) to ensure inter-document navigation.
-    *   Ensured TOML examples were correctly formatted.
-
-5.  **File Creation:**
-    *   Used `create_file_with_block` to write the content to `docs/docs/configuration/config-toml.md`. This tool will create the `configuration` directory if it doesn't exist.
-
-This draft aims to be comprehensive based on the available information and provide a solid foundation for users to understand and utilize the `config.toml` file effectively.
+This guide should provide a solid understanding of how to configure your Sailr environments using `config.toml`. For information on how these configurations are used in practice, refer to the [Getting Started Tutorial](../getting-started/tutorial.md).
