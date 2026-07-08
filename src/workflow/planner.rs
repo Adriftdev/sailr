@@ -406,8 +406,6 @@ impl WorkflowPlanner {
                         crate::plan::validate_plan_safety(&plan).map_err(|e| {
                             anyhow::anyhow!("Deployment plan validation failed: {}", e)
                         })?;
-
-
                     }
 
                     Ok(())
