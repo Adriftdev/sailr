@@ -101,9 +101,10 @@ fn print_workflow_result(
 }
 
 fn write_workflow_report(
-    profile: &super::profile::NormalizedWorkflowProfile,
+    profile: &crate::workflow::profile::NormalizedWorkflowProfile,
     runner: &RunnerContext,
     result: &runkernel::PipelineResult,
+    plan: &crate::workflow::plan::WorkflowPlan,
 ) -> Result<(), String> {
     if !matches!(
         profile.report,
@@ -123,7 +124,18 @@ fn write_workflow_report(
         })
         .collect::<Vec<_>>();
 
-    let images: Vec<crate::workflow::image::ImageArtifact> = Vec::new();
+    let mut images: Vec<crate::workflow::image::ImageArtifact> = Vec::new();
+    let mut image_push_plan: Option<crate::workflow::image::ImagePushPlanReport> = None;
+
+    if let Some(ref pp) = plan.push_plan {
+        image_push_plan = Some(crate::workflow::image::ImagePushPlanReport {
+            plan: pp.clone(),
+        });
+        
+        for item in &pp.items {
+            images.push(item.to_artifact_placeholder(&profile.environment));
+        }
+    }
 
     let mut report = serde_json::json!({
         "profile": profile.name,
@@ -137,7 +149,8 @@ fn write_workflow_report(
             "cancelled": result.summary.cancelled,
             "items": task_items
         },
-        "images": images
+        "images": images,
+        "image_push_plan": image_push_plan
     });
 
     if profile.deploy == crate::workflow::profile::WorkflowStepMode::Plan {
@@ -178,6 +191,10 @@ pub fn validate_workflow_safety(
     runner: &RunnerContext,
     args: &crate::cli::WorkflowRunArgs,
 ) -> Result<(), String> {
+    if profile.push == crate::workflow::profile::WorkflowStepMode::Run {
+        return Err("push execution is intentionally disabled in this stage".to_string());
+    }
+
     if runner.ci && profile.interactive {
         return Err("workflow cannot be interactive in CI".to_string());
     }
@@ -303,7 +320,7 @@ impl WorkflowRunner {
 
         // 9. Finalize
         print_workflow_result(&normalized_profile, &runner_ctx, &result);
-        write_workflow_report(&normalized_profile, &runner_ctx, &result)?;
+        write_workflow_report(&normalized_profile, &runner_ctx, &result, &plan)?;
 
         match build_execution {
             crate::workflow::planner::WorkflowBuildExecution::None => {}
@@ -601,7 +618,7 @@ mod tests {
             mode: WorkflowMode::Go,
             engine: WorkflowEngine::Runkernel,
             interactive: true,
-            build: WorkflowStepMode::Run,
+            build: WorkflowStepMode::Run, push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Run,
             test: WorkflowStepMode::Disabled,
@@ -651,7 +668,7 @@ mod tests {
             mode: WorkflowMode::Deploy,
             engine: WorkflowEngine::Runkernel,
             interactive: false,
-            build: WorkflowStepMode::Plan,
+            build: WorkflowStepMode::Plan, push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Run,
             test: WorkflowStepMode::Disabled,
@@ -700,7 +717,7 @@ mod tests {
             mode: WorkflowMode::Go,
             engine: WorkflowEngine::Runkernel,
             interactive: false,
-            build: WorkflowStepMode::Plan,
+            build: WorkflowStepMode::Plan, push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Plan,
             test: WorkflowStepMode::Disabled,
@@ -750,7 +767,7 @@ mod tests {
             mode: WorkflowMode::Go,
             engine: WorkflowEngine::Runkernel,
             interactive: true,
-            build: WorkflowStepMode::Run,
+            build: WorkflowStepMode::Run, push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Run,
             test: WorkflowStepMode::Disabled,
@@ -797,7 +814,7 @@ mod tests {
             mode: WorkflowMode::Deploy,
             engine: WorkflowEngine::Runkernel,
             interactive: false,
-            build: WorkflowStepMode::Plan,
+            build: WorkflowStepMode::Plan, push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Run,
             test: WorkflowStepMode::Disabled,

@@ -54,6 +54,52 @@ pub struct ImageArtifactReport {
     pub artifacts: Vec<ImageArtifact>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImagePushPlanItem {
+    pub service: String,
+    pub registry: String,
+    pub repository: String,
+    pub tag: String,
+    pub source_sha: Option<String>,
+}
+
+impl ImagePushPlanItem {
+    pub fn to_artifact_placeholder(&self, environment: &str) -> ImageArtifact {
+        ImageArtifact::tagged(
+            &self.service,
+            environment,
+            &self.registry,
+            &self.repository,
+            &self.tag,
+            self.source_sha.clone(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ImagePushPlan {
+    pub items: Vec<ImagePushPlanItem>,
+}
+
+impl ImagePushPlan {
+    pub fn new(items: Vec<ImagePushPlanItem>) -> Self {
+        Self { items }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ImagePushPlanReport {
+    pub plan: ImagePushPlan,
+}
+
+pub fn derive_image_tag(source_sha: Option<&str>) -> String {
+    match source_sha {
+        Some(sha) if sha.len() >= 7 => sha[0..7].to_string(),
+        Some(sha) => sha.to_string(),
+        None => "dev".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +178,16 @@ mod tests {
             json["image_ref"],
             "ghcr.io/Adriftdev/sailr/ci-build-hello@sha256:abc123"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_derive {
+    use super::*;
+    #[test]
+    fn test_derive_image_tag() {
+        assert_eq!(derive_image_tag(Some("2bcc3f70984bb6d33d93bbcbb9eb3539ce033dc8")), "2bcc3f7");
+        assert_eq!(derive_image_tag(Some("abc")), "abc");
+        assert_eq!(derive_image_tag(None), "dev");
     }
 }

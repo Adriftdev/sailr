@@ -24,6 +24,7 @@ jobs:
         profile:
           - ci
           - ci-build-plan
+          - ci-build-push-plan
           - ci-generate
           - ci-deploy-plan
 

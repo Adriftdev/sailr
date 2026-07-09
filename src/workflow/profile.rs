@@ -28,6 +28,10 @@ pub struct WorkflowProfile {
     #[serde(default)]
     pub build: Option<WorkflowStepMode>,
 
+    /// How to handle the push step.
+    #[serde(default)]
+    pub push: Option<WorkflowStepMode>,
+
     /// How to handle the generate step.
     #[serde(default)]
     pub generate: Option<WorkflowStepMode>,
@@ -100,10 +104,11 @@ impl WorkflowProfile {
         let mut approval = self.approval;
         let mut apply = self.apply.unwrap_or(false);
 
-        let (default_build, default_generate, default_deploy, default_test, default_verify) =
+        let (default_build, default_push, default_generate, default_deploy, default_test, default_verify) =
             match self.mode {
                 WorkflowMode::Check => (
                     WorkflowStepMode::Plan,
+                    WorkflowStepMode::Disabled,
                     WorkflowStepMode::Run,
                     WorkflowStepMode::Disabled,
                     WorkflowStepMode::Disabled,
@@ -115,9 +120,11 @@ impl WorkflowProfile {
                     WorkflowStepMode::Disabled,
                     WorkflowStepMode::Disabled,
                     WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
                 ),
                 WorkflowMode::Go => (
                     WorkflowStepMode::Run,
+                    WorkflowStepMode::Disabled,
                     WorkflowStepMode::Run,
                     if apply {
                         WorkflowStepMode::Run
@@ -128,6 +135,7 @@ impl WorkflowProfile {
                     WorkflowStepMode::Disabled,
                 ),
                 WorkflowMode::Deploy => (
+                    WorkflowStepMode::Disabled,
                     WorkflowStepMode::Disabled,
                     WorkflowStepMode::Run,
                     if apply {
@@ -144,10 +152,12 @@ impl WorkflowProfile {
                     WorkflowStepMode::Disabled,
                     WorkflowStepMode::Disabled,
                     WorkflowStepMode::Disabled,
+                    WorkflowStepMode::Disabled,
                 ),
             };
 
         let build = self.build.unwrap_or(default_build);
+        let push = self.push.unwrap_or(default_push);
         let generate = self.generate.unwrap_or(default_generate);
         let mut deploy = self.deploy.unwrap_or(default_deploy);
         let test = self.test.unwrap_or(default_test);
@@ -183,6 +193,7 @@ impl WorkflowProfile {
             engine: self.engine,
             interactive,
             build,
+            push,
             generate,
             deploy,
             test,
@@ -205,6 +216,7 @@ pub struct NormalizedWorkflowProfile {
     pub engine: WorkflowEngine,
     pub interactive: bool,
     pub build: WorkflowStepMode,
+    pub push: WorkflowStepMode,
     pub generate: WorkflowStepMode,
     pub deploy: WorkflowStepMode,
     pub test: WorkflowStepMode,
@@ -449,6 +461,7 @@ mod tests {
         assert_eq!(profile.mode, WorkflowMode::Go);
         assert_eq!(profile.engine, WorkflowEngine::Runkernel);
         assert_eq!(profile.build, None);
+        assert_eq!(profile.push, None);
         assert_eq!(profile.generate, None);
         assert_eq!(profile.deploy, None);
         assert_eq!(profile.approval, ApprovalMode::None);
@@ -470,6 +483,7 @@ mod tests {
             engine = "runkernel"
             interactive = false
             build = "disabled"
+            push = "plan"
             generate = "run"
             deploy = "plan"
             test = "run"
@@ -494,6 +508,7 @@ mod tests {
         assert_eq!(profile.engine, WorkflowEngine::Runkernel);
         assert_eq!(profile.interactive, Some(false));
         assert_eq!(profile.build, Some(WorkflowStepMode::Disabled));
+        assert_eq!(profile.push, Some(WorkflowStepMode::Plan));
         assert_eq!(profile.generate, Some(WorkflowStepMode::Run));
         assert_eq!(profile.deploy, Some(WorkflowStepMode::Plan));
         assert_eq!(profile.test, Some(WorkflowStepMode::Run));
@@ -620,6 +635,7 @@ mod tests {
             engine = "runkernel"
             interactive = false
             build = "run"
+            push = "run"
             generate = "run"
             deploy = "run"
             deploy_context = "staging"
@@ -634,6 +650,7 @@ mod tests {
         assert_eq!(profile.engine, roundtripped.engine);
         assert_eq!(profile.interactive, roundtripped.interactive);
         assert_eq!(profile.build, roundtripped.build);
+        assert_eq!(profile.push, roundtripped.push);
         assert_eq!(profile.deploy, roundtripped.deploy);
         assert_eq!(profile.approval, roundtripped.approval);
         assert_eq!(profile.report, roundtripped.report);
@@ -686,6 +703,7 @@ mod tests {
         let normalized = profile.normalize(false);
         assert!(!normalized.interactive);
         assert_eq!(normalized.build, WorkflowStepMode::Plan);
+        assert_eq!(normalized.push, WorkflowStepMode::Disabled);
         assert_eq!(normalized.generate, WorkflowStepMode::Run);
         assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
         assert_eq!(normalized.test, WorkflowStepMode::Disabled);
@@ -707,6 +725,7 @@ mod tests {
         let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
         let normalized = profile.normalize(true);
         assert_eq!(normalized.build, WorkflowStepMode::Disabled);
+        assert_eq!(normalized.push, WorkflowStepMode::Disabled);
         assert_eq!(normalized.generate, WorkflowStepMode::Disabled);
         assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
     }
@@ -721,6 +740,7 @@ mod tests {
         let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
         let normalized = profile.normalize(true);
         assert_eq!(normalized.build, WorkflowStepMode::Plan);
+        assert_eq!(normalized.push, WorkflowStepMode::Disabled);
         assert_eq!(normalized.generate, WorkflowStepMode::Run);
         assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
     }
@@ -734,6 +754,7 @@ mod tests {
         let profile: WorkflowProfile = toml::from_str(toml_str).unwrap();
         let normalized = profile.normalize(false);
         assert_eq!(normalized.build, WorkflowStepMode::Run);
+        assert_eq!(normalized.push, WorkflowStepMode::Disabled);
         assert_eq!(normalized.generate, WorkflowStepMode::Disabled);
         assert_eq!(normalized.deploy, WorkflowStepMode::Disabled);
         assert_eq!(normalized.approval, ApprovalMode::None);

@@ -6,6 +6,10 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
     out.push_str(&format!("Environment: {}\n", plan.profile.environment));
     out.push_str(&format!("Mode: {:?}\n", plan.profile.mode));
     out.push_str(&format!("Engine: {:?}\n", plan.profile.engine));
+    out.push_str(&format!("Build: {:?}\n", plan.profile.build));
+    out.push_str(&format!("Push: {:?}\n", plan.profile.push));
+    out.push_str(&format!("Generate: {:?}\n", plan.profile.generate));
+    out.push_str(&format!("Deploy: {:?}\n", plan.profile.deploy));
     out.push_str("\nTasks:\n");
 
     for task in &plan.tasks {
@@ -187,7 +191,7 @@ mod tests {
                 mode: WorkflowMode::Check,
                 engine: WorkflowEngine::Runkernel,
                 interactive: false,
-                build: WorkflowStepMode::Run,
+                build: WorkflowStepMode::Run, push: WorkflowStepMode::Disabled,
                 generate: WorkflowStepMode::Run,
                 deploy: WorkflowStepMode::Disabled,
                 test: WorkflowStepMode::Disabled,
@@ -228,7 +232,7 @@ mod tests {
                 from: "workflow:validate".to_string(),
                 to: "build:api".to_string(),
             }],
-            build_plan: None,
+            build_plan: None, push_plan: None,
             effects: WorkflowEffects {
                 mutates_docker: true,
                 ..Default::default()

@@ -45,3 +45,15 @@ namespace = "default"
 approval = "external"
 apply = true
 report = "both"
+
+[workflow.ci-build-push-plan]
+environment = "staging"
+mode = "build"
+interactive = false
+build = "plan"
+push = "plan"
+generate = "disabled"
+deploy = "disabled"
+approval = "none"
+apply = false
+report = "both"

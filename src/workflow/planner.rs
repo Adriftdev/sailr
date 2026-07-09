@@ -44,6 +44,7 @@ impl WorkflowPlanner {
         let mut edges = Vec::new();
         let mut effects = WorkflowEffects::default();
         let mut build_plan_opt = None;
+        let mut push_plan_opt = None;
 
         // 0. Validate Phase
         tasks.push(WorkflowTaskPlan {
@@ -143,6 +144,57 @@ impl WorkflowPlanner {
                 }
 
                 last_tasks = build_tasks;
+            }
+        }
+
+        // 1.5 Push Phase
+        match self.profile.push {
+            crate::workflow::profile::WorkflowStepMode::Disabled => {}
+            crate::workflow::profile::WorkflowStepMode::DryRun => {
+                return Err("workflow push dry-run is not supported".to_string());
+            }
+            crate::workflow::profile::WorkflowStepMode::Plan => {
+                tasks.push(WorkflowTaskPlan {
+                    id: "workflow:push-plan".to_string(),
+                    label: "Push Plan".to_string(),
+                    kind: WorkflowTaskKind::PushPlan,
+                    dependencies: last_tasks.clone(),
+                    effects: WorkflowEffects::default(),
+                    description: "Determine target images and tags without pushing.".to_string(),
+                });
+                for t in &last_tasks {
+                    edges.push(WorkflowEdge {
+                        from: t.clone(),
+                        to: "workflow:push-plan".to_string(),
+                    });
+                }
+                last_tasks = vec!["workflow:push-plan".to_string()];
+
+                let mut items = Vec::new();
+                if let Some(ref bp) = build_plan_opt {
+                    for s in &bp.services {
+                        if s.dirty {
+                            let registry = if self.env.registry.is_empty() {
+                                "docker.io".to_string()
+                            } else {
+                                self.env.registry.clone()
+                            };
+                            let tag = crate::workflow::image::derive_image_tag(Some(&s.fingerprint.full_hash));
+                            items.push(crate::workflow::image::ImagePushPlanItem {
+                                service: s.service.name.clone(),
+                                registry,
+                                repository: format!("Adriftdev/sailr/{}", s.service.name),
+                                tag,
+                                source_sha: Some(s.fingerprint.full_hash.clone()),
+                            });
+                        }
+                    }
+                }
+                push_plan_opt = Some(crate::workflow::image::ImagePushPlan::new(items));
+            }
+            crate::workflow::profile::WorkflowStepMode::Run => {
+                // To be implemented in Stage 3
+                return Err("workflow push run is not enabled in this stage".to_string());
             }
         }
 
@@ -253,6 +305,7 @@ impl WorkflowPlanner {
             tasks,
             edges,
             build_plan: build_plan_opt,
+            push_plan: push_plan_opt,
             effects,
         })
     }
@@ -313,6 +366,47 @@ impl WorkflowPlanner {
 
                 last_tasks.extend(build_deps);
                 build_execution = WorkflowBuildExecution::Executed(bp);
+            }
+        }
+
+        match self.profile.push {
+            crate::workflow::profile::WorkflowStepMode::Disabled => {}
+            crate::workflow::profile::WorkflowStepMode::DryRun => {
+                return Err("workflow push dry-run is not supported".to_string());
+            }
+            crate::workflow::profile::WorkflowStepMode::Plan => {
+                let push_plan = plan.push_plan.clone().unwrap();
+                let mut task = Task::new("workflow:push-plan");
+                
+                let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
+                if !deps_refs.is_empty() {
+                    task = task.depends_on(&deps_refs);
+                }
+
+                task = task.exec_fn(move |_ctx| {
+                    let push_plan = push_plan.clone();
+                    async move {
+                        if push_plan.items.is_empty() {
+                            crate::LOGGER.info("No images to push.");
+                            return Ok(());
+                        }
+                        
+                        crate::LOGGER.info("Image Push Plan:");
+                        for item in &push_plan.items {
+                            crate::LOGGER.info(&format!(
+                                "  - {} -> {}/{}:{}",
+                                item.service, item.registry, item.repository, item.tag
+                            ));
+                        }
+                        Ok(())
+                    }
+                });
+
+                pipeline.add(task);
+                last_tasks = vec!["workflow:push-plan".to_string()];
+            }
+            crate::workflow::profile::WorkflowStepMode::Run => {
+                return Err("workflow push run is not enabled in this stage".to_string());
             }
         }
 
@@ -502,7 +596,7 @@ mod tests {
             mode: WorkflowMode::Check,
             engine: WorkflowEngine::Runkernel,
             interactive: false,
-            build: build_mode,
+            build: build_mode, push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: deploy_mode,
             test: WorkflowStepMode::Disabled,

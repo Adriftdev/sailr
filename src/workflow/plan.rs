@@ -10,6 +10,7 @@ pub struct WorkflowPlan {
     pub tasks: Vec<WorkflowTaskPlan>,
     pub edges: Vec<WorkflowEdge>,
     pub build_plan: Option<SailrBuildPlan>,
+    pub push_plan: Option<crate::workflow::image::ImagePushPlan>,
     pub effects: WorkflowEffects,
 }
 
@@ -28,6 +29,7 @@ pub enum WorkflowTaskKind {
     ValidateConfig,
     BuildPlan,
     ServiceBuild,
+    PushPlan,
     Generate,
     DeploymentPlan,
     Deploy,
