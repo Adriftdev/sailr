@@ -426,7 +426,7 @@ impl WorkflowPlanner {
                         let item_clone = item.clone();
                         let env_clone = self.env.clone();
 
-                        let mut task = Task::new(&format!("workflow:push-{}", service_name))
+                        let task = Task::new(format!("workflow:push-{}", service_name))
                             .depends_on(&[&service_name])
                             .exec_fn(move |_ctx| {
                                 let image_ref = image_ref.clone();
