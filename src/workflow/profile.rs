@@ -177,8 +177,8 @@ impl WorkflowProfile {
                 deploy = WorkflowStepMode::Disabled;
             }
             WorkflowMode::Build => {
-                approval = ApprovalMode::None;
                 if push != WorkflowStepMode::Run {
+                    approval = ApprovalMode::None;
                     apply = false;
                 }
             }
