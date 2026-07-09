@@ -205,7 +205,13 @@ pub fn validate_workflow_safety(
         }
 
         if runner.ci && profile.approval != crate::workflow::profile::ApprovalMode::External {
-            return Err("CI push requires approval=external".to_string());
+            let msg = match runner.kind {
+                RunnerKind::CircleCi => "CI push requires approval=external.\n\nDetected CircleCI.\nAdd approval = \"external\" to [workflow.ci-build-push] and gate the mutating CircleCI job behind:\n\n  approve_image_push:\n    type: approval",
+                RunnerKind::GitHubActions => "CI push requires approval=external.\n\nDetected GitHub Actions.\nAdd approval = \"external\" to [workflow.ci-build-push] and run the job behind a protected GitHub Environment.",
+                RunnerKind::Travis => "CI push requires approval=external.\n\nDetected Travis.\nAdd approval = \"external\" to [workflow.ci-build-push] and guard the mutating job with branch and environment variable conditions.",
+                _ => "CI push requires approval=external",
+            };
+            return Err(msg.to_string());
         }
     }
 
@@ -230,7 +236,13 @@ pub fn validate_workflow_safety(
 
         if runner.ci {
             if profile.approval != crate::workflow::profile::ApprovalMode::External {
-                return Err("CI deploy requires approval=external".to_string());
+                let msg = match runner.kind {
+                    RunnerKind::CircleCi => "CI deploy requires approval=external.\n\nDetected CircleCI.\nAdd approval = \"external\" to [workflow.ci-build-push] and gate the mutating CircleCI job behind:\n\n  approve_image_push:\n    type: approval",
+                    RunnerKind::GitHubActions => "CI deploy requires approval=external.\n\nDetected GitHub Actions.\nAdd approval = \"external\" to [workflow.ci-build-push] and run the job behind a protected GitHub Environment.",
+                    RunnerKind::Travis => "CI deploy requires approval=external.\n\nDetected Travis.\nAdd approval = \"external\" to [workflow.ci-build-push] and guard the mutating job with branch and environment variable conditions.",
+                    _ => "CI deploy requires approval=external",
+                };
+                return Err(msg.to_string());
             }
 
             if !profile.apply {
