@@ -1,5 +1,28 @@
 use serde::{Deserialize, Serialize};
 
+use std::sync::Arc;
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct WorkflowReportData {
+    pub images: Vec<ImageArtifact>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WorkflowReportAccumulator {
+    inner: Arc<tokio::sync::Mutex<WorkflowReportData>>,
+}
+
+impl WorkflowReportAccumulator {
+    pub async fn add_image(&self, artifact: ImageArtifact) {
+        let mut inner = self.inner.lock().await;
+        inner.images.push(artifact);
+    }
+
+    pub async fn snapshot(&self) -> WorkflowReportData {
+        self.inner.lock().await.clone()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageArtifact {
     pub service: String,
@@ -99,6 +122,15 @@ pub fn derive_image_tag(source_sha: Option<&str>) -> String {
     }
 }
 
+pub fn parse_pushed_digest(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let marker = "digest:";
+        let idx = line.find(marker)?;
+        let rest = line[idx + marker.len()..].trim();
+        rest.split_whitespace().next().map(str::to_string)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +223,21 @@ mod tests_derive {
         );
         assert_eq!(derive_image_tag(Some("abc")), "abc");
         assert_eq!(derive_image_tag(None), "dev");
+    }
+
+    #[test]
+    fn parses_docker_push_digest() {
+        let output = "latest: digest: sha256:abc123 size: 1234";
+        assert_eq!(
+            parse_pushed_digest(output).as_deref(),
+            Some("sha256:abc123")
+        );
+    }
+
+    #[test]
+    fn returns_none_when_digest_missing() {
+        let output = "pushed some layers";
+        assert_eq!(parse_pushed_digest(output), None);
     }
 }
 

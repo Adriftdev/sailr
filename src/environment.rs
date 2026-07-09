@@ -13,6 +13,38 @@ const SCHEMA_V03: &str = "0.3.0";
 const SCHEMA_V04: &str = "0.4.0";
 const SCHEMA_V05: &str = "0.5.0";
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+pub enum RegistryConfig {
+    Simple(String),
+    Detailed {
+        host: String,
+        namespace: Option<String>,
+    },
+}
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        RegistryConfig::Simple("docker.io".to_string())
+    }
+}
+
+impl RegistryConfig {
+    pub fn host(&self) -> String {
+        match self {
+            Self::Simple(s) => s.clone(),
+            Self::Detailed { host, .. } => host.clone(),
+        }
+    }
+
+    pub fn namespace(&self) -> Option<String> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Detailed { namespace, .. } => namespace.clone(),
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Environment {
     pub schema_version: String,
@@ -22,8 +54,9 @@ pub struct Environment {
     pub services: Vec<Service>,
     pub domain: String,
     pub default_replicas: u8,
-    pub registry: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub registry: RegistryConfig,
+
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<BuildPolicy>,
@@ -43,7 +76,7 @@ impl Environment {
             services: Vec::new(),
             domain: "localhost".to_string(),
             default_replicas: 1,
-            registry: "docker.io".to_string(),
+            registry: RegistryConfig::default(),
             platform: None,
             build: None,
             environment_variables: Some(Vec::new()),
@@ -500,13 +533,14 @@ impl Environment {
         let mut variables = vec![
             ("name".to_string(), self.name.clone()),
             ("log_level".to_string(), self.log_level.clone()),
+            ("replicas".to_string(), self.default_replicas.to_string()),
+            ("registry".to_string(), self.registry.host()),
             ("domain".to_string(), self.domain.clone()),
             ("deployment_date".to_string(), get_current_timestamp()),
             (
                 "default_replicas".to_string(),
                 self.default_replicas.to_string(),
             ),
-            ("registry".to_string(), self.registry.clone()),
             (
                 "platform".to_string(),
                 self.platform.clone().unwrap_or_default(),
@@ -1291,7 +1325,7 @@ value = "enabled"
         assert_eq!(env.name, "child");
         assert_eq!(env.domain, "child.example.com");
         assert_eq!(env.default_replicas, 3);
-        assert_eq!(env.registry, "docker.io/base");
+        assert_eq!(env.registry.host(), "docker.io/base");
         assert_eq!(env.platform.as_deref(), Some("linux/amd64"));
         assert_eq!(env.build.as_ref().unwrap().max_parallelism, Some(2));
         assert_eq!(env.build.as_ref().unwrap().fail_fast, Some(false));
@@ -1341,7 +1375,7 @@ domain = "prod.example.com"
 
         assert_eq!(env.name, "prod");
         assert_eq!(env.domain, "prod.example.com");
-        assert_eq!(env.registry, "docker.io/staging");
+        assert_eq!(env.registry.host(), "docker.io/staging");
     }
 
     #[test]

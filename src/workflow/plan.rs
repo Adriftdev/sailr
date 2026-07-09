@@ -30,6 +30,8 @@ pub enum WorkflowTaskKind {
     BuildPlan,
     ServiceBuild,
     PushPlan,
+    ServicePush,
+    ImageReport,
     Generate,
     DeploymentPlan,
     Deploy,

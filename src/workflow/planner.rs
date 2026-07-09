@@ -174,12 +174,17 @@ impl WorkflowPlanner {
                 if let Some(ref bp) = build_plan_opt {
                     for s in &bp.services {
                         if s.dirty {
-                            let registry = if self.env.registry.is_empty() {
+                            let registry = if self.env.registry.host().is_empty() {
                                 "docker.io".to_string()
                             } else {
-                                self.env.registry.clone()
+                                self.env.registry.host()
                             };
-                            let repository = format!("Adriftdev/sailr/{}", s.service.name);
+                            let namespace = self
+                                .env
+                                .registry
+                                .namespace()
+                                .unwrap_or_else(|| "Adriftdev/sailr".to_string());
+                            let repository = format!("{}/{}", namespace, s.service.name);
                             let tag = crate::workflow::image::derive_image_tag(Some(
                                 &s.fingerprint.full_hash,
                             ));
@@ -325,6 +330,7 @@ impl WorkflowPlanner {
     pub fn build_pipeline_from_plan(
         &self,
         plan: &WorkflowPlan,
+        accumulator: crate::workflow::image::WorkflowReportAccumulator,
     ) -> Result<(Pipeline, WorkflowBuildExecution), String> {
         let mut pipeline = Pipeline::new(format!("Workflow: {}", self.profile.name));
         let mut build_execution = WorkflowBuildExecution::None;
@@ -409,7 +415,84 @@ impl WorkflowPlanner {
                 last_tasks = vec!["workflow:push-plan".to_string()];
             }
             crate::workflow::profile::WorkflowStepMode::Run => {
-                return Err("workflow push run is not enabled in this stage".to_string());
+                let push_plan = plan.image_push_plan.clone().unwrap();
+                let mut push_tasks = Vec::new();
+
+                for item in &push_plan.items {
+                    if item.action == crate::workflow::image::ImagePushPlanAction::WouldPush {
+                        let service_name = item.service.clone();
+                        let image_ref = item.image_ref.clone();
+                        let accumulator = accumulator.clone();
+                        let item_clone = item.clone();
+                        let env_clone = self.env.clone();
+
+                        let mut task = Task::new(&format!("workflow:push-{}", service_name))
+                            .depends_on(&[&service_name])
+                            .exec_fn(move |_ctx| {
+                                let image_ref = image_ref.clone();
+                                let accumulator = accumulator.clone();
+                                let item = item_clone.clone();
+                                let env_clone = env_clone.clone();
+                                async move {
+                                    crate::LOGGER.info(&format!("Pushing {}", image_ref));
+
+                                    let mut cmd = tokio::process::Command::new("docker");
+                                    cmd.arg("push").arg(&image_ref);
+
+                                    let output = cmd.output().await.map_err(|e| {
+                                        anyhow::anyhow!("Failed to execute docker push: {}", e)
+                                    })?;
+
+                                    if !output.status.success() {
+                                        let stderr = String::from_utf8_lossy(&output.stderr);
+                                        return Err(anyhow::anyhow!(
+                                            "Docker push failed: {}",
+                                            stderr
+                                        ));
+                                    }
+
+                                    let output_str = String::from_utf8_lossy(&output.stdout);
+                                    let digest =
+                                        crate::workflow::image::parse_pushed_digest(&output_str);
+
+                                    let mut artifact =
+                                        crate::workflow::image::ImageArtifact::from_push_plan_item(
+                                            &env_clone.name,
+                                            &item,
+                                        );
+
+                                    if let Some(digest) = digest {
+                                        artifact.digest = Some(digest.clone());
+                                        artifact.image_ref = format!(
+                                            "{}/{}@{}",
+                                            artifact.registry, artifact.repository, digest
+                                        );
+                                    } else {
+                                        crate::LOGGER.warn(&format!(
+                                            "Could not parse digest from push output for {}",
+                                            image_ref
+                                        ));
+                                    }
+
+                                    accumulator.add_image(artifact).await;
+
+                                    Ok(())
+                                }
+                            });
+                        pipeline.add(task);
+                        push_tasks.push(format!("workflow:push-{}", service_name));
+                    }
+                }
+
+                let report_task = Task::new("workflow:image-report")
+                    .depends_on(&push_tasks.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                    .exec_fn(|_ctx| async move {
+                        crate::LOGGER.info("Image push report generated.");
+                        Ok(())
+                    });
+
+                pipeline.add(report_task);
+                last_tasks = vec!["workflow:image-report".to_string()];
             }
         }
 

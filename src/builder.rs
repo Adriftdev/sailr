@@ -902,7 +902,9 @@ fn build_room(
         push_command,
         Some(format!(
             "{}/{}:{}",
-            env.registry, service.name, service.version
+            env.registry.host(),
+            service.name,
+            service.version
         )),
     )
 }
@@ -989,7 +991,7 @@ fn render_build_command(command: &str, env: &Environment, service: &Service) -> 
     let mut rendered = command.to_string();
 
     for (key, value) in [
-        ("registry", env.registry.as_str()),
+        ("registry", env.registry.host().as_str()),
         ("platform", env.platform.as_deref().unwrap_or("")),
         ("environment", env.name.as_str()),
         ("name", service.name.as_str()),

@@ -105,6 +105,7 @@ fn write_workflow_report(
     runner: &RunnerContext,
     result: &runkernel::PipelineResult,
     plan: &crate::workflow::plan::WorkflowPlan,
+    report_data: &crate::workflow::image::WorkflowReportData,
 ) -> Result<(), String> {
     if !matches!(
         profile.report,
@@ -124,16 +125,18 @@ fn write_workflow_report(
         })
         .collect::<Vec<_>>();
 
-    let mut images: Vec<crate::workflow::image::ImageArtifact> = Vec::new();
+    let mut images = report_data.images.clone();
     let image_push_plan: Option<crate::workflow::image::ImagePushPlanReport> =
         plan.image_push_plan.clone();
 
-    if let Some(ref pp) = image_push_plan {
-        for item in &pp.items {
-            images.push(crate::workflow::image::ImageArtifact::from_push_plan_item(
-                &profile.environment,
-                item,
-            ));
+    if images.is_empty() {
+        if let Some(ref pp) = image_push_plan {
+            for item in &pp.items {
+                images.push(crate::workflow::image::ImageArtifact::from_push_plan_item(
+                    &profile.environment,
+                    item,
+                ));
+            }
         }
     }
 
@@ -193,7 +196,17 @@ pub fn validate_workflow_safety(
     args: &crate::cli::WorkflowRunArgs,
 ) -> Result<(), String> {
     if profile.push == crate::workflow::profile::WorkflowStepMode::Run {
-        return Err("push execution is intentionally disabled in this stage".to_string());
+        if !profile.apply {
+            return Err("push=run requires profile apply=true".to_string());
+        }
+
+        if !args.apply {
+            return Err("push=run requires --apply".to_string());
+        }
+
+        if runner.ci && profile.approval != crate::workflow::profile::ApprovalMode::External {
+            return Err("CI push requires approval=external".to_string());
+        }
     }
 
     if runner.ci && profile.interactive {
@@ -305,7 +318,10 @@ impl WorkflowRunner {
             runner_ctx.clone(),
         );
         let plan = planner.plan()?;
-        let (mut pipeline, build_execution) = planner.build_pipeline_from_plan(&plan)?;
+
+        let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
+        let (mut pipeline, build_execution) =
+            planner.build_pipeline_from_plan(&plan, accumulator.clone())?;
 
         // 8. Run Pipeline
         attach_pipeline_logging(&mut pipeline);
@@ -321,7 +337,15 @@ impl WorkflowRunner {
 
         // 9. Finalize
         print_workflow_result(&normalized_profile, &runner_ctx, &result);
-        write_workflow_report(&normalized_profile, &runner_ctx, &result, &plan)?;
+
+        let report_data = accumulator.snapshot().await;
+        write_workflow_report(
+            &normalized_profile,
+            &runner_ctx,
+            &result,
+            &plan,
+            &report_data,
+        )?;
 
         match build_execution {
             crate::workflow::planner::WorkflowBuildExecution::None => {}

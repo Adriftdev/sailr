@@ -57,3 +57,15 @@ deploy = "disabled"
 approval = "none"
 apply = false
 report = "both"
+
+[workflow.ci-build-push]
+environment = "staging"
+mode = "build"
+interactive = false
+build = "run"
+push = "run"
+generate = "disabled"
+deploy = "disabled"
+approval = "external"
+apply = true
+report = "both"
