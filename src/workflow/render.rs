@@ -191,7 +191,8 @@ mod tests {
                 mode: WorkflowMode::Check,
                 engine: WorkflowEngine::Runkernel,
                 interactive: false,
-                build: WorkflowStepMode::Run, push: WorkflowStepMode::Disabled,
+                build: WorkflowStepMode::Run,
+                push: WorkflowStepMode::Disabled,
                 generate: WorkflowStepMode::Run,
                 deploy: WorkflowStepMode::Disabled,
                 test: WorkflowStepMode::Disabled,
@@ -232,7 +233,8 @@ mod tests {
                 from: "workflow:validate".to_string(),
                 to: "build:api".to_string(),
             }],
-            build_plan: None, image_push_plan: None,
+            build_plan: None,
+            image_push_plan: None,
             effects: WorkflowEffects {
                 mutates_docker: true,
                 ..Default::default()

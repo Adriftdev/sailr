@@ -125,11 +125,15 @@ fn write_workflow_report(
         .collect::<Vec<_>>();
 
     let mut images: Vec<crate::workflow::image::ImageArtifact> = Vec::new();
-    let image_push_plan: Option<crate::workflow::image::ImagePushPlanReport> = plan.image_push_plan.clone();
+    let image_push_plan: Option<crate::workflow::image::ImagePushPlanReport> =
+        plan.image_push_plan.clone();
 
     if let Some(ref pp) = image_push_plan {
         for item in &pp.items {
-            images.push(crate::workflow::image::ImageArtifact::from_push_plan_item(&profile.environment, item));
+            images.push(crate::workflow::image::ImageArtifact::from_push_plan_item(
+                &profile.environment,
+                item,
+            ));
         }
     }
 
@@ -177,10 +181,8 @@ fn write_workflow_report(
     let json_string = serde_json::to_string_pretty(&report)
         .map_err(|e| format!("Failed to serialize report: {}", e))?;
 
-
     std::fs::write(&report_path, &json_string)
         .map_err(|e| format!("Failed to write report: {}", e))?;
-
 
     Ok(())
 }
@@ -617,7 +619,8 @@ mod tests {
             mode: WorkflowMode::Go,
             engine: WorkflowEngine::Runkernel,
             interactive: true,
-            build: WorkflowStepMode::Run, push: WorkflowStepMode::Disabled,
+            build: WorkflowStepMode::Run,
+            push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Run,
             test: WorkflowStepMode::Disabled,
@@ -667,7 +670,8 @@ mod tests {
             mode: WorkflowMode::Deploy,
             engine: WorkflowEngine::Runkernel,
             interactive: false,
-            build: WorkflowStepMode::Plan, push: WorkflowStepMode::Disabled,
+            build: WorkflowStepMode::Plan,
+            push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Run,
             test: WorkflowStepMode::Disabled,
@@ -716,7 +720,8 @@ mod tests {
             mode: WorkflowMode::Go,
             engine: WorkflowEngine::Runkernel,
             interactive: false,
-            build: WorkflowStepMode::Plan, push: WorkflowStepMode::Disabled,
+            build: WorkflowStepMode::Plan,
+            push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Plan,
             test: WorkflowStepMode::Disabled,
@@ -766,7 +771,8 @@ mod tests {
             mode: WorkflowMode::Go,
             engine: WorkflowEngine::Runkernel,
             interactive: true,
-            build: WorkflowStepMode::Run, push: WorkflowStepMode::Disabled,
+            build: WorkflowStepMode::Run,
+            push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Run,
             test: WorkflowStepMode::Disabled,
@@ -813,7 +819,8 @@ mod tests {
             mode: WorkflowMode::Deploy,
             engine: WorkflowEngine::Runkernel,
             interactive: false,
-            build: WorkflowStepMode::Plan, push: WorkflowStepMode::Disabled,
+            build: WorkflowStepMode::Plan,
+            push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: WorkflowStepMode::Run,
             test: WorkflowStepMode::Disabled,
@@ -848,9 +855,9 @@ mod tests {
     #[test]
     fn ci_build_push_plan_json_report_includes_image_push_plan() {
         use crate::environment::Environment;
-        use crate::workflow::profile::WorkflowProfile;
         use crate::workflow::planner::WorkflowPlanner;
-        
+        use crate::workflow::profile::WorkflowProfile;
+
         let env_toml = r#"
         schema_version = "v0.5"
         name = "test"
@@ -896,7 +903,7 @@ mod tests {
         );
 
         let plan = planner.plan().unwrap();
-        
+
         let result = runkernel::PipelineResult {
             name: "test".to_string(),
             duration: std::time::Duration::from_secs(1),
@@ -921,7 +928,9 @@ mod tests {
 
         write_workflow_report(&normalized, &runner_ctx, &result, &plan).unwrap();
 
-        let report_path = temp.path().join(".sailr/reports/ci-build-push-plan/latest.json");
+        let report_path = temp
+            .path()
+            .join(".sailr/reports/ci-build-push-plan/latest.json");
         let content = std::fs::read_to_string(&report_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
 

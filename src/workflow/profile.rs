@@ -104,57 +104,63 @@ impl WorkflowProfile {
         let mut approval = self.approval;
         let mut apply = self.apply.unwrap_or(false);
 
-        let (default_build, default_push, default_generate, default_deploy, default_test, default_verify) =
-            match self.mode {
-                WorkflowMode::Check => (
-                    WorkflowStepMode::Plan,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Run,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                ),
-                WorkflowMode::Build => (
-                    WorkflowStepMode::Run,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                ),
-                WorkflowMode::Go => (
-                    WorkflowStepMode::Run,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Run,
-                    if apply {
-                        WorkflowStepMode::Run
-                    } else {
-                        WorkflowStepMode::Plan
-                    },
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                ),
-                WorkflowMode::Deploy => (
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Run,
-                    if apply {
-                        WorkflowStepMode::Run
-                    } else {
-                        WorkflowStepMode::Plan
-                    },
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                ),
-                WorkflowMode::Promote | WorkflowMode::Rollback => (
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                    WorkflowStepMode::Disabled,
-                ),
-            };
+        let (
+            default_build,
+            default_push,
+            default_generate,
+            default_deploy,
+            default_test,
+            default_verify,
+        ) = match self.mode {
+            WorkflowMode::Check => (
+                WorkflowStepMode::Plan,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Run,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+            ),
+            WorkflowMode::Build => (
+                WorkflowStepMode::Run,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+            ),
+            WorkflowMode::Go => (
+                WorkflowStepMode::Run,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Run,
+                if apply {
+                    WorkflowStepMode::Run
+                } else {
+                    WorkflowStepMode::Plan
+                },
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+            ),
+            WorkflowMode::Deploy => (
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Run,
+                if apply {
+                    WorkflowStepMode::Run
+                } else {
+                    WorkflowStepMode::Plan
+                },
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+            ),
+            WorkflowMode::Promote | WorkflowMode::Rollback => (
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+                WorkflowStepMode::Disabled,
+            ),
+        };
 
         let build = self.build.unwrap_or(default_build);
         let push = self.push.unwrap_or(default_push);

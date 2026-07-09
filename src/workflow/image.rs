@@ -185,7 +185,10 @@ mod tests_derive {
     use super::*;
     #[test]
     fn test_derive_image_tag() {
-        assert_eq!(derive_image_tag(Some("2bcc3f70984bb6d33d93bbcbb9eb3539ce033dc8")), "2bcc3f7");
+        assert_eq!(
+            derive_image_tag(Some("2bcc3f70984bb6d33d93bbcbb9eb3539ce033dc8")),
+            "2bcc3f7"
+        );
         assert_eq!(derive_image_tag(Some("abc")), "abc");
         assert_eq!(derive_image_tag(None), "dev");
     }

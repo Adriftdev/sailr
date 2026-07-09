@@ -180,7 +180,9 @@ impl WorkflowPlanner {
                                 self.env.registry.clone()
                             };
                             let repository = format!("Adriftdev/sailr/{}", s.service.name);
-                            let tag = crate::workflow::image::derive_image_tag(Some(&s.fingerprint.full_hash));
+                            let tag = crate::workflow::image::derive_image_tag(Some(
+                                &s.fingerprint.full_hash,
+                            ));
                             let image_ref = format!("{}/{}:{}", registry, repository, tag);
                             items.push(crate::workflow::image::ImagePushPlanItem {
                                 service: s.service.name.clone(),
@@ -387,7 +389,7 @@ impl WorkflowPlanner {
             crate::workflow::profile::WorkflowStepMode::Plan => {
                 let push_plan = plan.image_push_plan.clone().unwrap();
                 let mut task = Task::new("workflow:push-plan");
-                
+
                 let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
                 if !deps_refs.is_empty() {
                     task = task.depends_on(&deps_refs);
@@ -396,7 +398,9 @@ impl WorkflowPlanner {
                 task = task.exec_fn(move |_ctx| {
                     let push_plan = push_plan.clone();
                     async move {
-                        crate::LOGGER.info(&crate::workflow::render::render_image_push_plan_text(&push_plan));
+                        crate::LOGGER.info(&crate::workflow::render::render_image_push_plan_text(
+                            &push_plan,
+                        ));
                         Ok(())
                     }
                 });
@@ -595,7 +599,8 @@ mod tests {
             mode: WorkflowMode::Check,
             engine: WorkflowEngine::Runkernel,
             interactive: false,
-            build: build_mode, push: WorkflowStepMode::Disabled,
+            build: build_mode,
+            push: WorkflowStepMode::Disabled,
             generate: WorkflowStepMode::Run,
             deploy: deploy_mode,
             test: WorkflowStepMode::Disabled,
@@ -812,12 +817,8 @@ mod tests_addendum {
             policy: None,
         };
 
-        let planner = WorkflowPlanner::new(
-            normalized,
-            std::sync::Arc::new(env),
-            options,
-            runner_ctx,
-        );
+        let planner =
+            WorkflowPlanner::new(normalized, std::sync::Arc::new(env), options, runner_ctx);
 
         let plan = planner.plan().unwrap();
         assert!(plan.image_push_plan.is_some());
@@ -877,12 +878,7 @@ mod tests_addendum {
                 policy: None,
             };
 
-            let planner = WorkflowPlanner::new(
-                normalized,
-                env_arc.clone(),
-                options,
-                runner_ctx,
-            );
+            let planner = WorkflowPlanner::new(normalized, env_arc.clone(), options, runner_ctx);
 
             let plan = planner.plan().unwrap();
             assert!(plan.image_push_plan.is_none());
