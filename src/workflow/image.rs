@@ -294,7 +294,10 @@ mod tests_derive {
         };
         let output = "no digest here";
         let err = pushed_artifact_from_output("prod", &item, output).unwrap_err();
-        assert_eq!(err, "image push succeeded but digest could not be captured for ghcr.io/org/api:latest");
+        assert_eq!(
+            err,
+            "image push succeeded but digest could not be captured for ghcr.io/org/api:latest"
+        );
     }
 }
 

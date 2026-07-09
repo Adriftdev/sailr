@@ -471,7 +471,11 @@ pub(crate) fn add_runkernel_tasks(
     }
 
     for service_plan in &plan.services {
-        let mut dependencies: Vec<String> = service_plan.dependencies.iter().map(|d| format!("service:{}:build", d)).collect();
+        let mut dependencies: Vec<String> = service_plan
+            .dependencies
+            .iter()
+            .map(|d| format!("service:{}:build", d))
+            .collect();
         if service_plan.dirty && has_dirty_services && !plan.before_all.is_empty() {
             dependencies.push("build:before-all".to_string());
         }

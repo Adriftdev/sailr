@@ -153,7 +153,8 @@ impl WorkflowPlanner {
             crate::workflow::profile::WorkflowStepMode::DryRun => {
                 return Err("workflow push dry-run is not supported".to_string());
             }
-            crate::workflow::profile::WorkflowStepMode::Plan | crate::workflow::profile::WorkflowStepMode::Run => {
+            crate::workflow::profile::WorkflowStepMode::Plan
+            | crate::workflow::profile::WorkflowStepMode::Run => {
                 let is_run = self.profile.push == crate::workflow::profile::WorkflowStepMode::Run;
 
                 if is_run {
@@ -324,9 +325,8 @@ impl WorkflowPlanner {
 
             let repository = format!("{}/{}", namespace, service_plan.service.name);
 
-            let tag = crate::workflow::image::derive_image_tag(Some(
-                &service_plan.fingerprint.full_hash,
-            ));
+            let tag =
+                crate::workflow::image::derive_image_tag(Some(&service_plan.fingerprint.full_hash));
 
             let image_ref = format!("{}/{}:{}", registry, repository, tag);
 
@@ -460,10 +460,19 @@ impl WorkflowPlanner {
                                 async move {
                                     crate::LOGGER.info(&format!("Pushing {}", image_ref));
 
-                                    let svc = env_clone.services.iter().find(|s| s.name == item.service).unwrap();
-                                    let registry = if env_clone.registry.host().is_empty() { "docker.io".to_string() } else { env_clone.registry.host() };
-                                    let local_image = format!("{}/{}:{}", registry, svc.name, svc.version);
-                                    
+                                    let svc = env_clone
+                                        .services
+                                        .iter()
+                                        .find(|s| s.name == item.service)
+                                        .unwrap();
+                                    let registry = if env_clone.registry.host().is_empty() {
+                                        "docker.io".to_string()
+                                    } else {
+                                        env_clone.registry.host()
+                                    };
+                                    let local_image =
+                                        format!("{}/{}:{}", registry, svc.name, svc.version);
+
                                     let mut tag_cmd = tokio::process::Command::new("docker");
                                     tag_cmd.arg("tag").arg(&local_image).arg(&image_ref);
                                     let _ = tag_cmd.output().await;
@@ -487,11 +496,13 @@ impl WorkflowPlanner {
                                     let stderr_str = String::from_utf8_lossy(&output.stderr);
                                     let combined_output = format!("{}\n{}", stdout_str, stderr_str);
 
-                                    let artifact = crate::workflow::image::pushed_artifact_from_output(
-                                        &env_clone.name,
-                                        &item,
-                                        &combined_output,
-                                    ).map_err(|e| anyhow::anyhow!(e))?;
+                                    let artifact =
+                                        crate::workflow::image::pushed_artifact_from_output(
+                                            &env_clone.name,
+                                            &item,
+                                            &combined_output,
+                                        )
+                                        .map_err(|e| anyhow::anyhow!(e))?;
 
                                     accumulator.add_image(artifact).await;
 
@@ -943,7 +954,8 @@ mod tests_addendum {
         use crate::workflow::profile::WorkflowProfile;
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let env_toml = format!(r#"
+        let env_toml = format!(
+            r#"
         schema_version = "v0.5"
         name = "test"
         domain = "test.local"
@@ -954,7 +966,9 @@ mod tests_addendum {
         name = "api"
         [service.build]
         path = "{}"
-        "#, temp_dir.path().to_string_lossy());
+        "#,
+            temp_dir.path().to_string_lossy()
+        );
         let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let env_arc = std::sync::Arc::new(env);
@@ -1003,7 +1017,9 @@ mod tests_addendum {
         use crate::environment::Environment;
         use crate::workflow::profile::WorkflowProfile;
 
-        let env_toml = r#"
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env_toml = format!(
+            r#"
         schema_version = "v0.5"
         name = "test"
         domain = "test.local"
@@ -1013,9 +1029,11 @@ mod tests_addendum {
         [[service]]
         name = "api"
         [service.build]
-        path = "."
-        "#;
-        let env: Environment = toml::from_str(env_toml).unwrap();
+        path = "{}"
+        "#,
+            temp_dir.path().to_string_lossy()
+        );
+        let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let profile_toml = r#"
         environment = "test"
@@ -1049,7 +1067,9 @@ mod tests_addendum {
         assert!(plan.effects.mutates_filesystem);
 
         let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
-        let (pipeline, _) = planner.build_pipeline_from_plan(&plan, accumulator).unwrap();
+        let (pipeline, _) = planner
+            .build_pipeline_from_plan(&plan, accumulator)
+            .unwrap();
 
         let tasks: Vec<_> = pipeline.tasks().collect();
         assert!(tasks.iter().any(|t| t.name == "service:api:build"));
@@ -1059,7 +1079,10 @@ mod tests_addendum {
         let api_push = tasks.iter().find(|t| t.name == "service:api:push").unwrap();
         assert_eq!(api_push.dependencies, vec!["service:api:build"]);
 
-        let report = tasks.iter().find(|t| t.name == "workflow:image-report").unwrap();
+        let report = tasks
+            .iter()
+            .find(|t| t.name == "workflow:image-report")
+            .unwrap();
         assert_eq!(report.dependencies, vec!["service:api:push"]);
     }
 }
