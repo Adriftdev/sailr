@@ -232,7 +232,7 @@ mod tests {
                 from: "workflow:validate".to_string(),
                 to: "build:api".to_string(),
             }],
-            build_plan: None, push_plan: None,
+            build_plan: None, image_push_plan: None,
             effects: WorkflowEffects {
                 mutates_docker: true,
                 ..Default::default()
@@ -265,5 +265,58 @@ mod tests {
         let text = render_workflow_explain_text(&plan, "build:api").unwrap();
         assert!(text.contains("Task Explanation: build:api"));
         assert!(text.contains("Mutates Docker: true"));
+    }
+}
+
+pub fn render_image_push_plan_text(plan: &crate::workflow::image::ImagePushPlanReport) -> String {
+    let mut out = String::new();
+
+    out.push_str("Sailr image push plan:\n");
+    out.push_str(&format!("  environment: {}\n", plan.environment));
+    out.push_str(&format!(
+        "  mutates registry: {}\n\n",
+        if plan.mutates_registry { "yes" } else { "no" }
+    ));
+
+    out.push_str("Images:\n");
+
+    if plan.items.is_empty() {
+        out.push_str("  none\n");
+    } else {
+        for item in &plan.items {
+            out.push_str(&format!(
+                "  - service: {}\n    image: {}\n    action: would push\n",
+                item.service, item.image_ref
+            ));
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests_addendum {
+    use super::*;
+
+    #[test]
+    fn render_image_push_plan_text_includes_planned_image_ref() {
+        let report = crate::workflow::image::ImagePushPlanReport {
+            environment: "staging".to_string(),
+            mutates_registry: false,
+            items: vec![crate::workflow::image::ImagePushPlanItem {
+                service: "ci-build-hello".to_string(),
+                registry: "ghcr.io".to_string(),
+                repository: "Adriftdev/sailr/ci-build-hello".to_string(),
+                tag: "61eaa8b".to_string(),
+                image_ref: "ghcr.io/Adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
+                source_sha: Some("61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string()),
+                action: crate::workflow::image::ImagePushPlanAction::WouldPush,
+            }],
+        };
+
+        let text = render_image_push_plan_text(&report);
+        assert!(text.contains("Sailr image push plan:"));
+        assert!(text.contains("mutates registry: no"));
+        assert!(text.contains("ghcr.io/Adriftdev/sailr/ci-build-hello:61eaa8b"));
     }
 }

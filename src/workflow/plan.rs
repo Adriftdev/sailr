@@ -10,7 +10,7 @@ pub struct WorkflowPlan {
     pub tasks: Vec<WorkflowTaskPlan>,
     pub edges: Vec<WorkflowEdge>,
     pub build_plan: Option<SailrBuildPlan>,
-    pub push_plan: Option<crate::workflow::image::ImagePushPlan>,
+    pub image_push_plan: Option<crate::workflow::image::ImagePushPlanReport>,
     pub effects: WorkflowEffects,
 }
 

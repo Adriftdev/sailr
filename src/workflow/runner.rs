@@ -125,15 +125,11 @@ fn write_workflow_report(
         .collect::<Vec<_>>();
 
     let mut images: Vec<crate::workflow::image::ImageArtifact> = Vec::new();
-    let mut image_push_plan: Option<crate::workflow::image::ImagePushPlanReport> = None;
+    let image_push_plan: Option<crate::workflow::image::ImagePushPlanReport> = plan.image_push_plan.clone();
 
-    if let Some(ref pp) = plan.push_plan {
-        image_push_plan = Some(crate::workflow::image::ImagePushPlanReport {
-            plan: pp.clone(),
-        });
-        
+    if let Some(ref pp) = image_push_plan {
         for item in &pp.items {
-            images.push(item.to_artifact_placeholder(&profile.environment));
+            images.push(crate::workflow::image::ImageArtifact::from_push_plan_item(&profile.environment, item));
         }
     }
 
@@ -173,6 +169,7 @@ fn write_workflow_report(
     let report_dir = std::path::Path::new(".sailr")
         .join("reports")
         .join(&profile.name);
+
     std::fs::create_dir_all(&report_dir)
         .map_err(|e| format!("Failed to create report directory: {}", e))?;
 
@@ -180,8 +177,10 @@ fn write_workflow_report(
     let json_string = serde_json::to_string_pretty(&report)
         .map_err(|e| format!("Failed to serialize report: {}", e))?;
 
-    std::fs::write(&report_path, json_string)
+
+    std::fs::write(&report_path, &json_string)
         .map_err(|e| format!("Failed to write report: {}", e))?;
+
 
     Ok(())
 }
@@ -844,5 +843,92 @@ mod tests {
 
         let res = validate_workflow_safety(&profile, &runner, &args);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn ci_build_push_plan_json_report_includes_image_push_plan() {
+        use crate::environment::Environment;
+        use crate::workflow::profile::WorkflowProfile;
+        use crate::workflow::planner::WorkflowPlanner;
+        
+        let env_toml = r#"
+        schema_version = "v0.5"
+        name = "test"
+        domain = "test.local"
+        log_level = "info"
+        default_replicas = 1
+        registry = "ghcr.io"
+        [[service]]
+        name = "ci-build-hello"
+        [service.build]
+        path = "."
+        "#;
+        let env: Environment = toml::from_str(env_toml).unwrap();
+
+        let profile_toml = r#"
+        environment = "test"
+        mode = "build"
+        build = "plan"
+        push = "plan"
+        report = "json"
+        "#;
+        let mut profile: WorkflowProfile = toml::from_str(profile_toml).unwrap();
+        profile.name = "ci-build-push-plan".to_string();
+        let normalized = profile.normalize(false);
+        let runner_ctx = RunnerContext::detect(true);
+        let options = crate::builder::BuildOptions {
+            cache_dir: ".sailr/cache".to_string(),
+            force: false,
+            only: vec![],
+            ignore: vec![],
+            plan: false,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: None,
+        };
+
+        let planner = WorkflowPlanner::new(
+            normalized.clone(),
+            std::sync::Arc::new(env),
+            options,
+            runner_ctx.clone(),
+        );
+
+        let plan = planner.plan().unwrap();
+        
+        let result = runkernel::PipelineResult {
+            name: "test".to_string(),
+            duration: std::time::Duration::from_secs(1),
+            summary: runkernel::PipelineSummary {
+                name: "test".to_string(),
+                success: true,
+                completed: 1,
+                failed: 0,
+                skipped: 0,
+                cancelled: 0,
+                cached: 0,
+                rolled_back: 0,
+                rollback_failed: 0,
+            },
+            tasks: vec![],
+        };
+
+        // Write report into a temp directory to avoid polluting the project.
+        let temp = tempfile::tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        write_workflow_report(&normalized, &runner_ctx, &result, &plan).unwrap();
+
+        let report_path = temp.path().join(".sailr/reports/ci-build-push-plan/latest.json");
+        let content = std::fs::read_to_string(&report_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(json["image_push_plan"]["environment"], "test");
+        assert_eq!(json["image_push_plan"]["mutates_registry"], false);
+        assert_eq!(json["image_push_plan"]["items"][0]["action"], "would_push");
+
+        std::env::set_current_dir(original_dir).unwrap();
     }
 }

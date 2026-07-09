@@ -44,7 +44,7 @@ impl WorkflowPlanner {
         let mut edges = Vec::new();
         let mut effects = WorkflowEffects::default();
         let mut build_plan_opt = None;
-        let mut push_plan_opt = None;
+        let mut image_push_plan_opt = None;
 
         // 0. Validate Phase
         tasks.push(WorkflowTaskPlan {
@@ -179,18 +179,28 @@ impl WorkflowPlanner {
                             } else {
                                 self.env.registry.clone()
                             };
+                            let repository = format!("Adriftdev/sailr/{}", s.service.name);
                             let tag = crate::workflow::image::derive_image_tag(Some(&s.fingerprint.full_hash));
+                            let image_ref = format!("{}/{}:{}", registry, repository, tag);
                             items.push(crate::workflow::image::ImagePushPlanItem {
                                 service: s.service.name.clone(),
                                 registry,
-                                repository: format!("Adriftdev/sailr/{}", s.service.name),
+                                repository,
                                 tag,
+                                image_ref,
                                 source_sha: Some(s.fingerprint.full_hash.clone()),
+                                action: crate::workflow::image::ImagePushPlanAction::WouldPush,
                             });
                         }
                     }
+                    image_push_plan_opt = Some(crate::workflow::image::ImagePushPlanReport {
+                        environment: self.profile.environment.clone(),
+                        mutates_registry: false,
+                        items,
+                    });
+                } else {
+                    return Err("push=plan requires build=plan or build=run".to_string());
                 }
-                push_plan_opt = Some(crate::workflow::image::ImagePushPlan::new(items));
             }
             crate::workflow::profile::WorkflowStepMode::Run => {
                 // To be implemented in Stage 3
@@ -305,7 +315,7 @@ impl WorkflowPlanner {
             tasks,
             edges,
             build_plan: build_plan_opt,
-            push_plan: push_plan_opt,
+            image_push_plan: image_push_plan_opt,
             effects,
         })
     }
@@ -375,7 +385,7 @@ impl WorkflowPlanner {
                 return Err("workflow push dry-run is not supported".to_string());
             }
             crate::workflow::profile::WorkflowStepMode::Plan => {
-                let push_plan = plan.push_plan.clone().unwrap();
+                let push_plan = plan.image_push_plan.clone().unwrap();
                 let mut task = Task::new("workflow:push-plan");
                 
                 let deps_refs: Vec<&str> = last_tasks.iter().map(|s| s.as_str()).collect();
@@ -386,18 +396,7 @@ impl WorkflowPlanner {
                 task = task.exec_fn(move |_ctx| {
                     let push_plan = push_plan.clone();
                     async move {
-                        if push_plan.items.is_empty() {
-                            crate::LOGGER.info("No images to push.");
-                            return Ok(());
-                        }
-                        
-                        crate::LOGGER.info("Image Push Plan:");
-                        for item in &push_plan.items {
-                            crate::LOGGER.info(&format!(
-                                "  - {} -> {}/{}:{}",
-                                item.service, item.registry, item.repository, item.tag
-                            ));
-                        }
+                        crate::LOGGER.info(&crate::workflow::render::render_image_push_plan_text(&push_plan));
                         Ok(())
                     }
                 });
@@ -765,5 +764,128 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(task_names, expected);
+    }
+}
+
+#[cfg(test)]
+mod tests_addendum {
+    use super::*;
+
+    #[test]
+    fn ci_build_push_plan_workflow_plan_has_image_push_plan() {
+        use crate::environment::Environment;
+        use crate::workflow::profile::WorkflowProfile;
+
+        let env_toml = r#"
+        schema_version = "v0.5"
+        name = "test"
+        domain = "test.local"
+        log_level = "info"
+        default_replicas = 1
+        registry = "ghcr.io"
+        [[service]]
+        name = "api"
+        [service.build]
+        path = "."
+        "#;
+        let env: Environment = toml::from_str(env_toml).unwrap();
+
+        let profile_toml = r#"
+        environment = "test"
+        mode = "build"
+        build = "plan"
+        push = "plan"
+        "#;
+        let mut profile: WorkflowProfile = toml::from_str(profile_toml).unwrap();
+        profile.name = "ci-build-push-plan".to_string();
+        let normalized = profile.normalize(false);
+        let runner_ctx = RunnerContext::detect(true);
+        let options = crate::builder::BuildOptions {
+            cache_dir: ".sailr/cache".to_string(),
+            force: false,
+            only: vec![],
+            ignore: vec![],
+            plan: false,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: None,
+        };
+
+        let planner = WorkflowPlanner::new(
+            normalized,
+            std::sync::Arc::new(env),
+            options,
+            runner_ctx,
+        );
+
+        let plan = planner.plan().unwrap();
+        assert!(plan.image_push_plan.is_some());
+    }
+
+    #[test]
+    fn existing_profiles_do_not_carry_push_plan() {
+        use crate::environment::Environment;
+        use crate::workflow::profile::WorkflowProfile;
+
+        let env_toml = r#"
+        schema_version = "v0.5"
+        name = "test"
+        domain = "test.local"
+        log_level = "info"
+        default_replicas = 1
+        registry = "ghcr.io"
+        [[service]]
+        name = "api"
+        [service.build]
+        path = "."
+        "#;
+        let env: Environment = toml::from_str(env_toml).unwrap();
+
+        let env_arc = std::sync::Arc::new(env);
+        let profiles = vec![
+            r#"
+            environment = "test"
+            mode = "check"
+            "#,
+            r#"
+            environment = "test"
+            mode = "build"
+            build = "plan"
+            "#,
+            r#"
+            environment = "test"
+            mode = "build"
+            build = "plan"
+            generate = "run"
+            "#,
+        ];
+
+        for p_toml in profiles {
+            let profile: WorkflowProfile = toml::from_str(p_toml).unwrap();
+            let normalized = profile.normalize(false);
+            let runner_ctx = RunnerContext::detect(true);
+            let options = crate::builder::BuildOptions {
+                cache_dir: ".sailr/cache".to_string(),
+                force: false,
+                only: vec![],
+                ignore: vec![],
+                plan: false,
+                dry_run: false,
+                explain: false,
+                dump_scope: false,
+                policy: None,
+            };
+
+            let planner = WorkflowPlanner::new(
+                normalized,
+                env_arc.clone(),
+                options,
+                runner_ctx,
+            );
+
+            let plan = planner.plan().unwrap();
+            assert!(plan.image_push_plan.is_none());
+        }
     }
 }

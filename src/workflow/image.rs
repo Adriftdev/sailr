@@ -54,42 +54,41 @@ pub struct ImageArtifactReport {
     pub artifacts: Vec<ImageArtifact>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImagePushPlanAction {
+    WouldPush,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImagePushPlanItem {
     pub service: String,
     pub registry: String,
     pub repository: String,
     pub tag: String,
+    pub image_ref: String,
     pub source_sha: Option<String>,
+    pub action: ImagePushPlanAction,
 }
 
-impl ImagePushPlanItem {
-    pub fn to_artifact_placeholder(&self, environment: &str) -> ImageArtifact {
+impl ImageArtifact {
+    pub fn from_push_plan_item(environment: impl Into<String>, item: &ImagePushPlanItem) -> Self {
         ImageArtifact::tagged(
-            &self.service,
+            item.service.clone(),
             environment,
-            &self.registry,
-            &self.repository,
-            &self.tag,
-            self.source_sha.clone(),
+            item.registry.clone(),
+            item.repository.clone(),
+            item.tag.clone(),
+            item.source_sha.clone(),
         )
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct ImagePushPlan {
-    pub items: Vec<ImagePushPlanItem>,
-}
-
-impl ImagePushPlan {
-    pub fn new(items: Vec<ImagePushPlanItem>) -> Self {
-        Self { items }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImagePushPlanReport {
-    pub plan: ImagePushPlan,
+    pub environment: String,
+    pub mutates_registry: bool,
+    pub items: Vec<ImagePushPlanItem>,
 }
 
 pub fn derive_image_tag(source_sha: Option<&str>) -> String {
@@ -189,5 +188,33 @@ mod tests_derive {
         assert_eq!(derive_image_tag(Some("2bcc3f70984bb6d33d93bbcbb9eb3539ce033dc8")), "2bcc3f7");
         assert_eq!(derive_image_tag(Some("abc")), "abc");
         assert_eq!(derive_image_tag(None), "dev");
+    }
+}
+
+#[cfg(test)]
+mod tests_addendum {
+    use super::*;
+
+    #[test]
+    fn image_push_plan_report_serializes() {
+        let report = ImagePushPlanReport {
+            environment: "staging".to_string(),
+            mutates_registry: false,
+            items: vec![ImagePushPlanItem {
+                service: "ci-build-hello".to_string(),
+                registry: "ghcr.io".to_string(),
+                repository: "Adriftdev/sailr/ci-build-hello".to_string(),
+                tag: "61eaa8b".to_string(),
+                image_ref: "ghcr.io/Adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
+                source_sha: Some("61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string()),
+                action: ImagePushPlanAction::WouldPush,
+            }],
+        };
+
+        let json = serde_json::to_value(report).unwrap();
+
+        assert_eq!(json["environment"], "staging");
+        assert_eq!(json["mutates_registry"], false);
+        assert_eq!(json["items"][0]["action"], "would_push");
     }
 }
