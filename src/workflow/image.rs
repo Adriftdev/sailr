@@ -131,6 +131,21 @@ pub fn parse_pushed_digest(output: &str) -> Option<String> {
     })
 }
 
+pub fn pushed_artifact_from_output(
+    environment: &str,
+    item: &ImagePushPlanItem,
+    output: &str,
+) -> Result<ImageArtifact, String> {
+    let digest = parse_pushed_digest(output).ok_or_else(|| {
+        format!(
+            "image push succeeded but digest could not be captured for {}",
+            item.image_ref
+        )
+    })?;
+
+    Ok(ImageArtifact::from_push_plan_item(environment, item).with_digest(digest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,7 +156,7 @@ mod tests {
             "ci-build-hello",
             "staging",
             "ghcr.io",
-            "Adriftdev/sailr/ci-build-hello",
+            "adriftdev/sailr/ci-build-hello",
             "2bcc3f7",
             Some("2bcc3f70984bb6d33d93bbcbb9eb3539ce033dc8".to_string()),
         );
@@ -149,12 +164,12 @@ mod tests {
         assert_eq!(artifact.service, "ci-build-hello");
         assert_eq!(artifact.environment, "staging");
         assert_eq!(artifact.registry, "ghcr.io");
-        assert_eq!(artifact.repository, "Adriftdev/sailr/ci-build-hello");
+        assert_eq!(artifact.repository, "adriftdev/sailr/ci-build-hello");
         assert_eq!(artifact.tag, "2bcc3f7");
         assert_eq!(artifact.digest, None);
         assert_eq!(
             artifact.image_ref,
-            "ghcr.io/Adriftdev/sailr/ci-build-hello:2bcc3f7"
+            "ghcr.io/adriftdev/sailr/ci-build-hello:2bcc3f7"
         );
     }
 
@@ -164,7 +179,7 @@ mod tests {
             "ci-build-hello",
             "staging",
             "ghcr.io",
-            "Adriftdev/sailr/ci-build-hello",
+            "adriftdev/sailr/ci-build-hello",
             "2bcc3f7",
             None,
         )
@@ -173,7 +188,7 @@ mod tests {
         assert_eq!(artifact.digest.as_deref(), Some("sha256:abc123"));
         assert_eq!(
             artifact.image_ref,
-            "ghcr.io/Adriftdev/sailr/ci-build-hello@sha256:abc123"
+            "ghcr.io/adriftdev/sailr/ci-build-hello@sha256:abc123"
         );
     }
 
@@ -191,7 +206,7 @@ mod tests {
             "ci-build-hello",
             "staging",
             "ghcr.io",
-            "Adriftdev/sailr/ci-build-hello",
+            "adriftdev/sailr/ci-build-hello",
             "2bcc3f7",
             Some("2bcc3f70984bb6d33d93bbcbb9eb3539ce033dc8".to_string()),
         )
@@ -202,12 +217,12 @@ mod tests {
         assert_eq!(json["service"], "ci-build-hello");
         assert_eq!(json["environment"], "staging");
         assert_eq!(json["registry"], "ghcr.io");
-        assert_eq!(json["repository"], "Adriftdev/sailr/ci-build-hello");
+        assert_eq!(json["repository"], "adriftdev/sailr/ci-build-hello");
         assert_eq!(json["tag"], "2bcc3f7");
         assert_eq!(json["digest"], "sha256:abc123");
         assert_eq!(
             json["image_ref"],
-            "ghcr.io/Adriftdev/sailr/ci-build-hello@sha256:abc123"
+            "ghcr.io/adriftdev/sailr/ci-build-hello@sha256:abc123"
         );
     }
 }
@@ -226,7 +241,7 @@ mod tests_derive {
     }
 
     #[test]
-    fn parses_docker_push_digest() {
+    fn parses_digest_from_stdout_style_output() {
         let output = "latest: digest: sha256:abc123 size: 1234";
         assert_eq!(
             parse_pushed_digest(output).as_deref(),
@@ -235,9 +250,51 @@ mod tests_derive {
     }
 
     #[test]
+    fn parses_digest_from_stderr_style_combined_output() {
+        let output = "some stdout\nlatest: digest: sha256:def456 size: 1234";
+        assert_eq!(
+            parse_pushed_digest(output).as_deref(),
+            Some("sha256:def456")
+        );
+    }
+
+    #[test]
     fn returns_none_when_digest_missing() {
         let output = "pushed some layers";
         assert_eq!(parse_pushed_digest(output), None);
+    }
+
+    #[test]
+    fn test_pushed_artifact_from_output_success() {
+        let item = ImagePushPlanItem {
+            service: "api".to_string(),
+            registry: "ghcr.io".to_string(),
+            repository: "org/api".to_string(),
+            tag: "latest".to_string(),
+            image_ref: "ghcr.io/org/api:latest".to_string(),
+            source_sha: None,
+            action: ImagePushPlanAction::WouldPush,
+        };
+        let output = "digest: sha256:xyz";
+        let artifact = pushed_artifact_from_output("prod", &item, output).unwrap();
+        assert_eq!(artifact.digest, Some("sha256:xyz".to_string()));
+        assert_eq!(artifact.image_ref, "ghcr.io/org/api@sha256:xyz");
+    }
+
+    #[test]
+    fn test_pushed_artifact_from_output_failure() {
+        let item = ImagePushPlanItem {
+            service: "api".to_string(),
+            registry: "ghcr.io".to_string(),
+            repository: "org/api".to_string(),
+            tag: "latest".to_string(),
+            image_ref: "ghcr.io/org/api:latest".to_string(),
+            source_sha: None,
+            action: ImagePushPlanAction::WouldPush,
+        };
+        let output = "no digest here";
+        let err = pushed_artifact_from_output("prod", &item, output).unwrap_err();
+        assert_eq!(err, "image push succeeded but digest could not be captured for ghcr.io/org/api:latest");
     }
 }
 
@@ -253,9 +310,9 @@ mod tests_addendum {
             items: vec![ImagePushPlanItem {
                 service: "ci-build-hello".to_string(),
                 registry: "ghcr.io".to_string(),
-                repository: "Adriftdev/sailr/ci-build-hello".to_string(),
+                repository: "adriftdev/sailr/ci-build-hello".to_string(),
                 tag: "61eaa8b".to_string(),
-                image_ref: "ghcr.io/Adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
+                image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
                 source_sha: Some("61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string()),
                 action: ImagePushPlanAction::WouldPush,
             }],

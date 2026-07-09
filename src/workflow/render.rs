@@ -308,9 +308,9 @@ mod tests_addendum {
             items: vec![crate::workflow::image::ImagePushPlanItem {
                 service: "ci-build-hello".to_string(),
                 registry: "ghcr.io".to_string(),
-                repository: "Adriftdev/sailr/ci-build-hello".to_string(),
+                repository: "adriftdev/sailr/ci-build-hello".to_string(),
                 tag: "61eaa8b".to_string(),
-                image_ref: "ghcr.io/Adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
+                image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
                 source_sha: Some("61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string()),
                 action: crate::workflow::image::ImagePushPlanAction::WouldPush,
             }],
@@ -319,6 +319,6 @@ mod tests_addendum {
         let text = render_image_push_plan_text(&report);
         assert!(text.contains("Sailr image push plan:"));
         assert!(text.contains("mutates registry: no"));
-        assert!(text.contains("ghcr.io/Adriftdev/sailr/ci-build-hello:61eaa8b"));
+        assert!(text.contains("ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b"));
     }
 }

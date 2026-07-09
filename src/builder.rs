@@ -471,14 +471,14 @@ pub(crate) fn add_runkernel_tasks(
     }
 
     for service_plan in &plan.services {
-        let mut dependencies = service_plan.dependencies.clone();
+        let mut dependencies: Vec<String> = service_plan.dependencies.iter().map(|d| format!("service:{}:build", d)).collect();
         if service_plan.dirty && has_dirty_services && !plan.before_all.is_empty() {
             dependencies.push("build:before-all".to_string());
         }
         dependencies.sort();
         dependencies.dedup();
 
-        let mut task = Task::new(service_plan.service.name.clone())
+        let mut task = Task::new(format!("service:{}:build", service_plan.service.name))
             .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
             .cache_disabled();
 
@@ -503,6 +503,9 @@ pub(crate) fn add_runkernel_tasks(
             Task::new("build:after-all")
                 .depends_on(
                     &dirty_services
+                        .iter()
+                        .map(|s| format!("service:{}:build", s))
+                        .collect::<Vec<_>>()
                         .iter()
                         .map(String::as_str)
                         .collect::<Vec<_>>(),
@@ -535,7 +538,7 @@ async fn execute_service_build(
     let mut first_error = None;
 
     for (phase_name, commands) in phases.printable() {
-        if commands.is_empty() || phase_name == "finally" {
+        if commands.is_empty() || phase_name == "finally" || phase_name == "push" {
             continue;
         }
         started = true;
@@ -1135,7 +1138,8 @@ pub(crate) fn write_successful_service_caches(
         .collect::<HashSet<_>>();
 
     for service in plan.services.iter().filter(|service| service.dirty) {
-        if !completed_tasks.contains(service.service.name.as_str()) {
+        let task_name = format!("service:{}:build", service.service.name);
+        if !completed_tasks.contains(task_name.as_str()) {
             continue;
         }
 
@@ -1815,8 +1819,8 @@ mod tests {
         write_successful_service_caches(
             &plan,
             &pipeline_result(vec![
-                ("api", TaskStatus::Completed),
-                ("web", TaskStatus::Skipped),
+                ("service:api:build", TaskStatus::Completed),
+                ("service:web:build", TaskStatus::Skipped),
             ]),
         )
         .expect("cache write should succeed");

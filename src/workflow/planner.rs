@@ -153,7 +153,15 @@ impl WorkflowPlanner {
             crate::workflow::profile::WorkflowStepMode::DryRun => {
                 return Err("workflow push dry-run is not supported".to_string());
             }
-            crate::workflow::profile::WorkflowStepMode::Plan => {
+            crate::workflow::profile::WorkflowStepMode::Plan | crate::workflow::profile::WorkflowStepMode::Run => {
+                let is_run = self.profile.push == crate::workflow::profile::WorkflowStepMode::Run;
+
+                if is_run {
+                    effects.mutates_docker = true;
+                    effects.mutates_registry = true;
+                    effects.mutates_filesystem = true;
+                }
+
                 tasks.push(WorkflowTaskPlan {
                     id: "workflow:push-plan".to_string(),
                     label: "Push Plan".to_string(),
@@ -170,48 +178,11 @@ impl WorkflowPlanner {
                 }
                 last_tasks = vec!["workflow:push-plan".to_string()];
 
-                let mut items = Vec::new();
                 if let Some(ref bp) = build_plan_opt {
-                    for s in &bp.services {
-                        if s.dirty {
-                            let registry = if self.env.registry.host().is_empty() {
-                                "docker.io".to_string()
-                            } else {
-                                self.env.registry.host()
-                            };
-                            let namespace = self
-                                .env
-                                .registry
-                                .namespace()
-                                .unwrap_or_else(|| "Adriftdev/sailr".to_string());
-                            let repository = format!("{}/{}", namespace, s.service.name);
-                            let tag = crate::workflow::image::derive_image_tag(Some(
-                                &s.fingerprint.full_hash,
-                            ));
-                            let image_ref = format!("{}/{}:{}", registry, repository, tag);
-                            items.push(crate::workflow::image::ImagePushPlanItem {
-                                service: s.service.name.clone(),
-                                registry,
-                                repository,
-                                tag,
-                                image_ref,
-                                source_sha: Some(s.fingerprint.full_hash.clone()),
-                                action: crate::workflow::image::ImagePushPlanAction::WouldPush,
-                            });
-                        }
-                    }
-                    image_push_plan_opt = Some(crate::workflow::image::ImagePushPlanReport {
-                        environment: self.profile.environment.clone(),
-                        mutates_registry: false,
-                        items,
-                    });
+                    image_push_plan_opt = Some(self.build_image_push_plan_report(bp, is_run)?);
                 } else {
-                    return Err("push=plan requires build=plan or build=run".to_string());
+                    return Err("push requires build=plan or build=run".to_string());
                 }
-            }
-            crate::workflow::profile::WorkflowStepMode::Run => {
-                // To be implemented in Stage 3
-                return Err("workflow push run is not enabled in this stage".to_string());
             }
         }
 
@@ -327,6 +298,56 @@ impl WorkflowPlanner {
         })
     }
 
+    fn build_image_push_plan_report(
+        &self,
+        build_plan: &crate::builder::SailrBuildPlan,
+        mutates_registry: bool,
+    ) -> Result<crate::workflow::image::ImagePushPlanReport, String> {
+        let mut items = Vec::new();
+
+        for service_plan in &build_plan.services {
+            if !service_plan.dirty {
+                continue;
+            }
+
+            let registry = if self.env.registry.host().is_empty() {
+                "docker.io".to_string()
+            } else {
+                self.env.registry.host()
+            };
+
+            let namespace = self
+                .env
+                .registry
+                .namespace()
+                .unwrap_or_else(|| "adriftdev/sailr".to_string());
+
+            let repository = format!("{}/{}", namespace, service_plan.service.name);
+
+            let tag = crate::workflow::image::derive_image_tag(Some(
+                &service_plan.fingerprint.full_hash,
+            ));
+
+            let image_ref = format!("{}/{}:{}", registry, repository, tag);
+
+            items.push(crate::workflow::image::ImagePushPlanItem {
+                service: service_plan.service.name.clone(),
+                registry,
+                repository,
+                tag,
+                image_ref,
+                source_sha: Some(service_plan.fingerprint.full_hash.clone()),
+                action: crate::workflow::image::ImagePushPlanAction::WouldPush,
+            });
+        }
+
+        Ok(crate::workflow::image::ImagePushPlanReport {
+            environment: self.profile.environment.clone(),
+            mutates_registry,
+            items,
+        })
+    }
+
     pub fn build_pipeline_from_plan(
         &self,
         plan: &WorkflowPlan,
@@ -378,7 +399,7 @@ impl WorkflowPlanner {
                     build_deps.push("build:after-all".to_string());
                 } else {
                     for s in &bp.services {
-                        build_deps.push(s.service.name.clone());
+                        build_deps.push(format!("service:{}:build", s.service.name));
                     }
                 }
 
@@ -426,8 +447,11 @@ impl WorkflowPlanner {
                         let item_clone = item.clone();
                         let env_clone = self.env.clone();
 
-                        let task = Task::new(format!("workflow:push-{}", service_name))
-                            .depends_on(&[&service_name])
+                        let build_task_name = format!("service:{}:build", service_name);
+                        let push_task_name = format!("service:{}:push", service_name);
+
+                        let task = Task::new(push_task_name.clone())
+                            .depends_on(&[build_task_name.as_str()])
                             .exec_fn(move |_ctx| {
                                 let image_ref = image_ref.clone();
                                 let accumulator = accumulator.clone();
@@ -435,6 +459,14 @@ impl WorkflowPlanner {
                                 let env_clone = env_clone.clone();
                                 async move {
                                     crate::LOGGER.info(&format!("Pushing {}", image_ref));
+
+                                    let svc = env_clone.services.iter().find(|s| s.name == item.service).unwrap();
+                                    let registry = if env_clone.registry.host().is_empty() { "docker.io".to_string() } else { env_clone.registry.host() };
+                                    let local_image = format!("{}/{}:{}", registry, svc.name, svc.version);
+                                    
+                                    let mut tag_cmd = tokio::process::Command::new("docker");
+                                    tag_cmd.arg("tag").arg(&local_image).arg(&image_ref);
+                                    let _ = tag_cmd.output().await;
 
                                     let mut cmd = tokio::process::Command::new("docker");
                                     cmd.arg("push").arg(&image_ref);
@@ -451,28 +483,15 @@ impl WorkflowPlanner {
                                         ));
                                     }
 
-                                    let output_str = String::from_utf8_lossy(&output.stdout);
-                                    let digest =
-                                        crate::workflow::image::parse_pushed_digest(&output_str);
+                                    let stdout_str = String::from_utf8_lossy(&output.stdout);
+                                    let stderr_str = String::from_utf8_lossy(&output.stderr);
+                                    let combined_output = format!("{}\n{}", stdout_str, stderr_str);
 
-                                    let mut artifact =
-                                        crate::workflow::image::ImageArtifact::from_push_plan_item(
-                                            &env_clone.name,
-                                            &item,
-                                        );
-
-                                    if let Some(digest) = digest {
-                                        artifact.digest = Some(digest.clone());
-                                        artifact.image_ref = format!(
-                                            "{}/{}@{}",
-                                            artifact.registry, artifact.repository, digest
-                                        );
-                                    } else {
-                                        crate::LOGGER.warn(&format!(
-                                            "Could not parse digest from push output for {}",
-                                            image_ref
-                                        ));
-                                    }
+                                    let artifact = crate::workflow::image::pushed_artifact_from_output(
+                                        &env_clone.name,
+                                        &item,
+                                        &combined_output,
+                                    ).map_err(|e| anyhow::anyhow!(e))?;
 
                                     accumulator.add_image(artifact).await;
 
@@ -480,7 +499,7 @@ impl WorkflowPlanner {
                                 }
                             });
                         pipeline.add(task);
-                        push_tasks.push(format!("workflow:push-{}", service_name));
+                        push_tasks.push(push_task_name);
                     }
                 }
 
@@ -737,8 +756,9 @@ mod tests {
     fn ci_build_plan_creates_build_plan() {
         let mut env = Environment::new("local");
         let mut svc = crate::environment::Service::new("dummy", None, "latest");
+        let temp_dir = tempfile::tempdir().unwrap();
         svc.build = Some(crate::environment::ServiceBuildConfig {
-            path: ".".to_string(),
+            path: temp_dir.path().to_string_lossy().to_string(),
             include: None,
             relies_on: None,
             before_synchronous: None,
@@ -775,8 +795,9 @@ mod tests {
     fn ci_generate_creates_generate() {
         let mut env = Environment::new("local");
         let mut svc = crate::environment::Service::new("dummy", None, "latest");
+        let _temp_dir = tempfile::tempdir().unwrap();
         svc.build = Some(crate::environment::ServiceBuildConfig {
-            path: ".".to_string(),
+            path: _temp_dir.path().to_string_lossy().to_string(),
             include: None,
             relies_on: None,
             before_synchronous: None,
@@ -813,8 +834,9 @@ mod tests {
     fn local_deploy_creates_deploy_tasks() {
         let mut env = Environment::new("local");
         let mut svc = crate::environment::Service::new("dummy", None, "latest");
+        let _temp_dir = tempfile::tempdir().unwrap();
         svc.build = Some(crate::environment::ServiceBuildConfig {
-            path: ".".to_string(),
+            path: _temp_dir.path().to_string_lossy().to_string(),
             include: None,
             relies_on: None,
             before_synchronous: None,
@@ -920,7 +942,8 @@ mod tests_addendum {
         use crate::environment::Environment;
         use crate::workflow::profile::WorkflowProfile;
 
-        let env_toml = r#"
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env_toml = format!(r#"
         schema_version = "v0.5"
         name = "test"
         domain = "test.local"
@@ -930,9 +953,9 @@ mod tests_addendum {
         [[service]]
         name = "api"
         [service.build]
-        path = "."
-        "#;
-        let env: Environment = toml::from_str(env_toml).unwrap();
+        path = "{}"
+        "#, temp_dir.path().to_string_lossy());
+        let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let env_arc = std::sync::Arc::new(env);
         let profiles = vec![
@@ -974,5 +997,69 @@ mod tests_addendum {
             let plan = planner.plan().unwrap();
             assert!(plan.image_push_plan.is_none());
         }
+    }
+    #[test]
+    fn push_run_generates_correct_execution_graph() {
+        use crate::environment::Environment;
+        use crate::workflow::profile::WorkflowProfile;
+
+        let env_toml = r#"
+        schema_version = "v0.5"
+        name = "test"
+        domain = "test.local"
+        log_level = "info"
+        default_replicas = 1
+        registry = "ghcr.io"
+        [[service]]
+        name = "api"
+        [service.build]
+        path = "."
+        "#;
+        let env: Environment = toml::from_str(env_toml).unwrap();
+
+        let profile_toml = r#"
+        environment = "test"
+        mode = "build"
+        build = "run"
+        push = "run"
+        "#;
+        let mut profile: WorkflowProfile = toml::from_str(profile_toml).unwrap();
+        profile.name = "ci-build-push".to_string();
+        let normalized = profile.normalize(false);
+        let runner_ctx = RunnerContext::detect(true);
+        let options = crate::builder::BuildOptions {
+            cache_dir: ".sailr/cache".to_string(),
+            force: true, // force to ensure it's dirty
+            only: vec![],
+            ignore: vec![],
+            plan: false,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: None,
+        };
+
+        let planner =
+            WorkflowPlanner::new(normalized, std::sync::Arc::new(env), options, runner_ctx);
+
+        let plan = planner.plan().unwrap();
+        assert!(plan.image_push_plan.is_some());
+        assert!(plan.effects.mutates_registry);
+        assert!(plan.effects.mutates_docker);
+        assert!(plan.effects.mutates_filesystem);
+
+        let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
+        let (pipeline, _) = planner.build_pipeline_from_plan(&plan, accumulator).unwrap();
+
+        let tasks: Vec<_> = pipeline.tasks().collect();
+        assert!(tasks.iter().any(|t| t.name == "service:api:build"));
+        assert!(tasks.iter().any(|t| t.name == "service:api:push"));
+        assert!(tasks.iter().any(|t| t.name == "workflow:image-report"));
+
+        let api_push = tasks.iter().find(|t| t.name == "service:api:push").unwrap();
+        assert_eq!(api_push.dependencies, vec!["service:api:build"]);
+
+        let report = tasks.iter().find(|t| t.name == "workflow:image-report").unwrap();
+        assert_eq!(report.dependencies, vec!["service:api:push"]);
     }
 }

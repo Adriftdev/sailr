@@ -2,13 +2,21 @@ name: Image Build and Push
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - experiment/runkerneljobs:
+    inputs:
+      run_ci_build_push:
+        description: 'Check to enable mutating registry push'
+        required: true
+        type: boolean
 
+jobs:
   build_and_push:
+    if: ${{ github.event.inputs.run_ci_build_push == 'true' }}
     name: Build and Push Images
     runs-on: ubuntu-latest
+    environment: image-push
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -19,5 +27,18 @@ on:
       - name: Build Sailr
         run: cargo build --release
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run CI Build and Push Workflow
         run: target/release/sailr workflow run ci-build-push --non-interactive --apply
+
+      - name: Upload Image Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-report
+          path: .sailr/reports/ci-build-push/latest.json
