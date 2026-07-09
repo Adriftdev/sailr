@@ -43,6 +43,13 @@ impl RegistryConfig {
             Self::Detailed { namespace, .. } => namespace.clone(),
         }
     }
+
+    pub fn prefix(&self) -> String {
+        match self.namespace() {
+            Some(ns) => format!("{}/{}", self.host(), ns),
+            None => self.host(),
+        }
+    }
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -534,7 +541,7 @@ impl Environment {
             ("name".to_string(), self.name.clone()),
             ("log_level".to_string(), self.log_level.clone()),
             ("replicas".to_string(), self.default_replicas.to_string()),
-            ("registry".to_string(), self.registry.host()),
+            ("registry".to_string(), self.registry.prefix()),
             ("domain".to_string(), self.domain.clone()),
             ("deployment_date".to_string(), get_current_timestamp()),
             (

@@ -465,17 +465,28 @@ impl WorkflowPlanner {
                                         .iter()
                                         .find(|s| s.name == item.service)
                                         .unwrap();
-                                    let registry = if env_clone.registry.host().is_empty() {
+                                    let registry = if env_clone.registry.prefix().is_empty() {
                                         "docker.io".to_string()
                                     } else {
-                                        env_clone.registry.host()
+                                        env_clone.registry.prefix()
                                     };
                                     let local_image =
                                         format!("{}/{}:{}", registry, svc.name, svc.version);
 
                                     let mut tag_cmd = tokio::process::Command::new("docker");
                                     tag_cmd.arg("tag").arg(&local_image).arg(&image_ref);
-                                    let _ = tag_cmd.output().await;
+                                    let tag_output = tag_cmd.output().await.map_err(|e| {
+                                        anyhow::anyhow!("Failed to execute docker tag: {}", e)
+                                    })?;
+                                    if !tag_output.status.success() {
+                                        let stderr = String::from_utf8_lossy(&tag_output.stderr);
+                                        return Err(anyhow::anyhow!(
+                                            "Docker tag failed for {} to {}: {}",
+                                            local_image,
+                                            image_ref,
+                                            stderr
+                                        ));
+                                    }
 
                                     let mut cmd = tokio::process::Command::new("docker");
                                     cmd.arg("push").arg(&image_ref);
