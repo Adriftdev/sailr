@@ -2,8 +2,10 @@ name: Image Build and Push
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - experiment/runkerneljobs:
 
-jobs:
   build_and_push:
     name: Build and Push Images
     runs-on: ubuntu-latest
