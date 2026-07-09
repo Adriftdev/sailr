@@ -123,6 +123,8 @@ fn write_workflow_report(
         })
         .collect::<Vec<_>>();
 
+    let images: Vec<crate::workflow::image::ImageArtifact> = Vec::new();
+
     let mut report = serde_json::json!({
         "profile": profile.name,
         "mode": profile.mode.as_str(),
@@ -134,7 +136,8 @@ fn write_workflow_report(
             "skipped": result.summary.skipped,
             "cancelled": result.summary.cancelled,
             "items": task_items
-        }
+        },
+        "images": images
     });
 
     if profile.deploy == crate::workflow::profile::WorkflowStepMode::Plan {
