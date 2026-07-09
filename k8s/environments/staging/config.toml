@@ -3,7 +3,7 @@ name = "staging"
 log_level = "INFO"
 domain = "staging.example.local"
 default_replicas = 1
-registry = "europe-west2-docker.pkg.dev/skyfleet-staging/skyfleet"
+registry = "docker.io"
 
 [[service]]
 name = "hello-sailr"
