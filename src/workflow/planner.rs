@@ -726,7 +726,9 @@ mod tests {
         let planner =
             WorkflowPlanner::new(profile, Arc::new(env), dummy_options(false), dummy_runner());
         let plan = planner.plan().unwrap();
-        let (pipeline, _) = planner.build_pipeline_from_plan(&plan).unwrap();
+        let (pipeline, _) = planner
+            .build_pipeline_from_plan(&plan, Default::default())
+            .unwrap();
         let task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
         assert_eq!(task_names, vec!["workflow:validate-config"]);
     }
@@ -756,7 +758,9 @@ mod tests {
         let planner =
             WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true), dummy_runner());
         let plan = planner.plan().unwrap();
-        let (pipeline, _) = planner.build_pipeline_from_plan(&plan).unwrap();
+        let (pipeline, _) = planner
+            .build_pipeline_from_plan(&plan, Default::default())
+            .unwrap();
         let mut task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
         task_names.sort();
         let mut expected = vec![
@@ -791,7 +795,9 @@ mod tests {
         let planner =
             WorkflowPlanner::new(profile, Arc::new(env), dummy_options(true), dummy_runner());
         let plan = planner.plan().unwrap();
-        let (pipeline, _) = planner.build_pipeline_from_plan(&plan).unwrap();
+        let (pipeline, _) = planner
+            .build_pipeline_from_plan(&plan, Default::default())
+            .unwrap();
         let mut task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
         task_names.sort();
         let mut expected = vec![
@@ -838,7 +844,9 @@ mod tests {
         assert!(task_kinds.contains(&WorkflowTaskKind::Approval));
         assert!(task_kinds.contains(&WorkflowTaskKind::Deploy));
 
-        let (pipeline, _) = planner.build_pipeline_from_plan(&plan).unwrap();
+        let (pipeline, _) = planner
+            .build_pipeline_from_plan(&plan, Default::default())
+            .unwrap();
         let mut task_names: Vec<String> = pipeline.tasks().map(|t| t.name.clone()).collect();
         task_names.sort();
 

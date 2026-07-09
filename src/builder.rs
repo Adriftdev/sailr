@@ -1615,7 +1615,7 @@ mod tests {
         write_project(&service_path);
 
         let mut env = Environment::new("dev");
-        env.registry = "registry.local".to_string();
+        env.registry = crate::environment::RegistryConfig::Simple("registry.local".to_string());
         env.platform = Some("linux/amd64".to_string());
         let service = service("api", &service_path, "true".to_string());
         let mut build = service.build.clone().unwrap();

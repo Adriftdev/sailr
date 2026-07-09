@@ -950,7 +950,14 @@ mod tests {
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp.path()).unwrap();
 
-        write_workflow_report(&normalized, &runner_ctx, &result, &plan).unwrap();
+        write_workflow_report(
+            &normalized,
+            &runner_ctx,
+            &result,
+            &plan,
+            &Default::default(),
+        )
+        .unwrap();
 
         let report_path = temp
             .path()
