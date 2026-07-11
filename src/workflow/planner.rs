@@ -464,7 +464,7 @@ impl WorkflowPlanner {
                                         .services
                                         .iter()
                                         .find(|s| s.name == item.service)
-                                        .unwrap();
+                                        .ok_or_else(|| anyhow::anyhow!("Service {} not found in environment", item.service))?;
                                     let registry = if env_clone.registry.prefix().is_empty() {
                                         "docker.io".to_string()
                                     } else {
@@ -507,11 +507,25 @@ impl WorkflowPlanner {
                                     let stderr_str = String::from_utf8_lossy(&output.stderr);
                                     let combined_output = format!("{}\n{}", stdout_str, stderr_str);
 
+                                    let mut inspect_cmd = tokio::process::Command::new("docker");
+                                    inspect_cmd.arg("inspect").arg("--format={{index .RepoDigests 0}}").arg(&image_ref);
+                                    let inspect_output = inspect_cmd.output().await.ok();
+                                    
+                                    let structured_digest = inspect_output.and_then(|out| {
+                                        if out.status.success() {
+                                            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                                            stdout.split('@').nth(1).map(|s| s.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    });
+
                                     let artifact =
                                         crate::workflow::image::pushed_artifact_from_output(
                                             &env_clone.name,
                                             &item,
                                             &combined_output,
+                                            structured_digest.as_deref(),
                                         )
                                         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -1057,7 +1071,7 @@ mod tests_addendum {
         let normalized = profile.normalize(false);
         let runner_ctx = RunnerContext::detect(true);
         let options = crate::builder::BuildOptions {
-            cache_dir: ".sailr/cache".to_string(),
+            cache_dir: temp_dir.path().join(".sailr/cache").to_string_lossy().to_string(),
             force: true, // force to ensure it's dirty
             only: vec![],
             ignore: vec![],

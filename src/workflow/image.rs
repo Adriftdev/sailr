@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
-
 use std::sync::Arc;
+
+use crate::workflow::error::ArtifactError;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct WorkflowReportData {
-    pub images: Vec<ImageArtifact>,
+    pub published_artifacts: Vec<PublishedImageArtifact>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -13,9 +14,9 @@ pub struct WorkflowReportAccumulator {
 }
 
 impl WorkflowReportAccumulator {
-    pub async fn add_image(&self, artifact: ImageArtifact) {
+    pub async fn add_image(&self, artifact: PublishedImageArtifact) {
         let mut inner = self.inner.lock().await;
-        inner.images.push(artifact);
+        inner.published_artifacts.push(artifact);
     }
 
     pub async fn snapshot(&self) -> WorkflowReportData {
@@ -72,9 +73,75 @@ impl ImageArtifact {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishedImageArtifact {
+    pub service: String,
+    pub environment: String,
+    pub registry: String,
+    pub repository: String,
+    pub tag: String,
+    pub digest: String,
+    pub image_ref: String,
+    pub source_sha: String,
+    pub published_at: String,
+}
+
+impl PublishedImageArtifact {
+    pub fn from_push_result(
+        environment: &str,
+        item: &ImagePushPlanItem,
+        digest: &str,
+        source_sha: &str,
+        published_at: &str,
+    ) -> Result<Self, ArtifactError> {
+        validate_digest(digest)?;
+        
+        let image_ref = format!("{}/{}@{}", item.registry, item.repository, digest);
+        
+        if source_sha.is_empty() {
+            return Err(ArtifactError::Validation("source_sha cannot be empty".to_string()));
+        }
+        if item.service.is_empty() {
+            return Err(ArtifactError::Validation("service cannot be empty".to_string()));
+        }
+        if item.registry.is_empty() {
+            return Err(ArtifactError::Validation("registry cannot be empty".to_string()));
+        }
+        if item.repository.is_empty() {
+            return Err(ArtifactError::Validation("repository cannot be empty".to_string()));
+        }
+
+        Ok(Self {
+            service: item.service.clone(),
+            environment: environment.to_string(),
+            registry: item.registry.clone(),
+            repository: item.repository.clone(),
+            tag: item.tag.clone(),
+            digest: digest.to_string(),
+            image_ref,
+            source_sha: source_sha.to_string(),
+            published_at: published_at.to_string(),
+        })
+    }
+}
+
+pub fn validate_digest(value: &str) -> Result<(), ArtifactError> {
+    if !value.starts_with("sha256:") {
+        return Err(ArtifactError::Validation("digest must start with sha256:".to_string()));
+    }
+    let hex_part = &value[7..];
+    if hex_part.len() != 64 {
+        return Err(ArtifactError::Validation("digest hex part must be exactly 64 characters long".to_string()));
+    }
+    if !hex_part.chars().all(|c| c.is_ascii_hexdigit() && c.is_lowercase() || c.is_numeric()) {
+        return Err(ArtifactError::Validation("digest must contain only lowercase hexadecimal characters".to_string()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ImageArtifactReport {
-    pub artifacts: Vec<ImageArtifact>,
+    pub published_artifacts: Vec<PublishedImageArtifact>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,15 +202,31 @@ pub fn pushed_artifact_from_output(
     environment: &str,
     item: &ImagePushPlanItem,
     output: &str,
-) -> Result<ImageArtifact, String> {
-    let digest = parse_pushed_digest(output).ok_or_else(|| {
+    structured_digest: Option<&str>,
+) -> Result<PublishedImageArtifact, String> {
+    let parsed_digest = parse_pushed_digest(output).ok_or_else(|| {
         format!(
             "image push succeeded but digest could not be captured for {}",
             item.image_ref
         )
     })?;
 
-    Ok(ImageArtifact::from_push_plan_item(environment, item).with_digest(digest))
+    if let Some(structured) = structured_digest {
+        if structured != parsed_digest {
+            return Err(format!("digest mismatch for {}: parsed '{}' != structured '{}'", item.image_ref, parsed_digest, structured));
+        }
+    }
+
+    let source_sha = item.source_sha.as_deref().unwrap_or("dev");
+    let published_at = chrono::Utc::now().to_rfc3339();
+
+    PublishedImageArtifact::from_push_result(
+        environment,
+        item,
+        &parsed_digest,
+        source_sha,
+        &published_at,
+    ).map_err(|e| format!("invalid published artifact: {}", e))
 }
 
 #[cfg(test)]
@@ -197,7 +280,7 @@ mod tests {
         let report = ImageArtifactReport::default();
         let json = serde_json::to_value(report).unwrap();
 
-        assert_eq!(json["artifacts"], serde_json::json!([]));
+        assert_eq!(json["published_artifacts"], serde_json::json!([]));
     }
 
     #[test]
@@ -272,13 +355,13 @@ mod tests_derive {
             repository: "org/api".to_string(),
             tag: "latest".to_string(),
             image_ref: "ghcr.io/org/api:latest".to_string(),
-            source_sha: None,
+            source_sha: Some("abc12345".to_string()),
             action: ImagePushPlanAction::WouldPush,
         };
-        let output = "digest: sha256:xyz";
-        let artifact = pushed_artifact_from_output("prod", &item, output).unwrap();
-        assert_eq!(artifact.digest, Some("sha256:xyz".to_string()));
-        assert_eq!(artifact.image_ref, "ghcr.io/org/api@sha256:xyz");
+        let output = "digest: sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        let artifact = pushed_artifact_from_output("prod", &item, output, None).unwrap();
+        assert_eq!(artifact.digest, "sha256:0000000000000000000000000000000000000000000000000000000000000000");
+        assert_eq!(artifact.image_ref, "ghcr.io/org/api@sha256:0000000000000000000000000000000000000000000000000000000000000000");
     }
 
     #[test]
@@ -293,11 +376,31 @@ mod tests_derive {
             action: ImagePushPlanAction::WouldPush,
         };
         let output = "no digest here";
-        let err = pushed_artifact_from_output("prod", &item, output).unwrap_err();
+        let err = pushed_artifact_from_output("prod", &item, output, None).unwrap_err();
         assert_eq!(
             err,
             "image push succeeded but digest could not be captured for ghcr.io/org/api:latest"
         );
+    }
+
+    #[test]
+    fn test_validate_digest_valid() {
+        assert!(validate_digest("sha256:0000000000000000000000000000000000000000000000000000000000000000").is_ok());
+    }
+
+    #[test]
+    fn test_validate_digest_missing_prefix() {
+        assert!(validate_digest("0000000000000000000000000000000000000000000000000000000000000000").is_err());
+    }
+
+    #[test]
+    fn test_validate_digest_truncated() {
+        assert!(validate_digest("sha256:000").is_err());
+    }
+
+    #[test]
+    fn test_validate_digest_non_hex() {
+        assert!(validate_digest("sha256:zzzz000000000000000000000000000000000000000000000000000000000000").is_err());
     }
 }
 

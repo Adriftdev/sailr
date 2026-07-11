@@ -50,8 +50,16 @@ pub struct WorkflowEffects {
     pub mutates_filesystem: bool,
     pub mutates_docker: bool,
     pub mutates_registry: bool,
+    pub mutates_git: bool,
     pub mutates_cluster: bool,
     pub prompts_user: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum DeliveryTargetKind {
+    RenderOnly,
+    GitOps,
+    KubernetesDirect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

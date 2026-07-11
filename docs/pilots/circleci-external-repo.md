@@ -1,36 +1,56 @@
-# CircleCI External Repo Pilot
+# CircleCI External Repository Pilot
 
-## External repo
-https://github.com/josh-tracey/sailr-travis-pilot
+This document records the validation of Sailr operating within an external repository (Stage 3.5). 
 
-## Sailr revision
-`experiment/runkernel`
+## Pilot Objectives
+- Prove that Sailr successfully runs outside of its own source tree.
+- Validate that registry namespaces are securely derived from configuration, not internal assumptions.
+- Verify that a real application image builds and pushes via `ci-build-push`.
+- Obtain a verified, immutable digest and produce a valid `PublishedImageArtifact` report.
+- Verify CI approval gating within CircleCI pipelines.
 
-## CI provider
-CircleCI
+## Execution Record
 
-## Registry
-`europe-west2-docker.pkg.dev` (GCP Artifact Registry)
+- **Sailr CLI Revision:** [Insert Commit Hash]
+- **External Repository Revision:** [Insert App Commit Hash]
+- **CI Provider:** CircleCI
+- **Environment:** `staging`
+- **Registry Target:** [e.g. `ghcr.io/org/app`]
 
-## Service
-`skyfleet`
+### Diagnostic Output
+*To obtain the diagnostic configuration:*
+```bash
+sailr workflow inspect ci-build-push
+```
 
-## Profiles tested
-- `ci-build-push-plan`
-- `ci-build-push`
+### Required Commands
+During the pipeline, the following commands should successfully run:
 
-## What passed
-- Sailr installed from Git revision.
-- Push plan ran in CircleCI.
-- CircleCI approval gate configured and worked.
-- Sailr accepted `approval = external`.
-- Image pushed to registry (GCP).
-- Digest captured.
-- Report validated with jq.
+1. **Plan Phase:**
+```bash
+sailr workflow plan ci-build-push-plan
+```
 
-## Issues found
-- Initial failure: `CI push requires approval=external`.
-- Resolution: Kept `approval = external` in `sailr.workflow.toml` and added `approve_image_push` job of `type: approval` to CircleCI configuration to align manual approval gates with Sailr's CI safety constraints.
+2. **Graph Rendering:**
+```bash
+sailr workflow graph ci-build-push-plan --format mermaid
+```
 
-## Follow-up work
-- Provider-specific error messages implemented in Sailr (`src/workflow/runner.rs`) to guide developers towards correct CI setups for CircleCI, GitHub Actions, and Travis.
+3. **Dry-Run Plan Execution:**
+```bash
+sailr workflow run ci-build-push-plan --non-interactive
+```
+
+4. **Protected Publication:** *(requires external approval gate in CircleCI prior to execution)*
+```bash
+sailr workflow run ci-build-push --non-interactive --apply
+```
+
+## Results & Findings
+
+- **Published Image Ref:** `[Captured digest ref]`
+- **Report Path:** `[Output path to the publication report]`
+- **Issues Discovered:**
+  - *Document any path resolution issues encountered during the external build.*
+- **Fixes Applied:**
+  - *Document configuration tweaks or Sailr patches required to unblock execution.*

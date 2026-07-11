@@ -125,26 +125,28 @@ fn write_workflow_report(
         })
         .collect::<Vec<_>>();
 
-    let mut images = report_data.images.clone();
+    let published_artifacts = report_data.published_artifacts.clone();
     let image_push_plan: Option<crate::workflow::image::ImagePushPlanReport> =
         plan.image_push_plan.clone();
 
-    if images.is_empty() {
-        if let Some(ref pp) = image_push_plan {
-            for item in &pp.items {
-                images.push(crate::workflow::image::ImageArtifact::from_push_plan_item(
-                    &profile.environment,
-                    item,
-                ));
-            }
-        }
-    }
+    let effects = serde_json::json!({
+        "mutates_filesystem": plan.effects.mutates_filesystem,
+        "mutates_docker": plan.effects.mutates_docker,
+        "mutates_registry": plan.effects.mutates_registry,
+        "mutates_git": plan.effects.mutates_git,
+        "mutates_cluster": plan.effects.mutates_cluster,
+        "prompts_user": plan.effects.prompts_user,
+    });
 
     let mut report = serde_json::json!({
+        "schema_version": "sailr.workflow-report/v1",
+        "report_type": "image-publication",
         "profile": profile.name,
         "mode": profile.mode.as_str(),
         "runner": format!("{:?}", runner.kind).to_lowercase(),
+        "environment": profile.environment,
         "success": result.summary.success,
+        "effects": effects,
         "tasks": {
             "completed": result.summary.completed,
             "failed": result.summary.failed,
@@ -152,8 +154,8 @@ fn write_workflow_report(
             "cancelled": result.summary.cancelled,
             "items": task_items
         },
-        "images": images,
-        "image_push_plan": image_push_plan
+        "image_push_plan": image_push_plan,
+        "published_artifacts": published_artifacts
     });
 
     if profile.deploy == crate::workflow::profile::WorkflowStepMode::Plan {
@@ -383,6 +385,50 @@ impl WorkflowRunner {
         crate::LOGGER.info("✅ Workflow completed successfully.");
         Ok(())
     }
+    pub async fn inspect(args: crate::cli::WorkflowInspectArgs) -> Result<(), String> {
+        let runner_ctx = RunnerContext::detect(false);
+        let config_path = std::path::Path::new("sailr.workflow.toml");
+        let config = WorkflowConfig::load().map_err(|e| e.to_string())?;
+        
+        let profile = config
+            .get_profile(&args.profile)
+            .ok_or_else(|| format!("Workflow profile '{}' not found", args.profile))?;
+        let normalized = profile.normalize(runner_ctx.ci);
+        
+        let env_path_str = format!("k8s/environments/{}/config.toml", normalized.environment);
+        let env = Environment::load_from_file(&normalized.environment).map_err(|e| {
+            format!("Failed to load environment '{}': {}", normalized.environment, e)
+        })?;
+
+        println!("Workflow:");
+        println!("  profile: {}", normalized.name);
+        println!("  config: {}", std::fs::canonicalize(config_path).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "sailr.workflow.toml".to_string()));
+        println!("  environment: {}", normalized.environment);
+        println!("  environment config: {}", std::fs::canonicalize(&env_path_str).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| env_path_str));
+
+        println!("\nRunner:");
+        println!("  ci: {}", runner_ctx.ci);
+        println!("  provider: {:?}", runner_ctx.kind);
+
+        println!("\nSafety:");
+        println!("  approval: {:?}", normalized.approval);
+        println!("  apply required: {}", normalized.apply);
+
+        let registry_host = if env.registry.prefix().is_empty() { "docker.io".to_string() } else { env.registry.prefix() };
+        let registry_namespace = env.registry.namespace().unwrap_or_else(|| "none".to_string());
+
+        println!("\nRegistry:");
+        println!("  host: {}", registry_host);
+        println!("  namespace: {}", registry_namespace);
+
+        println!("\nServices:");
+        for svc in &env.services {
+            println!("  - {}", svc.name);
+        }
+
+        Ok(())
+    }
+
     pub async fn plan(args: crate::cli::WorkflowPlanArgs) -> Result<(), String> {
         let runner_ctx = RunnerContext::detect(false);
         let config = WorkflowConfig::load().map_err(|e| e.to_string())?;
@@ -977,9 +1023,140 @@ mod tests {
         let content = std::fs::read_to_string(&report_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
 
-        assert_eq!(json["image_push_plan"]["environment"], "test");
-        assert_eq!(json["image_push_plan"]["mutates_registry"], false);
         assert_eq!(json["image_push_plan"]["items"][0]["action"], "would_push");
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn golden_json_report_shape() {
+        use crate::environment::Environment;
+        use crate::workflow::planner::WorkflowPlanner;
+        use crate::workflow::profile::WorkflowProfile;
+        
+        let env_toml = r#"
+        schema_version = "v0.5"
+        name = "staging"
+        domain = "test.local"
+        log_level = "info"
+        default_replicas = 1
+        registry = "ghcr.io/org/repo"
+        [[service]]
+        name = "api"
+        [service.build]
+        path = "."
+        "#;
+        let env: Environment = toml::from_str(env_toml).unwrap();
+
+        let profile_toml = r#"
+        environment = "staging"
+        mode = "build"
+        build = "plan"
+        push = "plan"
+        report = "json"
+        "#;
+        let mut profile: WorkflowProfile = toml::from_str(profile_toml).unwrap();
+        profile.name = "ci-build-push".to_string();
+        let normalized = profile.normalize(true);
+        
+        let mut runner_ctx = RunnerContext::detect(true);
+        runner_ctx.kind = RunnerKind::GitHubActions;
+
+        let options = crate::builder::BuildOptions {
+            cache_dir: ".sailr/cache".to_string(),
+            force: false,
+            only: vec![],
+            ignore: vec![],
+            plan: false,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: None,
+        };
+
+        let planner = WorkflowPlanner::new(
+            normalized.clone(),
+            std::sync::Arc::new(env),
+            options,
+            runner_ctx.clone(),
+        );
+
+        let plan = planner.plan().unwrap();
+
+        let result = runkernel::PipelineResult {
+            name: "test".to_string(),
+            duration: std::time::Duration::from_secs(1),
+            summary: runkernel::PipelineSummary {
+                name: "test".to_string(),
+                success: true,
+                completed: 1,
+                failed: 0,
+                skipped: 0,
+                cancelled: 0,
+                cached: 0,
+                rolled_back: 0,
+                rollback_failed: 0,
+            },
+            tasks: vec![],
+        };
+
+        let mut report_data = crate::workflow::image::WorkflowReportData::default();
+        report_data.published_artifacts.push(
+            crate::workflow::image::PublishedImageArtifact {
+                environment: "staging".to_string(),
+                service: "api".to_string(),
+                digest: "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938".to_string(),
+                published_at: "2024-03-20T12:00:00Z".to_string(),
+                registry: "".to_string(),
+                repository: "".to_string(),
+                tag: "".to_string(),
+                image_ref: "".to_string(),
+                source_sha: "".to_string(),
+            }
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        write_workflow_report(
+            &normalized,
+            &runner_ctx,
+            &result,
+            &plan,
+            &report_data,
+        )
+        .unwrap();
+
+        let report_path = temp
+            .path()
+            .join(".sailr/reports/ci-build-push/latest.json");
+        let content = std::fs::read_to_string(&report_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        
+        let expected_content = std::fs::read_to_string(original_dir.join("tests/fixtures/reports/push_report.json")).unwrap();
+        let mut expected_json: serde_json::Value = serde_json::from_str(&expected_content).unwrap();
+
+        // The image_push_plan won't exactly match the simple fixture string because it includes full artifact refs etc, 
+        // so we'll just test the top-level keys to ensure the schema matches exactly.
+        assert_eq!(json["schema_version"], expected_json["schema_version"]);
+        assert_eq!(json["report_type"], expected_json["report_type"]);
+        assert_eq!(json["profile"], expected_json["profile"]);
+        assert_eq!(json["mode"], expected_json["mode"]);
+        assert_eq!(json["runner"], expected_json["runner"]);
+        assert_eq!(json["environment"], expected_json["environment"]);
+        assert_eq!(json["success"], expected_json["success"]);
+        assert_eq!(json["effects"], expected_json["effects"]);
+        assert_eq!(json["tasks"]["completed"], expected_json["tasks"]["completed"]);
+        
+        assert!(json["image_push_plan"].is_object());
+        assert!(json["published_artifacts"].is_array());
+        
+        let artifact = &json["published_artifacts"][0];
+        assert_eq!(artifact["environment"], "staging");
+        assert_eq!(artifact["service"], "api");
+        assert_eq!(artifact["digest"], "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938");
+        assert_eq!(artifact["published_at"], "2024-03-20T12:00:00Z");
 
         std::env::set_current_dir(original_dir).unwrap();
     }

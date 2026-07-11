@@ -80,6 +80,8 @@ pub enum WorkflowCommands {
     Graph(WorkflowGraphArgs),
     /// Explain a workflow task
     Explain(WorkflowExplainArgs),
+    /// Inspect workflow diagnostic configuration
+    Inspect(WorkflowInspectArgs),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -107,6 +109,12 @@ pub struct WorkflowPlanArgs {
 
     #[arg(long)]
     pub ignore: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowInspectArgs {
+    /// Name of the workflow profile to inspect
+    pub profile: String,
 }
 
 #[derive(Debug, Args)]
