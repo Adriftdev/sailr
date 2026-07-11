@@ -311,32 +311,28 @@ impl WorkflowPlanner {
                 continue;
             }
 
-            let registry = if self.env.registry.host().is_empty() {
-                "docker.io".to_string()
-            } else {
-                self.env.registry.host()
-            };
-
-            let namespace = self
-                .env
-                .registry
-                .namespace()
-                .unwrap_or_else(|| "adriftdev/sailr".to_string());
-
-            let repository = format!("{}/{}", namespace, service_plan.service.name);
+            let resolved_registry = self.env.registry.resolve().map_err(|e| format!("Invalid registry: {}", e))?;
+            
+            let repository = resolved_registry.repository_for(&service_plan.service.name)
+                .map_err(|e| format!("Invalid repository: {}", e))?;
 
             let tag =
                 crate::workflow::image::derive_image_tag(Some(&service_plan.fingerprint.full_hash));
 
-            let image_ref = format!("{}/{}:{}", registry, repository, tag);
+            let target_image_ref = resolved_registry.tagged_ref(&service_plan.service.name, &tag)
+                .map_err(|e| format!("Invalid target ref: {}", e))?;
+
+            let local_image_ref = resolved_registry.tagged_ref(&service_plan.service.name, &service_plan.service.version)
+                .map_err(|e| format!("Invalid local ref: {}", e))?;
 
             items.push(crate::workflow::image::ImagePushPlanItem {
                 service: service_plan.service.name.clone(),
-                registry,
+                registry: resolved_registry.host,
                 repository,
+                target_image_ref,
+                local_image_ref,
                 tag,
-                image_ref,
-                source_sha: Some(service_plan.fingerprint.full_hash.clone()),
+                source_sha: service_plan.fingerprint.full_hash.clone(),
                 action: crate::workflow::image::ImagePushPlanAction::WouldPush,
             });
         }
@@ -442,7 +438,8 @@ impl WorkflowPlanner {
                 for item in &push_plan.items {
                     if item.action == crate::workflow::image::ImagePushPlanAction::WouldPush {
                         let service_name = item.service.clone();
-                        let image_ref = item.image_ref.clone();
+                        let target_image_ref = item.target_image_ref.clone();
+                        let local_image_ref = item.local_image_ref.clone();
                         let accumulator = accumulator.clone();
                         let item_clone = item.clone();
                         let env_clone = self.env.clone();
@@ -453,28 +450,16 @@ impl WorkflowPlanner {
                         let task = Task::new(push_task_name.clone())
                             .depends_on(&[build_task_name.as_str()])
                             .exec_fn(move |_ctx| {
-                                let image_ref = image_ref.clone();
+                                let target_image_ref = target_image_ref.clone();
+                                let local_image_ref = local_image_ref.clone();
                                 let accumulator = accumulator.clone();
                                 let item = item_clone.clone();
                                 let env_clone = env_clone.clone();
                                 async move {
-                                    crate::LOGGER.info(&format!("Pushing {}", image_ref));
-
-                                    let svc = env_clone
-                                        .services
-                                        .iter()
-                                        .find(|s| s.name == item.service)
-                                        .ok_or_else(|| anyhow::anyhow!("Service {} not found in environment", item.service))?;
-                                    let registry = if env_clone.registry.prefix().is_empty() {
-                                        "docker.io".to_string()
-                                    } else {
-                                        env_clone.registry.prefix()
-                                    };
-                                    let local_image =
-                                        format!("{}/{}:{}", registry, svc.name, svc.version);
+                                    crate::LOGGER.info(&format!("Pushing {}", target_image_ref));
 
                                     let mut tag_cmd = tokio::process::Command::new("docker");
-                                    tag_cmd.arg("tag").arg(&local_image).arg(&image_ref);
+                                    tag_cmd.arg("tag").arg(&local_image_ref).arg(&target_image_ref);
                                     let tag_output = tag_cmd.output().await.map_err(|e| {
                                         anyhow::anyhow!("Failed to execute docker tag: {}", e)
                                     })?;
@@ -482,14 +467,14 @@ impl WorkflowPlanner {
                                         let stderr = String::from_utf8_lossy(&tag_output.stderr);
                                         return Err(anyhow::anyhow!(
                                             "Docker tag failed for {} to {}: {}",
-                                            local_image,
-                                            image_ref,
+                                            local_image_ref,
+                                            target_image_ref,
                                             stderr
                                         ));
                                     }
 
                                     let mut cmd = tokio::process::Command::new("docker");
-                                    cmd.arg("push").arg(&image_ref);
+                                    cmd.arg("push").arg(&target_image_ref);
 
                                     let output = cmd.output().await.map_err(|e| {
                                         anyhow::anyhow!("Failed to execute docker push: {}", e)
@@ -508,7 +493,7 @@ impl WorkflowPlanner {
                                     let combined_output = format!("{}\n{}", stdout_str, stderr_str);
 
                                     let mut inspect_cmd = tokio::process::Command::new("docker");
-                                    inspect_cmd.arg("inspect").arg("--format={{index .RepoDigests 0}}").arg(&image_ref);
+                                    inspect_cmd.arg("inspect").arg("--format={{index .RepoDigests 0}}").arg(&target_image_ref);
                                     let inspect_output = inspect_cmd.output().await.ok();
                                     
                                     let structured_digest = inspect_output.and_then(|out| {
@@ -930,7 +915,8 @@ mod tests_addendum {
         use crate::environment::Environment;
         use crate::workflow::profile::WorkflowProfile;
 
-        let env_toml = r#"
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env_toml = format!(r#"
         schema_version = "v0.5"
         name = "test"
         domain = "test.local"
@@ -940,9 +926,9 @@ mod tests_addendum {
         [[service]]
         name = "api"
         [service.build]
-        path = "."
-        "#;
-        let env: Environment = toml::from_str(env_toml).unwrap();
+        path = "{}"
+        "#, temp_dir.path().to_string_lossy());
+        let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let profile_toml = r#"
         environment = "test"

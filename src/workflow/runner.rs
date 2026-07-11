@@ -100,6 +100,42 @@ fn print_workflow_result(
     print_tasks_by_status("cancelled tasks", result, runkernel::TaskStatus::Cancelled);
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct WorkflowReportTasks {
+    pub completed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub cancelled: usize,
+    pub items: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct WorkflowReportPlans {
+    pub image_push: Option<crate::workflow::image::ImagePushPlanReport>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct WorkflowReportArtifacts {
+    pub published_images: Vec<crate::workflow::image::PublishedImageArtifact>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct WorkflowReport {
+    pub schema_version: String,
+    pub report_type: String,
+    pub profile: String,
+    pub mode: String,
+    pub runner: String,
+    pub environment: String,
+    pub success: bool,
+    pub effects: serde_json::Value,
+    pub tasks: WorkflowReportTasks,
+    pub plans: WorkflowReportPlans,
+    pub artifacts: WorkflowReportArtifacts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_plan: Option<serde_json::Value>,
+}
+
 fn write_workflow_report(
     profile: &crate::workflow::profile::NormalizedWorkflowProfile,
     runner: &RunnerContext,
@@ -138,25 +174,30 @@ fn write_workflow_report(
         "prompts_user": plan.effects.prompts_user,
     });
 
-    let mut report = serde_json::json!({
-        "schema_version": "sailr.workflow-report/v1",
-        "report_type": "image-publication",
-        "profile": profile.name,
-        "mode": profile.mode.as_str(),
-        "runner": format!("{:?}", runner.kind).to_lowercase(),
-        "environment": profile.environment,
-        "success": result.summary.success,
-        "effects": effects,
-        "tasks": {
-            "completed": result.summary.completed,
-            "failed": result.summary.failed,
-            "skipped": result.summary.skipped,
-            "cancelled": result.summary.cancelled,
-            "items": task_items
+    let mut report = WorkflowReport {
+        schema_version: "sailr.workflow-report/v1".to_string(),
+        report_type: "workflow-execution".to_string(),
+        profile: profile.name.clone(),
+        mode: profile.mode.as_str().to_string(),
+        runner: format!("{:?}", runner.kind).to_lowercase(),
+        environment: profile.environment.clone(),
+        success: result.summary.success,
+        effects,
+        tasks: WorkflowReportTasks {
+            completed: result.summary.completed,
+            failed: result.summary.failed,
+            skipped: result.summary.skipped,
+            cancelled: result.summary.cancelled,
+            items: task_items,
         },
-        "image_push_plan": image_push_plan,
-        "published_artifacts": published_artifacts
-    });
+        plans: WorkflowReportPlans {
+            image_push: image_push_plan,
+        },
+        artifacts: WorkflowReportArtifacts {
+            published_images: published_artifacts,
+        },
+        deployment_plan: None,
+    };
 
     if profile.deploy == crate::workflow::profile::WorkflowStepMode::Plan {
         let context = profile.deploy_context.as_deref().unwrap_or("none");
@@ -166,12 +207,7 @@ fn write_workflow_report(
             context,
             namespace,
         ) {
-            if let Some(obj) = report.as_object_mut() {
-                obj.insert(
-                    "deployment_plan".to_string(),
-                    serde_json::to_value(plan).unwrap_or(serde_json::Value::Null),
-                );
-            }
+            report.deployment_plan = Some(serde_json::to_value(plan).unwrap_or(serde_json::Value::Null));
         }
     }
 
@@ -940,7 +976,8 @@ mod tests {
         use crate::workflow::planner::WorkflowPlanner;
         use crate::workflow::profile::WorkflowProfile;
 
-        let env_toml = r#"
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env_toml = format!(r#"
         schema_version = "v0.5"
         name = "test"
         domain = "test.local"
@@ -950,9 +987,9 @@ mod tests {
         [[service]]
         name = "ci-build-hello"
         [service.build]
-        path = "."
-        "#;
-        let env: Environment = toml::from_str(env_toml).unwrap();
+        path = "{}"
+        "#, temp_dir.path().to_string_lossy());
+        let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let profile_toml = r#"
         environment = "test"
@@ -966,7 +1003,7 @@ mod tests {
         let normalized = profile.normalize(false);
         let runner_ctx = RunnerContext::detect(true);
         let options = crate::builder::BuildOptions {
-            cache_dir: ".sailr/cache".to_string(),
+            cache_dir: temp_dir.path().join(".sailr/cache").to_string_lossy().to_string(),
             force: false,
             only: vec![],
             ignore: vec![],
@@ -1023,7 +1060,7 @@ mod tests {
         let content = std::fs::read_to_string(&report_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
 
-        assert_eq!(json["image_push_plan"]["items"][0]["action"], "would_push");
+        assert_eq!(json["plans"]["image_push"]["items"][0]["action"], "would_push");
 
         std::env::set_current_dir(original_dir).unwrap();
     }
@@ -1034,7 +1071,8 @@ mod tests {
         use crate::workflow::planner::WorkflowPlanner;
         use crate::workflow::profile::WorkflowProfile;
         
-        let env_toml = r#"
+        let temp_dir = tempfile::tempdir().unwrap();
+        let env_toml = format!(r#"
         schema_version = "v0.5"
         name = "staging"
         domain = "test.local"
@@ -1044,9 +1082,9 @@ mod tests {
         [[service]]
         name = "api"
         [service.build]
-        path = "."
-        "#;
-        let env: Environment = toml::from_str(env_toml).unwrap();
+        path = "{}"
+        "#, temp_dir.path().to_string_lossy());
+        let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let profile_toml = r#"
         environment = "staging"
@@ -1063,7 +1101,7 @@ mod tests {
         runner_ctx.kind = RunnerKind::GitHubActions;
 
         let options = crate::builder::BuildOptions {
-            cache_dir: ".sailr/cache".to_string(),
+            cache_dir: temp_dir.path().join(".sailr/cache").to_string_lossy().to_string(),
             force: false,
             only: vec![],
             ignore: vec![],
@@ -1135,7 +1173,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         
         let expected_content = std::fs::read_to_string(original_dir.join("tests/fixtures/reports/push_report.json")).unwrap();
-        let mut expected_json: serde_json::Value = serde_json::from_str(&expected_content).unwrap();
+        let expected_json: serde_json::Value = serde_json::from_str(&expected_content).unwrap();
 
         // The image_push_plan won't exactly match the simple fixture string because it includes full artifact refs etc, 
         // so we'll just test the top-level keys to ensure the schema matches exactly.
@@ -1149,10 +1187,10 @@ mod tests {
         assert_eq!(json["effects"], expected_json["effects"]);
         assert_eq!(json["tasks"]["completed"], expected_json["tasks"]["completed"]);
         
-        assert!(json["image_push_plan"].is_object());
-        assert!(json["published_artifacts"].is_array());
+        assert!(json["plans"]["image_push"].is_object());
+        assert!(json["artifacts"]["published_images"].is_array());
         
-        let artifact = &json["published_artifacts"][0];
+        let artifact = &json["artifacts"]["published_images"][0];
         assert_eq!(artifact["environment"], "staging");
         assert_eq!(artifact["service"], "api");
         assert_eq!(artifact["digest"], "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938");

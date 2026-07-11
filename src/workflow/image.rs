@@ -25,7 +25,7 @@ impl WorkflowReportAccumulator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ImageArtifact {
+pub struct PlannedImageArtifact {
     pub service: String,
     pub environment: String,
     pub registry: String,
@@ -37,7 +37,7 @@ pub struct ImageArtifact {
     pub built_at: Option<String>,
 }
 
-impl ImageArtifact {
+impl PlannedImageArtifact {
     pub fn tagged(
         service: impl Into<String>,
         environment: impl Into<String>,
@@ -123,20 +123,80 @@ impl PublishedImageArtifact {
             published_at: published_at.to_string(),
         })
     }
+    pub fn validate(&self) -> Result<(), ArtifactError> {
+        validate_digest(&self.digest)?;
+        let expected_ref = format!("{}/{}@{}", self.registry, self.repository, self.digest);
+        if self.image_ref != expected_ref {
+            return Err(ArtifactError::Validation(format!("image_ref mismatch: expected {}, got {}", expected_ref, self.image_ref)));
+        }
+        if self.service.is_empty() {
+            return Err(ArtifactError::Validation("service cannot be empty".to_string()));
+        }
+        if self.environment.is_empty() {
+            return Err(ArtifactError::Validation("environment cannot be empty".to_string()));
+        }
+        if self.registry.is_empty() {
+            return Err(ArtifactError::Validation("registry cannot be empty".to_string()));
+        }
+        if self.repository.is_empty() {
+            return Err(ArtifactError::Validation("repository cannot be empty".to_string()));
+        }
+        if self.tag.is_empty() {
+            return Err(ArtifactError::Validation("tag cannot be empty".to_string()));
+        }
+        if self.source_sha.is_empty() {
+            return Err(ArtifactError::Validation("source_sha cannot be empty".to_string()));
+        }
+        
+        chrono::DateTime::parse_from_rfc3339(&self.published_at)
+            .map_err(|e| ArtifactError::Validation(format!("published_at is not valid RFC 3339: {}", e)))?;
+
+        Ok(())
+    }
 }
 
 pub fn validate_digest(value: &str) -> Result<(), ArtifactError> {
-    if !value.starts_with("sha256:") {
-        return Err(ArtifactError::Validation("digest must start with sha256:".to_string()));
-    }
-    let hex_part = &value[7..];
+    let hex_part = value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| ArtifactError::Validation("digest must start with sha256:".to_string()))?;
+
     if hex_part.len() != 64 {
-        return Err(ArtifactError::Validation("digest hex part must be exactly 64 characters long".to_string()));
+        return Err(ArtifactError::Validation("sha256 digest must contain 64 hexadecimal characters".to_string()));
     }
-    if !hex_part.chars().all(|c| c.is_ascii_hexdigit() && c.is_lowercase() || c.is_numeric()) {
-        return Err(ArtifactError::Validation("digest must contain only lowercase hexadecimal characters".to_string()));
+
+    if !hex_part.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+        return Err(ArtifactError::Validation("sha256 digest must contain lowercase ASCII hexadecimal characters".to_string()));
     }
+
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct DigestEvidence {
+    pub push_output_digest: Option<String>,
+    pub inspected_digest: Option<String>,
+}
+
+pub fn resolve_digest(evidence: DigestEvidence) -> Result<String, ArtifactError> {
+    match (evidence.push_output_digest, evidence.inspected_digest) {
+        (Some(push), Some(inspected)) => {
+            validate_digest(&push)?;
+            validate_digest(&inspected)?;
+            if push != inspected {
+                return Err(ArtifactError::DigestMismatch { expected: inspected, actual: push });
+            }
+            Ok(inspected)
+        }
+        (Some(push), None) => {
+            validate_digest(&push)?;
+            Ok(push)
+        }
+        (None, Some(inspected)) => {
+            validate_digest(&inspected)?;
+            Ok(inspected)
+        }
+        (None, None) => Err(ArtifactError::MissingDigest("No digest provided".to_string())),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -155,21 +215,23 @@ pub struct ImagePushPlanItem {
     pub service: String,
     pub registry: String,
     pub repository: String,
+    #[serde(alias = "image_ref")]
+    pub target_image_ref: String,
+    pub local_image_ref: String,
     pub tag: String,
-    pub image_ref: String,
-    pub source_sha: Option<String>,
+    pub source_sha: String,
     pub action: ImagePushPlanAction,
 }
 
-impl ImageArtifact {
+impl PlannedImageArtifact {
     pub fn from_push_plan_item(environment: impl Into<String>, item: &ImagePushPlanItem) -> Self {
-        ImageArtifact::tagged(
+        PlannedImageArtifact::tagged(
             item.service.clone(),
             environment,
             item.registry.clone(),
             item.repository.clone(),
             item.tag.clone(),
-            item.source_sha.clone(),
+            Some(item.source_sha.clone()),
         )
     }
 }
@@ -204,29 +266,24 @@ pub fn pushed_artifact_from_output(
     output: &str,
     structured_digest: Option<&str>,
 ) -> Result<PublishedImageArtifact, String> {
-    let parsed_digest = parse_pushed_digest(output).ok_or_else(|| {
-        format!(
-            "image push succeeded but digest could not be captured for {}",
-            item.image_ref
-        )
-    })?;
+    let parsed_digest = parse_pushed_digest(output);
+    
+    let evidence = DigestEvidence {
+        push_output_digest: parsed_digest,
+        inspected_digest: structured_digest.map(|s| s.to_string()),
+    };
+    
+    let digest = resolve_digest(evidence).map_err(|e| format!("digest error for {}: {}", item.target_image_ref, e))?;
 
-    if let Some(structured) = structured_digest {
-        if structured != parsed_digest {
-            return Err(format!("digest mismatch for {}: parsed '{}' != structured '{}'", item.image_ref, parsed_digest, structured));
-        }
-    }
-
-    let source_sha = item.source_sha.as_deref().unwrap_or("dev");
     let published_at = chrono::Utc::now().to_rfc3339();
 
     PublishedImageArtifact::from_push_result(
         environment,
         item,
-        &parsed_digest,
-        source_sha,
+        &digest,
+        &item.source_sha,
         &published_at,
-    ).map_err(|e| format!("invalid published artifact: {}", e))
+    ).map_err(|e| format!("invalid published artifact: {:?}", e))
 }
 
 #[cfg(test)]
@@ -235,7 +292,7 @@ mod tests {
 
     #[test]
     fn image_artifact_tagged_builds_tag_ref() {
-        let artifact = ImageArtifact::tagged(
+        let artifact = PlannedImageArtifact::tagged(
             "ci-build-hello",
             "staging",
             "ghcr.io",
@@ -258,7 +315,7 @@ mod tests {
 
     #[test]
     fn image_artifact_with_digest_builds_digest_ref() {
-        let artifact = ImageArtifact::tagged(
+        let artifact = PlannedImageArtifact::tagged(
             "ci-build-hello",
             "staging",
             "ghcr.io",
@@ -285,7 +342,7 @@ mod tests {
 
     #[test]
     fn image_artifact_serializes_expected_shape() {
-        let artifact = ImageArtifact::tagged(
+        let artifact = PlannedImageArtifact::tagged(
             "ci-build-hello",
             "staging",
             "ghcr.io",
@@ -354,8 +411,9 @@ mod tests_derive {
             registry: "ghcr.io".to_string(),
             repository: "org/api".to_string(),
             tag: "latest".to_string(),
-            image_ref: "ghcr.io/org/api:latest".to_string(),
-            source_sha: Some("abc12345".to_string()),
+            target_image_ref: "ghcr.io/org/api:latest".to_string(),
+            local_image_ref: "ghcr.io/org/api:latest".to_string(),
+            source_sha: "abc12345".to_string(),
             action: ImagePushPlanAction::WouldPush,
         };
         let output = "digest: sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -371,15 +429,15 @@ mod tests_derive {
             registry: "ghcr.io".to_string(),
             repository: "org/api".to_string(),
             tag: "latest".to_string(),
-            image_ref: "ghcr.io/org/api:latest".to_string(),
-            source_sha: None,
+            target_image_ref: "ghcr.io/org/api:latest".to_string(),
+            local_image_ref: "ghcr.io/org/api:latest".to_string(),
+            source_sha: "dev".to_string(),
             action: ImagePushPlanAction::WouldPush,
         };
         let output = "no digest here";
         let err = pushed_artifact_from_output("prod", &item, output, None).unwrap_err();
-        assert_eq!(
-            err,
-            "image push succeeded but digest could not be captured for ghcr.io/org/api:latest"
+        assert!(
+            err.contains("digest error")
         );
     }
 
@@ -418,8 +476,9 @@ mod tests_addendum {
                 registry: "ghcr.io".to_string(),
                 repository: "adriftdev/sailr/ci-build-hello".to_string(),
                 tag: "61eaa8b".to_string(),
-                image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
-                source_sha: Some("61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string()),
+                target_image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
+                local_image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
+                source_sha: "61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string(),
                 action: ImagePushPlanAction::WouldPush,
             }],
         };

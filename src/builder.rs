@@ -14,7 +14,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const DEFAULT_PUSH_TEMPLATE: &str = "docker push {{ registry }}/{{ name }}:{{ version }}";
 const RUNKERNEL_PIPELINE_NAME: &str = "Sailr Service Build Pipeline";
 
 pub struct Builder {
@@ -997,8 +996,12 @@ fn render_commands(
 fn render_build_command(command: &str, env: &Environment, service: &Service) -> String {
     let mut rendered = command.to_string();
 
+    let resolved_registry = env.registry.resolve().expect("Failed to parse registry config");
+    let image_ref = resolved_registry.tagged_ref(&service.name, &service.version).expect("Failed to build image ref");
+
     for (key, value) in [
-        ("registry", env.registry.prefix().as_str()),
+        ("image_ref", image_ref.as_str()),
+        ("registry", resolved_registry.host.as_str()),
         ("platform", env.platform.as_deref().unwrap_or("")),
         ("environment", env.name.as_str()),
         ("name", service.name.as_str()),
@@ -1020,18 +1023,18 @@ fn default_build_command(env: &Environment, build_cfg: &ServiceBuildConfig) -> S
 
     match env.platform.as_deref() {
         Some(platform) if !platform.trim().is_empty() => format!(
-            "docker buildx build --ssh default --platform {}{} -t {{{{ registry }}}}/{{{{ name }}}}:{{{{ version }}}} .",
+            "docker buildx build --ssh default --platform {}{} -t {{{{ image_ref }}}} .",
             platform, dockerfile_segment
         ),
         _ => format!(
-            "docker buildx build --ssh default{} -t {{{{ registry }}}}/{{{{ name }}}}:{{{{ version }}}} .",
+            "docker buildx build --ssh default{} -t {{{{ image_ref }}}} .",
             dockerfile_segment
         ),
     }
 }
 
 fn default_push_command(_env: &Environment) -> String {
-    DEFAULT_PUSH_TEMPLATE.to_string()
+    "docker push {{ image_ref }}".to_string()
 }
 
 fn replace_template_var(input: &str, key: &str, value: &str) -> String {

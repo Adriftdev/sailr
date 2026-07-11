@@ -1,6 +1,6 @@
 {
   "schema_version": "sailr.workflow-report/v1",
-  "report_type": "image-publication",
+  "report_type": "workflow-execution",
   "profile": "ci-build-push",
   "mode": "build",
   "runner": "githubactions",
@@ -21,20 +21,37 @@
     "cancelled": 0,
     "items": []
   },
-  "image_push_plan": {
-    "items": [
+  "plans": {
+    "image_push": {
+      "environment": "staging",
+      "mutates_registry": false,
+      "items": [
+        {
+          "service": "api",
+          "registry": "ghcr.io",
+          "repository": "org/repo/api",
+          "target_image_ref": "ghcr.io/org/repo/api:ab12cd34",
+          "local_image_ref": "ghcr.io/org/repo/api:ab12cd34",
+          "tag": "ab12cd34",
+          "source_sha": "ab12cd345678",
+          "action": "WouldPush"
+        }
+      ]
+    }
+  },
+  "artifacts": {
+    "published_images": [
       {
+        "environment": "staging",
         "service": "api",
-        "image": "ghcr.io/org/repo/api:ab12cd34"
+        "registry": "ghcr.io",
+        "repository": "org/repo/api",
+        "tag": "ab12cd34",
+        "digest": "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
+        "image_ref": "ghcr.io/org/repo/api@sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
+        "source_sha": "ab12cd345678",
+        "published_at": "2024-03-20T12:00:00Z"
       }
     ]
-  },
-  "published_artifacts": [
-    {
-      "environment": "staging",
-      "service": "api",
-      "digest": "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
-      "published_at": "2024-03-20T12:00:00Z"
-    }
-  ]
+  }
 }

@@ -19,4 +19,23 @@ pub enum WorkflowError {
 pub enum ArtifactError {
     #[error("Artifact validation error: {0}")]
     Validation(String),
+    #[error("Missing digest: {0}")]
+    MissingDigest(String),
+    #[error("Digest mismatch. expected: {expected}, actual: {actual}")]
+    DigestMismatch {
+        expected: String,
+        actual: String,
+    },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum RegistryConfigError {
+    #[error("Empty host")]
+    EmptyHost,
+    #[error("Invalid host: {0}")]
+    InvalidHost(String),
+    #[error("Invalid namespace: {0}")]
+    InvalidNamespace(String),
+    #[error("Invalid service: {0}")]
+    InvalidService(String),
 }

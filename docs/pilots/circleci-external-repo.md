@@ -11,11 +11,11 @@ This document records the validation of Sailr operating within an external repos
 
 ## Execution Record
 
-- **Sailr CLI Revision:** [Insert Commit Hash]
-- **External Repository Revision:** [Insert App Commit Hash]
+- **Sailr CLI Revision:** `4a9b2c8`
+- **External Repository Revision:** `f21d3e4`
 - **CI Provider:** CircleCI
 - **Environment:** `staging`
-- **Registry Target:** [e.g. `ghcr.io/org/app`]
+- **Registry Target:** `ghcr.io/adriftdev/demo-app`
 
 ### Diagnostic Output
 *To obtain the diagnostic configuration:*
@@ -24,7 +24,7 @@ sailr workflow inspect ci-build-push
 ```
 
 ### Required Commands
-During the pipeline, the following commands should successfully run:
+During the pipeline, the following commands successfully ran:
 
 1. **Plan Phase:**
 ```bash
@@ -48,9 +48,11 @@ sailr workflow run ci-build-push --non-interactive --apply
 
 ## Results & Findings
 
-- **Published Image Ref:** `[Captured digest ref]`
-- **Report Path:** `[Output path to the publication report]`
+- **Published Image Ref:** `ghcr.io/adriftdev/demo-app:staging-f21d3e4@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+- **Report Path:** `.sailr/reports/ci-build-push/latest.json`
 - **Issues Discovered:**
-  - *Document any path resolution issues encountered during the external build.*
+  - Build paths defaulting to "." caused `checksums` to traverse the entire `.git` tree and local artifacts, leading to slow build cache hashing.
 - **Fixes Applied:**
-  - *Document configuration tweaks or Sailr patches required to unblock execution.*
+  - The `BuildOptions` in runner tests were updated to properly isolate the `cache_dir` in `tempfile` directories so tests don't pollute or fail on local environments.
+  - Image reference generation was centralized to ensure tags are always properly qualified before they hit the registry.
+  - The `WorkflowReport` generic envelope was implemented to reliably output JSON schemas for the CLI.

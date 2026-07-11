@@ -50,6 +50,93 @@ impl RegistryConfig {
             None => self.host(),
         }
     }
+
+    pub fn resolve(&self) -> Result<ResolvedRegistry, crate::workflow::error::RegistryConfigError> {
+        match self {
+            Self::Simple(s) => ResolvedRegistry::parse(s),
+            Self::Detailed { host, namespace } => {
+                let parsed_host = host.trim();
+                if parsed_host.is_empty() {
+                    return Err(crate::workflow::error::RegistryConfigError::EmptyHost);
+                }
+                if parsed_host.contains("://") || parsed_host.starts_with('/') || parsed_host.ends_with('/') || parsed_host.contains(|c: char| c.is_whitespace()) {
+                    return Err(crate::workflow::error::RegistryConfigError::InvalidHost(parsed_host.to_string()));
+                }
+                
+                if let Some(ns) = namespace {
+                    let parsed_ns = ns.trim();
+                    if parsed_ns.is_empty() || parsed_ns.starts_with('/') || parsed_ns.ends_with('/') || parsed_ns.contains(|c: char| c.is_whitespace()) || parsed_ns.contains("//") {
+                        return Err(crate::workflow::error::RegistryConfigError::InvalidNamespace(parsed_ns.to_string()));
+                    }
+                    Ok(ResolvedRegistry {
+                        host: parsed_host.to_string(),
+                        namespace: Some(parsed_ns.to_string()),
+                    })
+                } else {
+                    Ok(ResolvedRegistry {
+                        host: parsed_host.to_string(),
+                        namespace: None,
+                    })
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRegistry {
+    pub host: String,
+    pub namespace: Option<String>,
+}
+
+impl ResolvedRegistry {
+    pub fn parse(s: &str) -> Result<Self, crate::workflow::error::RegistryConfigError> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(crate::workflow::error::RegistryConfigError::EmptyHost);
+        }
+        if s.contains("://") || s.starts_with('/') || s.ends_with('/') || s.contains(|c: char| c.is_whitespace()) || s.contains("//") {
+            return Err(crate::workflow::error::RegistryConfigError::InvalidHost(s.to_string()));
+        }
+
+        let parts: Vec<&str> = s.splitn(2, '/').collect();
+        let host = parts[0].to_string();
+        if host.is_empty() {
+            return Err(crate::workflow::error::RegistryConfigError::InvalidHost(s.to_string()));
+        }
+
+        let namespace = if parts.len() > 1 {
+            let ns = parts[1].to_string();
+            if ns.is_empty() {
+                return Err(crate::workflow::error::RegistryConfigError::InvalidNamespace(s.to_string()));
+            }
+            Some(ns)
+        } else {
+            None
+        };
+
+        Ok(Self { host, namespace })
+    }
+
+    pub fn repository_for(&self, service: &str) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        if service.trim().is_empty() {
+            return Err(crate::workflow::error::RegistryConfigError::InvalidService(service.to_string()));
+        }
+        match &self.namespace {
+            Some(ns) => Ok(format!("{}/{}", ns, service)),
+            None => Ok(service.to_string()),
+        }
+    }
+
+    pub fn tagged_ref(&self, service: &str, tag: &str) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        let repo = self.repository_for(service)?;
+        Ok(format!("{}/{}:{}", self.host, repo, tag))
+    }
+
+    pub fn digest_ref(&self, service: &str, digest: &str) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        let repo = self.repository_for(service)?;
+        Ok(format!("{}/{}@{}", self.host, repo, digest))
+    }
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]

@@ -288,7 +288,7 @@ pub fn render_image_push_plan_text(plan: &crate::workflow::image::ImagePushPlanR
         for item in &plan.items {
             out.push_str(&format!(
                 "  - service: {}\n    image: {}\n    action: would push\n",
-                item.service, item.image_ref
+                item.service, item.target_image_ref
             ));
         }
     }
@@ -310,8 +310,9 @@ mod tests_addendum {
                 registry: "ghcr.io".to_string(),
                 repository: "adriftdev/sailr/ci-build-hello".to_string(),
                 tag: "61eaa8b".to_string(),
-                image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
-                source_sha: Some("61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string()),
+                target_image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
+                local_image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
+                source_sha: "61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string(),
                 action: crate::workflow::image::ImagePushPlanAction::WouldPush,
             }],
         };
