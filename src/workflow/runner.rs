@@ -1,4 +1,4 @@
-use crate::builder::{attach_pipeline_logging, write_successful_service_caches, BuildOptions};
+use crate::builder::{attach_pipeline_logging, BuildOptions};
 use crate::cli::WorkflowRunArgs;
 use crate::environment::Environment;
 
