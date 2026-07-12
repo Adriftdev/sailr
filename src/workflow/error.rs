@@ -49,7 +49,7 @@ pub enum RegistryConfigError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ProvenanceError {
-    #[error("Source revision is unavailable")]
+    #[error("Image publication requires a source revision. Run from a Git checkout or provide an explicit source revision.")]
     MissingSourceRevision,
 
     #[error("Invalid source revision: {0}")]

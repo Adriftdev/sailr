@@ -35,6 +35,19 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
         out.push('\n');
     }
 
+    if !plan.finalizers.is_empty() {
+        out.push_str("Finalizers:\n");
+        for finalizer in &plan.finalizers {
+            out.push_str(&format!(" - [{}] {}\n", finalizer.id, finalizer.label));
+            out.push_str(&format!("   Kind: {:?}\n", finalizer.kind));
+            out.push_str(&format!("   Description: {}\n", finalizer.description));
+            out.push_str(&format!(
+                "   Mutates Filesystem: {}\n\n",
+                finalizer.effects.mutates_filesystem
+            ));
+        }
+    }
+
     if plan.profile.approval == crate::workflow::profile::ApprovalMode::External {
         out.push_str("Approval:\n");
         out.push_str("  mode: external\n");
@@ -117,6 +130,45 @@ pub fn render_workflow_graph_mermaid(plan: &WorkflowPlan) -> String {
 }
 
 pub fn render_workflow_explain_text(plan: &WorkflowPlan, task_id: &str) -> Result<String, String> {
+    if let Some(finalizer) = plan
+        .finalizers
+        .iter()
+        .find(|finalizer| finalizer.id == task_id)
+    {
+        let mut out = String::new();
+        out.push_str(&format!("Finalizer Explanation: {}\n", finalizer.id));
+        out.push_str("--------------------------------------------------\n");
+        out.push_str(&format!("Label:       {}\n", finalizer.label));
+        out.push_str(&format!("Kind:        {:?}\n", finalizer.kind));
+        out.push_str(&format!("Description: {}\n", finalizer.description));
+        out.push_str("\nSide Effects:\n");
+        out.push_str(&format!(
+            " - Mutates Filesystem: {}\n",
+            finalizer.effects.mutates_filesystem
+        ));
+        out.push_str(&format!(
+            " - Mutates Docker: {}\n",
+            finalizer.effects.mutates_docker
+        ));
+        out.push_str(&format!(
+            " - Mutates Registry: {}\n",
+            finalizer.effects.mutates_registry
+        ));
+        out.push_str(&format!(
+            " - Mutates Git: {}\n",
+            finalizer.effects.mutates_git
+        ));
+        out.push_str(&format!(
+            " - Mutates Cluster: {}\n",
+            finalizer.effects.mutates_cluster
+        ));
+        out.push_str(&format!(
+            " - Prompts User: {}\n",
+            finalizer.effects.prompts_user
+        ));
+        return Ok(out);
+    }
+
     let task = plan
         .tasks
         .iter()
@@ -193,7 +245,8 @@ fn sanitize_label(label: &str) -> String {
 mod tests {
     use super::*;
     use crate::workflow::plan::{
-        WorkflowEdge, WorkflowEffects, WorkflowTaskKind, WorkflowTaskPlan,
+        WorkflowEdge, WorkflowEffects, WorkflowFinalizerKind, WorkflowFinalizerPlan,
+        WorkflowTaskKind, WorkflowTaskPlan,
     };
     use crate::workflow::profile::{
         ApprovalMode, NormalizedWorkflowProfile, ReportMode, WorkflowEngine, WorkflowMode,
@@ -254,6 +307,7 @@ mod tests {
             }],
             build_plan: None,
             image_push_plan: None,
+            finalizers: vec![],
             effects: WorkflowEffects {
                 mutates_docker: true,
                 ..Default::default()
@@ -322,6 +376,32 @@ mod tests {
             assert!(rendered.contains(provider));
             assert!(rendered.contains("Mutates Git: true"));
         }
+    }
+
+    #[test]
+    fn renders_and_explains_report_finalizers_without_graph_nodes() {
+        let mut plan = dummy_plan();
+        plan.finalizers.push(WorkflowFinalizerPlan {
+            id: crate::workflow::task_id::WRITE_REPORT_FINALIZER.to_string(),
+            label: "Write Workflow Report".to_string(),
+            kind: WorkflowFinalizerKind::WriteWorkflowReport,
+            effects: WorkflowEffects {
+                mutates_filesystem: true,
+                ..Default::default()
+            },
+            description: "Writes the workflow report after task execution.".to_string(),
+        });
+
+        let rendered = render_workflow_plan_text(&plan);
+        assert!(rendered.contains("Finalizers:"));
+        assert!(rendered.contains(crate::workflow::task_id::WRITE_REPORT_FINALIZER));
+        let explained =
+            render_workflow_explain_text(&plan, crate::workflow::task_id::WRITE_REPORT_FINALIZER)
+                .unwrap();
+        assert!(explained.contains("Finalizer Explanation"));
+        assert!(explained.contains("Mutates Filesystem: true"));
+        assert!(!render_workflow_graph_text(&plan)
+            .contains(crate::workflow::task_id::WRITE_REPORT_FINALIZER));
     }
 }
 

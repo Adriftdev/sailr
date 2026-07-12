@@ -216,16 +216,9 @@ impl ResolvedRegistry {
         &self,
         service: &str,
     ) -> Result<String, crate::workflow::error::RegistryConfigError> {
-        if service.trim().is_empty()
-            || service.chars().any(char::is_whitespace)
-            || service.starts_with('/')
-            || service.ends_with('/')
-            || service.contains("//")
-        {
-            return Err(crate::workflow::error::RegistryConfigError::InvalidService(
-                service.to_string(),
-            ));
-        }
+        crate::oci::validate_repository_component(service).map_err(|_| {
+            crate::workflow::error::RegistryConfigError::InvalidService(service.to_string())
+        })?;
         match &self.namespace {
             Some(ns) => Ok(format!("{}/{}", ns, service)),
             None => Ok(service.to_string()),
@@ -237,15 +230,9 @@ impl ResolvedRegistry {
         service: &str,
         tag: &str,
     ) -> Result<String, crate::workflow::error::RegistryConfigError> {
-        if tag.trim().is_empty()
-            || tag.chars().any(char::is_whitespace)
-            || tag.starts_with(':')
-            || tag.contains('/')
-        {
-            return Err(crate::workflow::error::RegistryConfigError::InvalidTag(
-                tag.to_string(),
-            ));
-        }
+        crate::oci::validate_tag(tag).map_err(|_| {
+            crate::workflow::error::RegistryConfigError::InvalidTag(tag.to_string())
+        })?;
         let repo = self.repository_for(service)?;
         Ok(format!("{}/{}:{}", self.host, repo, tag))
     }

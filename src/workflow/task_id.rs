@@ -8,6 +8,7 @@ pub const GENERATE: &str = "workflow:generate";
 pub const DEPLOYMENT_PLAN: &str = "workflow:deployment-plan";
 pub const APPROVAL: &str = "workflow:approval";
 pub const DEPLOY: &str = "workflow:deploy";
+pub const WRITE_REPORT_FINALIZER: &str = "finalizer:write-workflow-report";
 
 pub fn service_build(service: &str) -> String {
     format!("service:{service}:build")

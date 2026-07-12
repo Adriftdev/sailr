@@ -11,7 +11,22 @@ pub struct WorkflowPlan {
     pub edges: Vec<WorkflowEdge>,
     pub build_plan: Option<SailrBuildPlan>,
     pub image_push_plan: Option<crate::workflow::image::ImagePushPlanReport>,
+    pub finalizers: Vec<WorkflowFinalizerPlan>,
     pub effects: WorkflowEffects,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowFinalizerKind {
+    WriteWorkflowReport,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkflowFinalizerPlan {
+    pub id: String,
+    pub label: String,
+    pub kind: WorkflowFinalizerKind,
+    pub effects: WorkflowEffects,
+    pub description: String,
 }
 
 #[derive(Debug, Clone)]

@@ -26,6 +26,7 @@ impl std::str::FromStr for CiProvider {
             "github" => Ok(CiProvider::GitHub),
             "circleci" => Ok(CiProvider::CircleCi),
             "travis" => Ok(CiProvider::Travis),
+            "generic" => Ok(CiProvider::Generic),
             _ => Err(WorkflowError::ConfigError(format!(
                 "Unsupported CI provider: {}",
                 s
@@ -168,6 +169,10 @@ mod tests {
         assert!(matches!(
             CiProvider::from_str("Travis").unwrap(),
             CiProvider::Travis
+        ));
+        assert!(matches!(
+            CiProvider::from_str("generic").unwrap(),
+            CiProvider::Generic
         ));
         assert!(CiProvider::from_str("jenkins").is_err());
     }

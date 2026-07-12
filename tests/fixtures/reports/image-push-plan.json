@@ -12,7 +12,7 @@
   "environment": "staging",
   "success": true,
   "effects": {
-    "mutates_filesystem": false,
+    "mutates_filesystem": true,
     "mutates_docker": false,
     "mutates_registry": false,
     "mutates_git": false,
@@ -24,6 +24,9 @@
     "failed": 0,
     "skipped": 0,
     "cancelled": 0,
+    "cached": 0,
+    "rolled_back": 0,
+    "rollback_failed": 0,
     "items": [
       { "name": "workflow:validate-config", "status": "completed" },
       { "name": "workflow:build-plan", "status": "completed" },

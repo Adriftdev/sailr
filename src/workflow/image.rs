@@ -87,11 +87,13 @@ impl PublishedImageArtifact {
             published_at: published_at.to_string(),
         };
 
-        artifact.validate()?;
+        artifact.validate_against_plan_item(environment, item)?;
         Ok(artifact)
     }
     pub fn validate(&self) -> Result<(), ArtifactError> {
         crate::oci::validate_sha256_digest(&self.digest)?;
+        crate::oci::validate_repository_component(&self.service)?;
+        crate::oci::validate_tag(&self.tag)?;
         self.provenance.validate()?;
 
         let expected_ref = format!("{}/{}@{}", self.registry, self.repository, self.digest);
@@ -129,6 +131,33 @@ impl PublishedImageArtifact {
             ArtifactError::Validation(format!("published_at is not valid RFC 3339: {}", e))
         })?;
 
+        Ok(())
+    }
+
+    pub fn validate_against_plan_item(
+        &self,
+        report_environment: &str,
+        item: &ImagePushPlanItem,
+    ) -> Result<(), ArtifactError> {
+        self.validate()?;
+        item.validate()?;
+        if self.environment != report_environment {
+            return Err(ArtifactError::Validation(format!(
+                "artifact environment '{}' does not match report environment '{}'",
+                self.environment, report_environment
+            )));
+        }
+        if self.service != item.service
+            || self.registry != item.registry
+            || self.repository != item.repository
+            || self.tag != item.tag
+            || self.provenance != item.provenance
+        {
+            return Err(ArtifactError::Validation(format!(
+                "published artifact for '{}' does not match its push-plan item",
+                self.service
+            )));
+        }
         Ok(())
     }
 }
@@ -190,6 +219,47 @@ pub struct ImagePushPlanItem {
     pub action: ImagePushPlanAction,
 }
 
+impl ImagePushPlanItem {
+    pub fn validate(&self) -> Result<(), ArtifactError> {
+        if self.service.trim().is_empty() {
+            return Err(ArtifactError::Validation(
+                "push-plan service cannot be blank".to_string(),
+            ));
+        }
+        if self.registry.trim().is_empty() {
+            return Err(ArtifactError::Validation(
+                "push-plan registry cannot be blank".to_string(),
+            ));
+        }
+        if self.repository.trim().is_empty() {
+            return Err(ArtifactError::Validation(
+                "push-plan repository cannot be blank".to_string(),
+            ));
+        }
+        if self.tag.trim().is_empty() {
+            return Err(ArtifactError::Validation(
+                "push-plan tag cannot be blank".to_string(),
+            ));
+        }
+        if self.local_image_ref.trim().is_empty() {
+            return Err(ArtifactError::Validation(
+                "local image reference cannot be blank".to_string(),
+            ));
+        }
+        crate::oci::validate_repository_component(&self.service)?;
+        crate::oci::validate_tag(&self.tag)?;
+        self.provenance.validate()?;
+        let expected_target = format!("{}/{}:{}", self.registry, self.repository, self.tag);
+        if self.target_image_ref != expected_target {
+            return Err(ArtifactError::Validation(format!(
+                "target_image_ref mismatch: expected {}, got {}",
+                expected_target, self.target_image_ref
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImagePushPlanReport {
     pub environment: String,
@@ -197,12 +267,48 @@ pub struct ImagePushPlanReport {
     pub items: Vec<ImagePushPlanItem>,
 }
 
-pub fn derive_image_tag(build_fingerprint: Option<&str>) -> String {
-    match build_fingerprint {
-        Some(fingerprint) if fingerprint.len() >= 7 => fingerprint[0..7].to_string(),
-        Some(fingerprint) => fingerprint.to_string(),
-        None => "dev".to_string(),
+impl ImagePushPlanReport {
+    pub fn validate(&self) -> Result<(), ArtifactError> {
+        if self.environment.trim().is_empty() {
+            return Err(ArtifactError::Validation(
+                "push-plan environment cannot be blank".to_string(),
+            ));
+        }
+        if self.items.is_empty() && self.mutates_registry {
+            return Err(ArtifactError::Validation(
+                "empty push plan cannot mutate the registry".to_string(),
+            ));
+        }
+        let mut services = std::collections::BTreeSet::new();
+        let mut targets = std::collections::BTreeSet::new();
+        for item in &self.items {
+            item.validate()?;
+            if !services.insert(item.service.as_str()) {
+                return Err(ArtifactError::Validation(format!(
+                    "duplicate push-plan service: {}",
+                    item.service
+                )));
+            }
+            if !targets.insert(item.target_image_ref.as_str()) {
+                return Err(ArtifactError::Validation(format!(
+                    "duplicate target image reference: {}",
+                    item.target_image_ref
+                )));
+            }
+        }
+        Ok(())
     }
+}
+
+pub fn derive_image_tag(build_fingerprint: &str) -> Result<String, ArtifactError> {
+    if build_fingerprint.trim().is_empty() {
+        return Err(ArtifactError::Validation(
+            "build fingerprint cannot be blank".to_string(),
+        ));
+    }
+    let tag = build_fingerprint.chars().take(7).collect::<String>();
+    crate::oci::validate_tag(&tag)?;
+    Ok(tag)
 }
 
 pub fn parse_pushed_digest(output: &str) -> Result<Option<String>, ArtifactError> {
@@ -279,11 +385,11 @@ mod tests_derive {
     #[test]
     fn test_derive_image_tag() {
         assert_eq!(
-            derive_image_tag(Some("2bcc3f70984bb6d33d93bbcbb9eb3539ce033dc8")),
+            derive_image_tag("2bcc3f70984bb6d33d93bbcbb9eb3539ce033dc8").unwrap(),
             "2bcc3f7"
         );
-        assert_eq!(derive_image_tag(Some("abc")), "abc");
-        assert_eq!(derive_image_tag(None), "dev");
+        assert_eq!(derive_image_tag("abc").unwrap(), "abc");
+        assert!(derive_image_tag(" ").is_err());
     }
 
     #[test]
@@ -413,6 +519,22 @@ mod tests_derive {
 mod tests_addendum {
     use super::*;
 
+    fn valid_item(service: &str, target: &str) -> ImagePushPlanItem {
+        ImagePushPlanItem {
+            service: service.to_string(),
+            registry: "ghcr.io".to_string(),
+            repository: format!("acme/{service}"),
+            tag: "abc1234".to_string(),
+            target_image_ref: target.to_string(),
+            local_image_ref: format!("ghcr.io/acme/{service}:1.0.0"),
+            provenance: ImageProvenance {
+                build_fingerprint: "abc123456789".to_string(),
+                source_revision: Some("revision".to_string()),
+            },
+            action: ImagePushPlanAction::WouldPush,
+        }
+    }
+
     #[test]
     fn image_push_plan_report_serializes() {
         let report = ImagePushPlanReport {
@@ -438,5 +560,42 @@ mod tests_addendum {
         assert_eq!(json["environment"], "staging");
         assert_eq!(json["mutates_registry"], false);
         assert_eq!(json["items"][0]["action"], "would_push");
+    }
+
+    #[test]
+    fn validates_push_plan_items_and_duplicate_contracts() {
+        let item = valid_item("api", "ghcr.io/acme/api:abc1234");
+        item.validate().unwrap();
+
+        let mut invalid_target = item.clone();
+        invalid_target.target_image_ref = "docker.io/other/api:abc1234".to_string();
+        assert!(invalid_target.validate().is_err());
+
+        assert!(ImagePushPlanReport {
+            environment: "staging".to_string(),
+            mutates_registry: true,
+            items: vec![item.clone(), item.clone()],
+        }
+        .validate()
+        .is_err());
+
+        let mut same_target = valid_item("web", "ghcr.io/acme/web:abc1234");
+        same_target.target_image_ref = item.target_image_ref.clone();
+        same_target.repository = item.repository.clone();
+        assert!(ImagePushPlanReport {
+            environment: "staging".to_string(),
+            mutates_registry: true,
+            items: vec![item, same_target],
+        }
+        .validate()
+        .is_err());
+
+        assert!(ImagePushPlanReport {
+            environment: "staging".to_string(),
+            mutates_registry: true,
+            items: vec![],
+        }
+        .validate()
+        .is_err());
     }
 }

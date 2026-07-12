@@ -24,6 +24,9 @@
     "failed": 0,
     "skipped": 0,
     "cancelled": 0,
+    "cached": 0,
+    "rolled_back": 0,
+    "rollback_failed": 0,
     "items": [
       { "name": "workflow:validate-config", "status": "completed" },
       { "name": "service:api:build", "status": "completed" },
