@@ -247,42 +247,127 @@ pub struct WorkflowReportFinalizers {
 impl WorkflowReportFinalizers {
     pub fn validate(&self) -> Result<(), crate::workflow::error::WorkflowReportError> {
         use crate::workflow::error::WorkflowReportError;
-        let total = self.completed + self.skipped + self.failed;
-        if total != self.items.len() {
+
+        let actual_completed = self
+            .items
+            .iter()
+            .filter(|item| item.status == WorkflowFinalizerStatus::Completed)
+            .count();
+
+        let actual_failed = self
+            .items
+            .iter()
+            .filter(|item| item.status == WorkflowFinalizerStatus::Failed)
+            .count();
+
+        let actual_skipped = self
+            .items
+            .iter()
+            .filter(|item| item.status == WorkflowFinalizerStatus::Skipped)
+            .count();
+
+        if self.completed != actual_completed {
             return Err(WorkflowReportError::Validation(format!(
-                "finalizer item count {} does not match sum of completed/skipped/failed {}",
-                self.items.len(),
-                total
+                "finalizer completed count mismatch: reported {}, actual {}",
+                self.completed, actual_completed,
             )));
         }
 
-        let mut unique_ids = std::collections::BTreeSet::new();
-        for item in &self.items {
-            if !unique_ids.insert(&item.id) {
-                return Err(WorkflowReportError::Validation(format!(
-                    "duplicate finalizer id: {}",
-                    item.id
-                )));
+        if self.failed != actual_failed {
+            return Err(WorkflowReportError::Validation(format!(
+                "finalizer failed count mismatch: reported {}, actual {}",
+                self.failed, actual_failed,
+            )));
+        }
+
+        if self.skipped != actual_skipped {
+            return Err(WorkflowReportError::Validation(format!(
+                "finalizer skipped count mismatch: reported {}, actual {}",
+                self.skipped, actual_skipped,
+            )));
+        }
+
+        let mut planned_ids = std::collections::BTreeSet::new();
+
+        for id in &self.planned {
+            if id.trim().is_empty() {
+                return Err(WorkflowReportError::Validation(
+                    "planned finalizer ID cannot be blank".to_string(),
+                ));
             }
-            if !self.planned.contains(&item.id) {
+
+            if !planned_ids.insert(id.as_str()) {
                 return Err(WorkflowReportError::Validation(format!(
-                    "unplanned finalizer executed: {}",
-                    item.id
-                )));
-            }
-            if item.status == WorkflowFinalizerStatus::Failed && item.error.is_none() {
-                return Err(WorkflowReportError::Validation(format!(
-                    "failed finalizer '{}' missing error message",
-                    item.id
+                    "duplicate planned finalizer ID: {}",
+                    id,
                 )));
             }
         }
 
-        for planned_id in &self.planned {
-            if !unique_ids.contains(planned_id) {
+        let mut result_ids = std::collections::BTreeSet::new();
+
+        for item in &self.items {
+            if item.id.trim().is_empty() {
+                return Err(WorkflowReportError::Validation(
+                    "finalizer result ID cannot be blank".to_string(),
+                ));
+            }
+
+            if !result_ids.insert(item.id.as_str()) {
                 return Err(WorkflowReportError::Validation(format!(
-                    "planned finalizer missing from results: {}",
-                    planned_id
+                    "duplicate finalizer result ID: {}",
+                    item.id,
+                )));
+            }
+
+            if !planned_ids.contains(item.id.as_str()) {
+                return Err(WorkflowReportError::Validation(format!(
+                    "unplanned finalizer result: {}",
+                    item.id,
+                )));
+            }
+
+            match item.status {
+                WorkflowFinalizerStatus::Completed => {
+                    if item.error.is_some() {
+                        return Err(WorkflowReportError::Validation(format!(
+                            "completed finalizer '{}' cannot contain an error",
+                            item.id,
+                        )));
+                    }
+                }
+                WorkflowFinalizerStatus::Failed => {
+                    if item
+                        .error
+                        .as_deref()
+                        .is_none_or(|error| error.trim().is_empty())
+                    {
+                        return Err(WorkflowReportError::Validation(format!(
+                            "failed finalizer '{}' requires a nonblank error",
+                            item.id,
+                        )));
+                    }
+                }
+                WorkflowFinalizerStatus::Skipped => {
+                    if item
+                        .error
+                        .as_deref()
+                        .is_none_or(|reason| reason.trim().is_empty())
+                    {
+                        return Err(WorkflowReportError::Validation(format!(
+                            "skipped finalizer '{}' requires a nonblank reason",
+                            item.id,
+                        )));
+                    }
+                }
+            }
+        }
+
+        for id in &planned_ids {
+            if !result_ids.contains(id) {
+                return Err(WorkflowReportError::Validation(format!(
+                    "planned finalizer missing result: {}",
+                    id,
                 )));
             }
         }
@@ -1948,15 +2033,7 @@ mod tests {
             serde_json::from_str::<WorkflowReport>(&content).unwrap(),
             decoded
         );
-        let mut val = serde_json::to_value(decoded).unwrap();
-        if let Some(obj) = val.as_object_mut() {
-            if let Some(runner) = obj.get_mut("runner").and_then(|r| r.as_object_mut()) {
-                runner.insert("version".to_string(), serde_json::json!("VERSION"));
-                runner.insert("start_time".to_string(), serde_json::json!("TIMESTAMP"));
-                runner.insert("end_time".to_string(), serde_json::json!("TIMESTAMP"));
-                runner.insert("duration".to_string(), serde_json::json!("DURATION"));
-            }
-        }
+        let val = serde_json::to_value(decoded).unwrap();
         val
     }
 

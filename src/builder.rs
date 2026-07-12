@@ -254,7 +254,7 @@ struct ServiceCacheRecord {
     last_outcome: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ServicePhases {
     before_synchronously: Vec<String>,
     before: Vec<String>,
@@ -1343,19 +1343,31 @@ pub(crate) fn print_sailr_plan(plan: &SailrBuildPlan, options: &BuildOptions) {
     }
 }
 
-pub(crate) fn print_pipeline_result(plan: &SailrBuildPlan, result: &PipelineResult) {
+pub(crate) struct BuildResultSummary {
+    pub built: usize,
+    pub clean: usize,
+    pub failed: usize,
+    pub skipped: usize,
+}
+
+pub(crate) fn extract_build_summary(
+    plan: &SailrBuildPlan,
+    result: &PipelineResult,
+) -> BuildResultSummary {
     let task_statuses = result
         .tasks
         .iter()
         .map(|task| (task.name.as_str(), &task.status))
         .collect::<HashMap<_, _>>();
+
     let built = plan
         .services
         .iter()
         .filter(|service| {
+            let task_id = crate::workflow::task_id::service_build(&service.service.name);
             service.dirty
                 && matches!(
-                    task_statuses.get(service.service.name.as_str()),
+                    task_statuses.get(task_id.as_str()),
                     Some(TaskStatus::Completed)
                 )
         })
@@ -1369,9 +1381,10 @@ pub(crate) fn print_pipeline_result(plan: &SailrBuildPlan, result: &PipelineResu
         .services
         .iter()
         .filter(|service| {
+            let task_id = crate::workflow::task_id::service_build(&service.service.name);
             service.dirty
                 && matches!(
-                    task_statuses.get(service.service.name.as_str()),
+                    task_statuses.get(task_id.as_str()),
                     Some(TaskStatus::Failed)
                 )
         })
@@ -1380,20 +1393,31 @@ pub(crate) fn print_pipeline_result(plan: &SailrBuildPlan, result: &PipelineResu
         .services
         .iter()
         .filter(|service| {
+            let task_id = crate::workflow::task_id::service_build(&service.service.name);
             service.dirty
                 && matches!(
-                    task_statuses.get(service.service.name.as_str()),
+                    task_statuses.get(task_id.as_str()),
                     Some(TaskStatus::Skipped | TaskStatus::Cancelled)
                 )
         })
         .count();
 
-    println!(
-        "Sailr build result:\n  engine: runkernel\n  built: {}\n  clean: {}\n  failed: {}\n  skipped: {}\n  duration: {:.1}s",
+    BuildResultSummary {
         built,
         clean,
         failed,
         skipped,
+    }
+}
+
+pub(crate) fn print_pipeline_result(plan: &SailrBuildPlan, result: &PipelineResult) {
+    let summary = extract_build_summary(plan, result);
+    println!(
+        "Sailr build result:\n  engine: runkernel\n  built: {}\n  clean: {}\n  failed: {}\n  skipped: {}\n  duration: {:.1}s",
+        summary.built,
+        summary.clean,
+        summary.failed,
+        summary.skipped,
         result.duration.as_secs_f64()
     );
 }
@@ -1997,5 +2021,175 @@ mod tests {
 
         let contents = fs::read_to_string(log).expect("log should exist");
         assert_eq!(contents, "before-service-after");
+    }
+
+    #[test]
+    fn extract_build_summary_computes_correct_counts() {
+        let mut plan = SailrBuildPlan {
+            services: vec![],
+            before_all: vec![],
+            after_all: vec![],
+            force: false,
+            cache_dir: PathBuf::from(".sailr/cache/build"),
+        };
+
+        let dummy_build_config = crate::environment::ServiceBuildConfig {
+            path: ".".to_string(),
+            include: None,
+            relies_on: None,
+            before_synchronous: None,
+            before: None,
+            run_parallel: None,
+            run_synchronous: None,
+            after: None,
+            finally: None,
+            dockerfile: None,
+            build_command: None,
+            push_command: None,
+        };
+
+        // Clean service
+        plan.services.push(ServiceBuildPlan {
+            service: crate::environment::Service::new("clean-service", None, "1.0"),
+            build: dummy_build_config.clone(),
+            cwd: PathBuf::from("."),
+            dependencies: vec![],
+            dependency_paths: vec![],
+            input_patterns: vec![],
+            matched_input_files: vec![],
+            dirty: false,
+            dirty_reasons: vec![],
+            fingerprint: ServiceFingerprint {
+                source_hash: "".to_string(),
+                dependency_hash: "".to_string(),
+                command_hash: "".to_string(),
+                config_hash: "".to_string(),
+                full_hash: "".to_string(),
+            },
+            phases: Default::default(),
+        });
+
+        // Built service
+        plan.services.push(ServiceBuildPlan {
+            service: crate::environment::Service::new("built-service", None, "1.0"),
+            build: dummy_build_config.clone(),
+            cwd: PathBuf::from("."),
+            dependencies: vec![],
+            dependency_paths: vec![],
+            input_patterns: vec![],
+            matched_input_files: vec![],
+            dirty: true,
+            dirty_reasons: vec![],
+            fingerprint: ServiceFingerprint {
+                source_hash: "".to_string(),
+                dependency_hash: "".to_string(),
+                command_hash: "".to_string(),
+                config_hash: "".to_string(),
+                full_hash: "".to_string(),
+            },
+            phases: Default::default(),
+        });
+
+        // Failed service
+        plan.services.push(ServiceBuildPlan {
+            service: crate::environment::Service::new("failed-service", None, "1.0"),
+            build: dummy_build_config.clone(),
+            cwd: PathBuf::from("."),
+            dependencies: vec![],
+            dependency_paths: vec![],
+            input_patterns: vec![],
+            matched_input_files: vec![],
+            dirty: true,
+            dirty_reasons: vec![],
+            fingerprint: ServiceFingerprint {
+                source_hash: "".to_string(),
+                dependency_hash: "".to_string(),
+                command_hash: "".to_string(),
+                config_hash: "".to_string(),
+                full_hash: "".to_string(),
+            },
+            phases: Default::default(),
+        });
+
+        // Skipped service
+        plan.services.push(ServiceBuildPlan {
+            service: crate::environment::Service::new("skipped-service", None, "1.0"),
+            build: dummy_build_config.clone(),
+            cwd: PathBuf::from("."),
+            dependencies: vec![],
+            dependency_paths: vec![],
+            input_patterns: vec![],
+            matched_input_files: vec![],
+            dirty: true,
+            dirty_reasons: vec![],
+            fingerprint: ServiceFingerprint {
+                source_hash: "".to_string(),
+                dependency_hash: "".to_string(),
+                command_hash: "".to_string(),
+                config_hash: "".to_string(),
+                full_hash: "".to_string(),
+            },
+            phases: Default::default(),
+        });
+
+        let statuses = vec![
+            ("service:built-service:build", TaskStatus::Completed),
+            ("service:failed-service:build", TaskStatus::Failed),
+            ("service:skipped-service:build", TaskStatus::Skipped),
+        ];
+
+        let result = PipelineResult {
+            name: "test".to_string(),
+            duration: std::time::Duration::from_secs(1),
+            summary: runkernel::PipelineSummary {
+                name: "test".to_string(),
+                success: false,
+                completed: 1,
+                failed: 1,
+                skipped: 1,
+                cached: 0,
+                cancelled: 0,
+                rolled_back: 0,
+                rollback_failed: 0,
+            },
+            tasks: vec![
+                runkernel::TaskResult {
+                    name: crate::workflow::task_id::service_build("built-service"),
+                    status: TaskStatus::Completed,
+                    duration: None,
+                    error: None,
+                    cache_hit: false,
+                    cache_reason: None,
+                    rollback_status: None,
+                    rollback_error: None,
+                },
+                runkernel::TaskResult {
+                    name: crate::workflow::task_id::service_build("failed-service"),
+                    status: TaskStatus::Failed,
+                    duration: None,
+                    error: None,
+                    cache_hit: false,
+                    cache_reason: None,
+                    rollback_status: None,
+                    rollback_error: None,
+                },
+                runkernel::TaskResult {
+                    name: crate::workflow::task_id::service_build("skipped-service"),
+                    status: TaskStatus::Skipped,
+                    duration: None,
+                    error: None,
+                    cache_hit: false,
+                    cache_reason: None,
+                    rollback_status: None,
+                    rollback_error: None,
+                },
+            ],
+        };
+
+        let summary = extract_build_summary(&plan, &result);
+        assert_eq!(summary.clean, 1);
+        assert_eq!(summary.built, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.skipped, 1);
     }
 }

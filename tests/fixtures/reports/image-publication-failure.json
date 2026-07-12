@@ -10,11 +10,7 @@
     "ci_environment": {
       "provider": "github",
       "run_id": "run-17"
-    },
-    "start_time": "TIMESTAMP",
-    "end_time": "TIMESTAMP",
-    "duration": "DURATION",
-    "version": "VERSION"
+    }
   },
   "environment": "staging",
   "success": false,

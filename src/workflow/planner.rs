@@ -1163,17 +1163,6 @@ mod tests {
 mod tests_addendum {
     use super::*;
 
-    struct FixedRevision;
-
-    impl SourceRevisionResolver for FixedRevision {
-        fn resolve(
-            &self,
-            _runner: &RunnerContext,
-        ) -> Result<Option<String>, crate::workflow::error::ProvenanceError> {
-            Ok(Some("revision".to_string()))
-        }
-    }
-
     fn assert_plan_pipeline_parity(plan: &WorkflowPlan, pipeline: &runkernel::Pipeline) {
         let planned = plan
             .tasks
@@ -1478,6 +1467,17 @@ mod tests_addendum {
         )
         .unwrap();
 
+        struct RejectingResolver;
+
+        impl SourceRevisionResolver for RejectingResolver {
+            fn resolve(
+                &self,
+                _runner: &RunnerContext,
+            ) -> Result<Option<String>, crate::workflow::error::ProvenanceError> {
+                panic!("source revision resolver must not be called for no-op push-run");
+            }
+        }
+
         let mut push_profile: crate::workflow::profile::WorkflowProfile = toml::from_str(
             r#"
             environment = "test"
@@ -1499,7 +1499,7 @@ mod tests_addendum {
                 interactive: false,
                 ci_environment: None,
             },
-            Arc::new(FixedRevision),
+            Arc::new(RejectingResolver),
         );
         let plan = planner.plan().unwrap();
         let push_plan = plan.image_push_plan.as_ref().unwrap();
