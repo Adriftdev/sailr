@@ -2132,12 +2132,6 @@ mod tests {
             phases: Default::default(),
         });
 
-        let statuses = vec![
-            ("service:built-service:build", TaskStatus::Completed),
-            ("service:failed-service:build", TaskStatus::Failed),
-            ("service:skipped-service:build", TaskStatus::Skipped),
-        ];
-
         let result = PipelineResult {
             name: "test".to_string(),
             duration: std::time::Duration::from_secs(1),

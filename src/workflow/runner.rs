@@ -2033,8 +2033,7 @@ mod tests {
             serde_json::from_str::<WorkflowReport>(&content).unwrap(),
             decoded
         );
-        let val = serde_json::to_value(decoded).unwrap();
-        val
+        serde_json::to_value(decoded).unwrap()
     }
 
     #[test]
