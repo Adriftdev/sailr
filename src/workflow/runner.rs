@@ -207,7 +207,8 @@ fn write_workflow_report(
             context,
             namespace,
         ) {
-            report.deployment_plan = Some(serde_json::to_value(plan).unwrap_or(serde_json::Value::Null));
+            report.deployment_plan =
+                Some(serde_json::to_value(plan).unwrap_or(serde_json::Value::Null));
         }
     }
 
@@ -425,22 +426,35 @@ impl WorkflowRunner {
         let runner_ctx = RunnerContext::detect(false);
         let config_path = std::path::Path::new("sailr.workflow.toml");
         let config = WorkflowConfig::load().map_err(|e| e.to_string())?;
-        
+
         let profile = config
             .get_profile(&args.profile)
             .ok_or_else(|| format!("Workflow profile '{}' not found", args.profile))?;
         let normalized = profile.normalize(runner_ctx.ci);
-        
+
         let env_path_str = format!("k8s/environments/{}/config.toml", normalized.environment);
         let env = Environment::load_from_file(&normalized.environment).map_err(|e| {
-            format!("Failed to load environment '{}': {}", normalized.environment, e)
+            format!(
+                "Failed to load environment '{}': {}",
+                normalized.environment, e
+            )
         })?;
 
         println!("Workflow:");
         println!("  profile: {}", normalized.name);
-        println!("  config: {}", std::fs::canonicalize(config_path).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "sailr.workflow.toml".to_string()));
+        println!(
+            "  config: {}",
+            std::fs::canonicalize(config_path)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "sailr.workflow.toml".to_string())
+        );
         println!("  environment: {}", normalized.environment);
-        println!("  environment config: {}", std::fs::canonicalize(&env_path_str).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| env_path_str));
+        println!(
+            "  environment config: {}",
+            std::fs::canonicalize(&env_path_str)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| env_path_str)
+        );
 
         println!("\nRunner:");
         println!("  ci: {}", runner_ctx.ci);
@@ -450,8 +464,15 @@ impl WorkflowRunner {
         println!("  approval: {:?}", normalized.approval);
         println!("  apply required: {}", normalized.apply);
 
-        let registry_host = if env.registry.prefix().is_empty() { "docker.io".to_string() } else { env.registry.prefix() };
-        let registry_namespace = env.registry.namespace().unwrap_or_else(|| "none".to_string());
+        let registry_host = if env.registry.prefix().is_empty() {
+            "docker.io".to_string()
+        } else {
+            env.registry.prefix()
+        };
+        let registry_namespace = env
+            .registry
+            .namespace()
+            .unwrap_or_else(|| "none".to_string());
 
         println!("\nRegistry:");
         println!("  host: {}", registry_host);
@@ -977,7 +998,8 @@ mod tests {
         use crate::workflow::profile::WorkflowProfile;
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let env_toml = format!(r#"
+        let env_toml = format!(
+            r#"
         schema_version = "v0.5"
         name = "test"
         domain = "test.local"
@@ -988,7 +1010,9 @@ mod tests {
         name = "ci-build-hello"
         [service.build]
         path = "{}"
-        "#, temp_dir.path().to_string_lossy());
+        "#,
+            temp_dir.path().to_string_lossy()
+        );
         let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let profile_toml = r#"
@@ -1003,7 +1027,11 @@ mod tests {
         let normalized = profile.normalize(false);
         let runner_ctx = RunnerContext::detect(true);
         let options = crate::builder::BuildOptions {
-            cache_dir: temp_dir.path().join(".sailr/cache").to_string_lossy().to_string(),
+            cache_dir: temp_dir
+                .path()
+                .join(".sailr/cache")
+                .to_string_lossy()
+                .to_string(),
             force: false,
             only: vec![],
             ignore: vec![],
@@ -1060,7 +1088,10 @@ mod tests {
         let content = std::fs::read_to_string(&report_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
 
-        assert_eq!(json["plans"]["image_push"]["items"][0]["action"], "would_push");
+        assert_eq!(
+            json["plans"]["image_push"]["items"][0]["action"],
+            "would_push"
+        );
 
         std::env::set_current_dir(original_dir).unwrap();
     }
@@ -1070,9 +1101,10 @@ mod tests {
         use crate::environment::Environment;
         use crate::workflow::planner::WorkflowPlanner;
         use crate::workflow::profile::WorkflowProfile;
-        
+
         let temp_dir = tempfile::tempdir().unwrap();
-        let env_toml = format!(r#"
+        let env_toml = format!(
+            r#"
         schema_version = "v0.5"
         name = "staging"
         domain = "test.local"
@@ -1083,7 +1115,9 @@ mod tests {
         name = "api"
         [service.build]
         path = "{}"
-        "#, temp_dir.path().to_string_lossy());
+        "#,
+            temp_dir.path().to_string_lossy()
+        );
         let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let profile_toml = r#"
@@ -1096,12 +1130,16 @@ mod tests {
         let mut profile: WorkflowProfile = toml::from_str(profile_toml).unwrap();
         profile.name = "ci-build-push".to_string();
         let normalized = profile.normalize(true);
-        
+
         let mut runner_ctx = RunnerContext::detect(true);
         runner_ctx.kind = RunnerKind::GitHubActions;
 
         let options = crate::builder::BuildOptions {
-            cache_dir: temp_dir.path().join(".sailr/cache").to_string_lossy().to_string(),
+            cache_dir: temp_dir
+                .path()
+                .join(".sailr/cache")
+                .to_string_lossy()
+                .to_string(),
             force: false,
             only: vec![],
             ignore: vec![],
@@ -1139,43 +1177,37 @@ mod tests {
         };
 
         let mut report_data = crate::workflow::image::WorkflowReportData::default();
-        report_data.published_artifacts.push(
-            crate::workflow::image::PublishedImageArtifact {
+        report_data
+            .published_artifacts
+            .push(crate::workflow::image::PublishedImageArtifact {
                 environment: "staging".to_string(),
                 service: "api".to_string(),
-                digest: "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938".to_string(),
+                digest: "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938"
+                    .to_string(),
                 published_at: "2024-03-20T12:00:00Z".to_string(),
                 registry: "".to_string(),
                 repository: "".to_string(),
                 tag: "".to_string(),
                 image_ref: "".to_string(),
                 source_sha: "".to_string(),
-            }
-        );
+            });
 
         let temp = tempfile::tempdir().unwrap();
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp.path()).unwrap();
 
-        write_workflow_report(
-            &normalized,
-            &runner_ctx,
-            &result,
-            &plan,
-            &report_data,
-        )
-        .unwrap();
+        write_workflow_report(&normalized, &runner_ctx, &result, &plan, &report_data).unwrap();
 
-        let report_path = temp
-            .path()
-            .join(".sailr/reports/ci-build-push/latest.json");
+        let report_path = temp.path().join(".sailr/reports/ci-build-push/latest.json");
         let content = std::fs::read_to_string(&report_path).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
-        
-        let expected_content = std::fs::read_to_string(original_dir.join("tests/fixtures/reports/push_report.json")).unwrap();
+
+        let expected_content =
+            std::fs::read_to_string(original_dir.join("tests/fixtures/reports/push_report.json"))
+                .unwrap();
         let expected_json: serde_json::Value = serde_json::from_str(&expected_content).unwrap();
 
-        // The image_push_plan won't exactly match the simple fixture string because it includes full artifact refs etc, 
+        // The image_push_plan won't exactly match the simple fixture string because it includes full artifact refs etc,
         // so we'll just test the top-level keys to ensure the schema matches exactly.
         assert_eq!(json["schema_version"], expected_json["schema_version"]);
         assert_eq!(json["report_type"], expected_json["report_type"]);
@@ -1185,15 +1217,21 @@ mod tests {
         assert_eq!(json["environment"], expected_json["environment"]);
         assert_eq!(json["success"], expected_json["success"]);
         assert_eq!(json["effects"], expected_json["effects"]);
-        assert_eq!(json["tasks"]["completed"], expected_json["tasks"]["completed"]);
-        
+        assert_eq!(
+            json["tasks"]["completed"],
+            expected_json["tasks"]["completed"]
+        );
+
         assert!(json["plans"]["image_push"].is_object());
         assert!(json["artifacts"]["published_images"].is_array());
-        
+
         let artifact = &json["artifacts"]["published_images"][0];
         assert_eq!(artifact["environment"], "staging");
         assert_eq!(artifact["service"], "api");
-        assert_eq!(artifact["digest"], "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938");
+        assert_eq!(
+            artifact["digest"],
+            "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938"
+        );
         assert_eq!(artifact["published_at"], "2024-03-20T12:00:00Z");
 
         std::env::set_current_dir(original_dir).unwrap();

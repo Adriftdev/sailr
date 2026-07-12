@@ -996,8 +996,13 @@ fn render_commands(
 fn render_build_command(command: &str, env: &Environment, service: &Service) -> String {
     let mut rendered = command.to_string();
 
-    let resolved_registry = env.registry.resolve().expect("Failed to parse registry config");
-    let image_ref = resolved_registry.tagged_ref(&service.name, &service.version).expect("Failed to build image ref");
+    let resolved_registry = env
+        .registry
+        .resolve()
+        .expect("Failed to parse registry config");
+    let image_ref = resolved_registry
+        .tagged_ref(&service.name, &service.version)
+        .expect("Failed to build image ref");
 
     for (key, value) in [
         ("image_ref", image_ref.as_str()),

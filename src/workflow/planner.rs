@@ -311,18 +311,25 @@ impl WorkflowPlanner {
                 continue;
             }
 
-            let resolved_registry = self.env.registry.resolve().map_err(|e| format!("Invalid registry: {}", e))?;
-            
-            let repository = resolved_registry.repository_for(&service_plan.service.name)
+            let resolved_registry = self
+                .env
+                .registry
+                .resolve()
+                .map_err(|e| format!("Invalid registry: {}", e))?;
+
+            let repository = resolved_registry
+                .repository_for(&service_plan.service.name)
                 .map_err(|e| format!("Invalid repository: {}", e))?;
 
             let tag =
                 crate::workflow::image::derive_image_tag(Some(&service_plan.fingerprint.full_hash));
 
-            let target_image_ref = resolved_registry.tagged_ref(&service_plan.service.name, &tag)
+            let target_image_ref = resolved_registry
+                .tagged_ref(&service_plan.service.name, &tag)
                 .map_err(|e| format!("Invalid target ref: {}", e))?;
 
-            let local_image_ref = resolved_registry.tagged_ref(&service_plan.service.name, &service_plan.service.version)
+            let local_image_ref = resolved_registry
+                .tagged_ref(&service_plan.service.name, &service_plan.service.version)
                 .map_err(|e| format!("Invalid local ref: {}", e))?;
 
             items.push(crate::workflow::image::ImagePushPlanItem {
@@ -459,7 +466,10 @@ impl WorkflowPlanner {
                                     crate::LOGGER.info(&format!("Pushing {}", target_image_ref));
 
                                     let mut tag_cmd = tokio::process::Command::new("docker");
-                                    tag_cmd.arg("tag").arg(&local_image_ref).arg(&target_image_ref);
+                                    tag_cmd
+                                        .arg("tag")
+                                        .arg(&local_image_ref)
+                                        .arg(&target_image_ref);
                                     let tag_output = tag_cmd.output().await.map_err(|e| {
                                         anyhow::anyhow!("Failed to execute docker tag: {}", e)
                                     })?;
@@ -493,12 +503,17 @@ impl WorkflowPlanner {
                                     let combined_output = format!("{}\n{}", stdout_str, stderr_str);
 
                                     let mut inspect_cmd = tokio::process::Command::new("docker");
-                                    inspect_cmd.arg("inspect").arg("--format={{index .RepoDigests 0}}").arg(&target_image_ref);
+                                    inspect_cmd
+                                        .arg("inspect")
+                                        .arg("--format={{index .RepoDigests 0}}")
+                                        .arg(&target_image_ref);
                                     let inspect_output = inspect_cmd.output().await.ok();
-                                    
+
                                     let structured_digest = inspect_output.and_then(|out| {
                                         if out.status.success() {
-                                            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                                            let stdout = String::from_utf8_lossy(&out.stdout)
+                                                .trim()
+                                                .to_string();
                                             stdout.split('@').nth(1).map(|s| s.to_string())
                                         } else {
                                             None
@@ -916,7 +931,8 @@ mod tests_addendum {
         use crate::workflow::profile::WorkflowProfile;
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let env_toml = format!(r#"
+        let env_toml = format!(
+            r#"
         schema_version = "v0.5"
         name = "test"
         domain = "test.local"
@@ -927,7 +943,9 @@ mod tests_addendum {
         name = "api"
         [service.build]
         path = "{}"
-        "#, temp_dir.path().to_string_lossy());
+        "#,
+            temp_dir.path().to_string_lossy()
+        );
         let env: Environment = toml::from_str(&env_toml).unwrap();
 
         let profile_toml = r#"
@@ -1057,7 +1075,11 @@ mod tests_addendum {
         let normalized = profile.normalize(false);
         let runner_ctx = RunnerContext::detect(true);
         let options = crate::builder::BuildOptions {
-            cache_dir: temp_dir.path().join(".sailr/cache").to_string_lossy().to_string(),
+            cache_dir: temp_dir
+                .path()
+                .join(".sailr/cache")
+                .to_string_lossy()
+                .to_string(),
             force: true, // force to ensure it's dirty
             only: vec![],
             ignore: vec![],

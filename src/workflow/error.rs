@@ -22,10 +22,7 @@ pub enum ArtifactError {
     #[error("Missing digest: {0}")]
     MissingDigest(String),
     #[error("Digest mismatch. expected: {expected}, actual: {actual}")]
-    DigestMismatch {
-        expected: String,
-        actual: String,
-    },
+    DigestMismatch { expected: String, actual: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
