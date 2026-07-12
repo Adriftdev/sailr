@@ -463,6 +463,24 @@ impl WorkflowPlanner {
             }
         }
 
+        if let Some(plan) = &build_plan_opt {
+            if self.profile.build == crate::workflow::profile::WorkflowStepMode::Run {
+                let dirty_services = plan.services.iter().filter(|s| s.dirty).count();
+                if dirty_services > 0 {
+                    finalizers.push(WorkflowFinalizerPlan {
+                        id: crate::workflow::task_id::WRITE_BUILD_CACHE_FINALIZER.to_string(),
+                        label: "Write Build Caches".to_string(),
+                        kind: WorkflowFinalizerKind::WriteBuildCache,
+                        effects: WorkflowEffects {
+                            mutates_filesystem: true,
+                            ..Default::default()
+                        },
+                        description: "Updates local build fingerprint caches for successfully built services.".to_string(),
+                    });
+                }
+            }
+        }
+
         if matches!(
             self.profile.report,
             crate::workflow::profile::ReportMode::Json | crate::workflow::profile::ReportMode::Both
@@ -1663,7 +1681,7 @@ mod tests_addendum {
         assert!(plan.image_push_plan.is_some());
         assert!(plan.effects.mutates_registry);
         assert!(plan.effects.mutates_docker);
-        assert!(!plan.effects.mutates_filesystem);
+        assert!(plan.effects.mutates_filesystem);
 
         let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
         let (pipeline, _) = planner

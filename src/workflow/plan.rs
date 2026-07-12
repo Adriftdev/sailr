@@ -15,9 +15,28 @@ pub struct WorkflowPlan {
     pub effects: WorkflowEffects,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowFinalizerPhase {
+    BeforeReport,
+    ReportSink,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowFinalizerKind {
+    WriteBuildCache,
     WriteWorkflowReport,
+}
+
+impl WorkflowFinalizerKind {
+    pub fn phase(self) -> WorkflowFinalizerPhase {
+        match self {
+            WorkflowFinalizerKind::WriteBuildCache => WorkflowFinalizerPhase::BeforeReport,
+            WorkflowFinalizerKind::WriteWorkflowReport => WorkflowFinalizerPhase::ReportSink,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

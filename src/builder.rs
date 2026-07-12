@@ -142,6 +142,9 @@ impl BuildBackend for RoomserviceBuildBackend {
 impl BuildBackend for RunkernelBuildBackend {
     async fn build(&mut self, env: &Environment) -> Result<BuildRunResult, String> {
         let plan = create_sailr_build_plan(env, &self.options)?;
+        if self.options.dump_scope {
+            write_scope_dumps(&plan)?;
+        }
         print_sailr_plan(&plan, &self.options);
 
         if self.options.plan || self.options.dry_run {
@@ -316,10 +319,6 @@ pub(crate) fn create_sailr_build_plan(
     let mut dirty_state = HashMap::new();
     let mut plans = Vec::new();
 
-    fs::create_dir_all(cache_dir.join("services"))
-        .map_err(|error| format!("Failed to create Sailr build cache directory: {}", error))?;
-    fs::create_dir_all(cache_dir.join("scopes"))
-        .map_err(|error| format!("Failed to create Sailr build scope directory: {}", error))?;
 
     for service in selected_services {
         let build = service
@@ -406,9 +405,7 @@ pub(crate) fn create_sailr_build_plan(
         }
         dedupe_dirty_reasons(&mut dirty_reasons);
 
-        if options.dump_scope {
-            write_scope_dump(&cache_dir, &service.name, &matched_input_files)?;
-        }
+
 
         let dirty = !dirty_reasons.is_empty();
         dirty_state.insert(service.name.clone(), dirty);
@@ -1205,10 +1202,12 @@ pub(crate) fn write_successful_service_caches(
         };
         let serialized = serde_json::to_string_pretty(&record)
             .map_err(|error| format!("Failed to serialize Sailr service cache: {}", error))?;
-        fs::write(
-            service_cache_path(&plan.cache_dir, &service.service.name),
-            serialized,
-        )
+        let cache_path = service_cache_path(&plan.cache_dir, &service.service.name);
+        if let Some(parent) = cache_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Failed to create Sailr build cache directory: {}", error))?;
+        }
+        fs::write(cache_path, serialized)
         .map_err(|error| format!("Failed to write Sailr service cache: {}", error))?;
     }
     Ok(())
@@ -1228,16 +1227,28 @@ fn sailr_build_cache_dir(configured_cache_dir: &str) -> PathBuf {
     }
 }
 
-fn write_scope_dump(cache_dir: &Path, service_name: &str, files: &[PathBuf]) -> Result<(), String> {
-    let path = cache_dir
-        .join("scopes")
-        .join(format!("{}.txt", service_name));
+fn write_scope_dump(
+    cache_dir: &Path,
+    service_name: &str,
+    files: &[PathBuf],
+) -> Result<(), String> {
+    let scope_dir = cache_dir.join("scopes");
+    fs::create_dir_all(&scope_dir)
+        .map_err(|error| format!("Failed to create Sailr build scope directory: {}", error))?;
+    let path = scope_dir.join(format!("{}.txt", service_name));
     let contents = files
         .iter()
         .map(|file| file.to_string_lossy().to_string())
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(path, contents).map_err(|error| format!("Failed to write scope dump: {}", error))
+}
+
+pub(crate) fn write_scope_dumps(plan: &SailrBuildPlan) -> Result<(), String> {
+    for service_plan in &plan.services {
+        write_scope_dump(&plan.cache_dir, &service_plan.service.name, &service_plan.matched_input_files)?;
+    }
+    Ok(())
 }
 
 fn dedupe_dirty_reasons(reasons: &mut Vec<DirtyReason>) {
@@ -1701,7 +1712,8 @@ mod tests {
         let mut opts = options(cache_dir.clone());
         opts.dump_scope = true;
 
-        create_sailr_build_plan(&env, &opts).expect("plan should be created");
+        let plan = create_sailr_build_plan(&env, &opts).expect("plan should be created");
+        write_scope_dumps(&plan).expect("scope dump should be written");
 
         let scope = fs::read_to_string(cache_dir.join("scopes/api.txt"))
             .expect("scope dump should be written");

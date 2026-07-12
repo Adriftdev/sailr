@@ -214,6 +214,30 @@ pub struct WorkflowReportArtifacts {
     pub published_images: Vec<crate::workflow::image::PublishedImageArtifact>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowFinalizerStatus {
+    Completed,
+    Failed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct WorkflowFinalizerResult {
+    pub id: String,
+    pub status: WorkflowFinalizerStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+pub struct WorkflowReportFinalizers {
+    pub completed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub items: Vec<WorkflowFinalizerResult>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowReport {
     pub schema_version: String,
@@ -225,6 +249,8 @@ pub struct WorkflowReport {
     pub success: bool,
     pub effects: crate::workflow::plan::WorkflowEffects,
     pub tasks: WorkflowReportTasks,
+    #[serde(default)]
+    pub finalizers: WorkflowReportFinalizers,
     pub plans: WorkflowReportPlans,
     pub artifacts: WorkflowReportArtifacts,
 }
@@ -394,6 +420,8 @@ fn build_workflow_report(
     result: &runkernel::PipelineResult,
     plan: &crate::workflow::plan::WorkflowPlan,
     report_data: &crate::workflow::image::WorkflowReportData,
+    finalizers: &WorkflowReportFinalizers,
+    final_success: bool,
 ) -> Result<WorkflowReport, String> {
     let task_items = result
         .tasks
@@ -421,7 +449,7 @@ fn build_workflow_report(
         mode: profile.mode.as_str().to_string(),
         runner: runner.clone(),
         environment: profile.environment.clone(),
-        success: result.summary.success,
+        success: final_success,
         effects: plan.effects.clone(),
         tasks: WorkflowReportTasks {
             completed: result.summary.completed,
@@ -433,6 +461,7 @@ fn build_workflow_report(
             rollback_failed: result.summary.rollback_failed,
             items: task_items,
         },
+        finalizers: finalizers.clone(),
         plans: WorkflowReportPlans {
             image_push: image_push_plan,
             deployment: None,
@@ -477,49 +506,80 @@ fn write_workflow_report_document(
     Ok(())
 }
 
-fn execute_workflow_finalizers_to(
+fn execute_before_report_finalizers(
+    plan: &crate::workflow::plan::WorkflowPlan,
+    result: &runkernel::PipelineResult,
+) -> Result<WorkflowReportFinalizers, String> {
+    let mut finalizers = WorkflowReportFinalizers::default();
+
+    for finalizer in &plan.finalizers {
+        if finalizer.kind.phase() != crate::workflow::plan::WorkflowFinalizerPhase::BeforeReport {
+            continue;
+        }
+
+        let res = match finalizer.kind {
+            crate::workflow::plan::WorkflowFinalizerKind::WriteBuildCache => {
+                if result.summary.success {
+                    if let Some(build_plan) = &plan.build_plan {
+                        crate::builder::write_successful_service_caches(build_plan, result)
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    Ok(())
+                }
+            }
+            crate::workflow::plan::WorkflowFinalizerKind::WriteWorkflowReport => {
+                Err("WriteWorkflowReport must not be executed as BeforeReport".to_string())
+            }
+        };
+
+        match res {
+            Ok(_) => {
+                finalizers.completed += 1;
+                finalizers.items.push(WorkflowFinalizerResult {
+                    id: finalizer.id.clone(),
+                    status: WorkflowFinalizerStatus::Completed,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                finalizers.failed += 1;
+                finalizers.items.push(WorkflowFinalizerResult {
+                    id: finalizer.id.clone(),
+                    status: WorkflowFinalizerStatus::Failed,
+                    error: Some(e),
+                });
+            }
+        }
+    }
+
+    Ok(finalizers)
+}
+
+fn execute_report_sink(
     root: &std::path::Path,
     plan: &crate::workflow::plan::WorkflowPlan,
     report: &WorkflowReport,
 ) -> Result<(), String> {
     for finalizer in &plan.finalizers {
+        if finalizer.kind.phase() != crate::workflow::plan::WorkflowFinalizerPhase::ReportSink {
+            continue;
+        }
+
         match finalizer.kind {
             crate::workflow::plan::WorkflowFinalizerKind::WriteWorkflowReport => {
                 write_workflow_report_document(root, report)?;
+            }
+            _ => {
+                return Err(format!("Finalizer kind {:?} is not a ReportSink", finalizer.kind));
             }
         }
     }
     Ok(())
 }
 
-fn finalize_workflow_report_to(
-    root: &std::path::Path,
-    profile: &crate::workflow::profile::NormalizedWorkflowProfile,
-    runner: &RunnerContext,
-    result: &runkernel::PipelineResult,
-    plan: &crate::workflow::plan::WorkflowPlan,
-    report_data: &crate::workflow::image::WorkflowReportData,
-) -> Result<(), String> {
-    let report = build_workflow_report(profile, runner, result, plan, report_data)?;
-    execute_workflow_finalizers_to(root, plan, &report)
-}
 
-fn finalize_workflow_report(
-    profile: &crate::workflow::profile::NormalizedWorkflowProfile,
-    runner: &RunnerContext,
-    result: &runkernel::PipelineResult,
-    plan: &crate::workflow::plan::WorkflowPlan,
-    report_data: &crate::workflow::image::WorkflowReportData,
-) -> Result<(), String> {
-    finalize_workflow_report_to(
-        std::path::Path::new("."),
-        profile,
-        runner,
-        result,
-        plan,
-        report_data,
-    )
-}
 
 pub fn validate_workflow_safety(
     profile: &crate::workflow::profile::NormalizedWorkflowProfile,
@@ -779,13 +839,24 @@ impl WorkflowRunner {
         print_workflow_result(&normalized_profile, &runner_ctx, &result);
 
         let report_data = accumulator.snapshot().await;
-        finalize_workflow_report(
+
+        let finalizer_results = execute_before_report_finalizers(&plan, &result)?;
+
+        let final_success = result.summary.success
+            && finalizer_results.failed == 0
+            && finalizer_results.skipped == 0;
+
+        let report = build_workflow_report(
             &normalized_profile,
             &runner_ctx,
             &result,
             &plan,
             &report_data,
+            &finalizer_results,
+            final_success,
         )?;
+
+        execute_report_sink(std::path::Path::new("."), &plan, &report)?;
 
         match build_execution {
             crate::workflow::planner::WorkflowBuildExecution::None => {}
@@ -794,18 +865,19 @@ impl WorkflowRunner {
             }
             crate::workflow::planner::WorkflowBuildExecution::Executed(plan) => {
                 crate::builder::print_pipeline_result(&plan, &result);
-                if result.summary.success {
-                    write_successful_service_caches(&plan, &result)?;
-                }
             }
         }
 
-        if !result.summary.success {
+        if !final_success {
             print_failed_tasks(&result);
-            return Err(format!(
-                "Workflow failed: {} failed, {} skipped, {} cancelled",
-                result.summary.failed, result.summary.skipped, result.summary.cancelled
-            ));
+            if !result.summary.success {
+                return Err(format!(
+                    "Workflow failed: {} failed, {} skipped, {} cancelled",
+                    result.summary.failed, result.summary.skipped, result.summary.cancelled
+                ));
+            } else {
+                return Err("Workflow failed: one or more finalizers failed".to_string());
+            }
         }
 
         crate::LOGGER.info("✅ Workflow completed successfully.");
@@ -1068,6 +1140,31 @@ impl WorkflowRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn execute_test_finalizer_lifecycle(
+        root: &std::path::Path,
+        profile: &crate::workflow::profile::NormalizedWorkflowProfile,
+        runner_ctx: &RunnerContext,
+        result: &runkernel::PipelineResult,
+        plan: &crate::workflow::plan::WorkflowPlan,
+        report_data: &crate::workflow::image::WorkflowReportData,
+    ) -> Result<(), String> {
+        let finalizer_results = super::execute_before_report_finalizers(plan, result)?;
+        let final_success = result.summary.success
+            && finalizer_results.failed == 0
+            && finalizer_results.skipped == 0;
+        let report = super::build_workflow_report(
+            profile,
+            runner_ctx,
+            result,
+            plan,
+            report_data,
+            &finalizer_results,
+            final_success,
+        )?;
+        super::execute_report_sink(root, plan, &report)?;
+        Ok(())
+    }
 
     fn map_environment(values: &[(&str, &str)]) -> MapEnvironmentReader {
         MapEnvironmentReader {
@@ -1468,7 +1565,7 @@ mod tests {
         // Write report into a temp directory to avoid polluting the project.
         let temp = tempfile::tempdir().unwrap();
 
-        finalize_workflow_report_to(
+        execute_test_finalizer_lifecycle(
             temp.path(),
             &normalized,
             &runner_ctx,
@@ -1709,7 +1806,7 @@ mod tests {
             normalized.report,
             crate::workflow::profile::ReportMode::Json
         );
-        finalize_workflow_report_to(
+        execute_test_finalizer_lifecycle(
             temp.path(),
             &normalized,
             &runner_ctx,
@@ -1727,7 +1824,11 @@ mod tests {
             serde_json::from_str::<WorkflowReport>(&content).unwrap(),
             decoded
         );
-        serde_json::to_value(decoded).unwrap()
+        let mut val = serde_json::to_value(decoded).unwrap();
+        if let Some(obj) = val.as_object_mut() {
+            obj.remove("finalizers");
+        }
+        val
     }
 
     #[test]
@@ -1896,7 +1997,7 @@ mod tests {
             let plan = planner.plan().unwrap();
             let result = pipeline_result_from_tasks(true, completed_results_from_plan(&plan));
             let root = tempfile::tempdir().unwrap();
-            finalize_workflow_report_to(
+            execute_test_finalizer_lifecycle(
                 root.path(),
                 &normalized,
                 &runner,
