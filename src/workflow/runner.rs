@@ -5,7 +5,7 @@ use crate::environment::Environment;
 use super::config::WorkflowConfig;
 use super::planner::WorkflowPlanner;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerKind {
     Local,
@@ -15,7 +15,7 @@ pub enum RunnerKind {
     GenericCi,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RunnerContext {
     pub kind: RunnerKind,
     pub ci: bool,
@@ -120,7 +120,7 @@ fn print_workflow_result(
     print_tasks_by_status("cancelled tasks", result, runkernel::TaskStatus::Cancelled);
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowReportTaskItem {
     pub name: String,
     pub status: String,
@@ -128,7 +128,7 @@ pub struct WorkflowReportTaskItem {
     pub error: Option<String>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowReportTasks {
     pub completed: usize,
     pub failed: usize,
@@ -137,26 +137,26 @@ pub struct WorkflowReportTasks {
     pub items: Vec<WorkflowReportTaskItem>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowReportPlans {
     pub image_push: Option<crate::workflow::image::ImagePushPlanReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deployment: Option<serde_json::Value>,
+    pub deployment: Option<crate::workflow::plan::WorkflowDeploymentPlan>,
 }
 
-#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkflowReportType {
     WorkflowExecution,
     WorkflowInspection,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowReportArtifacts {
     pub published_images: Vec<crate::workflow::image::PublishedImageArtifact>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowReport {
     pub schema_version: String,
     pub report_type: WorkflowReportType,
@@ -169,6 +169,87 @@ pub struct WorkflowReport {
     pub tasks: WorkflowReportTasks,
     pub plans: WorkflowReportPlans,
     pub artifacts: WorkflowReportArtifacts,
+}
+
+impl WorkflowReport {
+    pub fn validate(&self) -> Result<(), crate::workflow::error::WorkflowReportError> {
+        use crate::workflow::error::WorkflowReportError;
+
+        if self.schema_version != "sailr.workflow-report/v1" {
+            return Err(WorkflowReportError::Validation(format!(
+                "unsupported schema version: {}",
+                self.schema_version
+            )));
+        }
+        if self.profile.trim().is_empty() {
+            return Err(WorkflowReportError::Validation(
+                "profile cannot be blank".to_string(),
+            ));
+        }
+        if self.environment.trim().is_empty() {
+            return Err(WorkflowReportError::Validation(
+                "environment cannot be blank".to_string(),
+            ));
+        }
+
+        for (status, expected) in [
+            ("completed", self.tasks.completed),
+            ("failed", self.tasks.failed),
+            ("skipped", self.tasks.skipped),
+            ("cancelled", self.tasks.cancelled),
+        ] {
+            let actual = self
+                .tasks
+                .items
+                .iter()
+                .filter(|item| item.status == status)
+                .count();
+            if actual != expected {
+                return Err(WorkflowReportError::Validation(format!(
+                    "task summary mismatch for {status}: expected {expected}, found {actual}"
+                )));
+            }
+        }
+        if self.tasks.failed > 0 && self.success {
+            return Err(WorkflowReportError::Validation(
+                "a report with failed tasks cannot be successful".to_string(),
+            ));
+        }
+
+        if let Some(push_plan) = &self.plans.image_push {
+            if push_plan.environment != self.environment {
+                return Err(WorkflowReportError::Validation(
+                    "push-plan environment does not match report environment".to_string(),
+                ));
+            }
+        }
+
+        for artifact in &self.artifacts.published_images {
+            artifact.validate().map_err(|error| {
+                WorkflowReportError::Validation(format!("invalid published artifact: {error}"))
+            })?;
+            if let Some(push_plan) = &self.plans.image_push {
+                let item = push_plan
+                    .items
+                    .iter()
+                    .find(|item| item.service == artifact.service)
+                    .ok_or_else(|| {
+                        WorkflowReportError::Validation(format!(
+                            "published service '{}' is absent from the push plan",
+                            artifact.service
+                        ))
+                    })?;
+                if item.provenance != artifact.provenance {
+                    return Err(WorkflowReportError::Validation(format!(
+                        "published provenance for '{}' does not match the push plan",
+                        artifact.service
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn write_workflow_report_to(
@@ -238,10 +319,11 @@ fn write_workflow_report_to(
             context,
             namespace,
         ) {
-            report.plans.deployment =
-                Some(serde_json::to_value(plan).unwrap_or(serde_json::Value::Null));
+            report.plans.deployment = Some(plan);
         }
     }
+
+    report.validate().map_err(|error| error.to_string())?;
 
     let report_dir = root.join(".sailr").join("reports").join(&profile.name);
 
@@ -355,11 +437,18 @@ pub fn validate_workflow_safety(
     Ok(())
 }
 
+pub fn requires_cli_apply(profile: &crate::workflow::profile::NormalizedWorkflowProfile) -> bool {
+    profile.push == crate::workflow::profile::WorkflowStepMode::Run
+        || profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
+}
+
 #[derive(Debug)]
 pub struct WorkflowInspectionImage {
     pub service: String,
     pub local_image_ref: String,
     pub target_image_ref: String,
+    pub build_fingerprint: String,
+    pub source_revision: Option<String>,
 }
 
 #[derive(Debug)]
@@ -375,7 +464,10 @@ pub struct WorkflowInspection {
     pub approval: Option<crate::workflow::profile::ApprovalMode>,
     pub profile_apply: bool,
     pub requires_cli_apply: bool,
+    pub build_mode: crate::workflow::profile::WorkflowStepMode,
     pub push_mode: crate::workflow::profile::WorkflowStepMode,
+    pub generate_mode: crate::workflow::profile::WorkflowStepMode,
+    pub deploy_mode: crate::workflow::profile::WorkflowStepMode,
     pub registry_host: String,
     pub registry_namespace: String,
     pub registry_prefix: String,
@@ -402,12 +494,18 @@ impl WorkflowInspection {
 
         output.push_str("\nSafety:\n");
         output.push_str(&format!("  approval: {:?}\n", self.approval));
-        output.push_str(&format!("  profile apply: {}\n", self.profile_apply));
+        output.push_str(&format!(
+            "  profile apply allowed: {}\n",
+            self.profile_apply
+        ));
         output.push_str(&format!(
             "  CLI apply required: {}\n",
             self.requires_cli_apply
         ));
+        output.push_str(&format!("  build mode: {:?}\n", self.build_mode));
         output.push_str(&format!("  push mode: {:?}\n", self.push_mode));
+        output.push_str(&format!("  generate mode: {:?}\n", self.generate_mode));
+        output.push_str(&format!("  deploy mode: {:?}\n", self.deploy_mode));
 
         output.push_str("\nRegistry:\n");
         output.push_str(&format!("  host: {}\n", self.registry_host));
@@ -422,6 +520,14 @@ impl WorkflowInspection {
                 output.push_str(&format!("  service: {}\n", item.service));
                 output.push_str(&format!("  local image ref: {}\n", item.local_image_ref));
                 output.push_str(&format!("  target image ref: {}\n", item.target_image_ref));
+                output.push_str(&format!(
+                    "  build fingerprint: {}\n",
+                    item.build_fingerprint
+                ));
+                output.push_str(&format!(
+                    "  source revision: {}\n",
+                    item.source_revision.as_deref().unwrap_or("none")
+                ));
             }
         }
         output
@@ -602,18 +708,17 @@ impl WorkflowRunner {
             runner_interactive: runner_ctx.interactive,
             approval: Some(normalized.approval),
             profile_apply: profile.apply.unwrap_or(false),
-            requires_cli_apply: !normalized.apply,
+            requires_cli_apply: requires_cli_apply(&normalized),
+            build_mode: normalized.build,
             push_mode: normalized.push,
+            generate_mode: normalized.generate,
+            deploy_mode: normalized.deploy,
             registry_host: resolved_registry.host.clone(),
-            registry_namespace: env_arc
-                .registry
-                .namespace()
-                .unwrap_or_default()
+            registry_namespace: resolved_registry
+                .namespace
+                .clone()
                 .unwrap_or_else(|| "none".to_string()),
-            registry_prefix: env_arc
-                .registry
-                .prefix()
-                .unwrap_or_else(|_| "none".to_string()),
+            registry_prefix: resolved_registry.prefix(),
             images: {
                 let mut images = Vec::new();
                 if let Some(push_plan) = plan.image_push_plan {
@@ -622,6 +727,8 @@ impl WorkflowRunner {
                             service: item.service.clone(),
                             local_image_ref: item.local_image_ref.clone(),
                             target_image_ref: item.target_image_ref.clone(),
+                            build_fingerprint: item.provenance.build_fingerprint.clone(),
+                            source_revision: item.provenance.source_revision.clone(),
                         });
                     }
                 }
@@ -1218,7 +1325,16 @@ mod tests {
                 rolled_back: 0,
                 rollback_failed: 0,
             },
-            tasks: vec![],
+            tasks: vec![runkernel::TaskResult {
+                name: crate::workflow::task_id::PUSH_PLAN.to_string(),
+                status: runkernel::TaskStatus::Completed,
+                duration: Some(std::time::Duration::from_secs(1)),
+                error: None,
+                cache_hit: false,
+                cache_reason: None,
+                rollback_status: None,
+                rollback_error: None,
+            }],
         };
 
         // Write report into a temp directory to avoid polluting the project.
@@ -1254,21 +1370,72 @@ mod tests {
         serde_json::from_str(&content).unwrap()
     }
 
+    #[derive(Debug)]
+    struct FixedRevision;
+
+    impl crate::workflow::planner::SourceRevisionResolver for FixedRevision {
+        fn resolve(
+            &self,
+            _runner: &RunnerContext,
+        ) -> Result<Option<String>, crate::workflow::error::ProvenanceError> {
+            Ok(Some("0123456789abcdef".to_string()))
+        }
+    }
+
+    fn task_result(
+        name: impl Into<String>,
+        status: runkernel::TaskStatus,
+        error: Option<&str>,
+    ) -> runkernel::TaskResult {
+        runkernel::TaskResult {
+            name: name.into(),
+            status,
+            duration: Some(std::time::Duration::from_secs(1)),
+            error: error.map(str::to_string),
+            cache_hit: false,
+            cache_reason: None,
+            rollback_status: None,
+            rollback_error: None,
+        }
+    }
+
     fn generate_report_json(
-        profile_mode: crate::workflow::profile::WorkflowStepMode,
+        push_mode: crate::workflow::profile::WorkflowStepMode,
         success: bool,
-        published_artifacts: Vec<crate::workflow::image::PublishedImageArtifact>,
-        tasks_count: (usize, usize), // (completed, failed)
-        mutates_docker: bool,
     ) -> serde_json::Value {
+        let cache_dir = tempfile::tempdir().unwrap();
+        let env_toml = r#"
+        schema_version = "v0.5"
+        name = "staging"
+        domain = "staging.example.com"
+        log_level = "info"
+        default_replicas = 1
+
+        [registry]
+        host = "ghcr.io"
+        namespace = "org/repo"
+
+        [[service]]
+        name = "api"
+        version = "1.2.0"
+        [service.build]
+        path = "tests/fixtures/report-service"
+        "#;
+        let environment: crate::environment::Environment = toml::from_str(env_toml).unwrap();
         let profile_toml = format!(
             r#"
         environment = "staging"
         mode = "build"
+        build = "{}"
         push = "{}"
         report = "json"
         "#,
-            if profile_mode == crate::workflow::profile::WorkflowStepMode::Run {
+            if push_mode == crate::workflow::profile::WorkflowStepMode::Run {
+                "run"
+            } else {
+                "plan"
+            },
+            if push_mode == crate::workflow::profile::WorkflowStepMode::Run {
                 "run"
             } else {
                 "plan"
@@ -1280,81 +1447,137 @@ mod tests {
         let normalized = profile.normalize(true);
 
         let runner_ctx = RunnerContext {
-            ci_environment: None,
+            ci_environment: Some(crate::workflow::ci::CiEnvironment {
+                provider: crate::workflow::ci::CiProvider::GitHub,
+                run_id: Some("run-17".to_string()),
+            }),
             kind: RunnerKind::GitHubActions,
             ci: true,
             interactive: false,
         };
 
-        let plan = crate::workflow::plan::WorkflowPlan {
-            profile: normalized.clone(),
-            runner: runner_ctx.clone(),
-            tasks: vec![],
-            edges: vec![],
-            build_plan: None,
-            image_push_plan: Some(crate::workflow::image::ImagePushPlanReport {
-                environment: "staging".to_string(),
-                mutates_registry: profile_mode == crate::workflow::profile::WorkflowStepMode::Run,
-                items: vec![crate::workflow::image::ImagePushPlanItem {
-                    service: "api".to_string(),
-                    registry: "ghcr.io".to_string(),
-                    repository: "org/repo/api".to_string(),
-                    target_image_ref: "ghcr.io/org/repo/api:ab12cd34".to_string(),
-                    local_image_ref: "ghcr.io/org/repo/api:ab12cd34".to_string(),
-                    tag: "ab12cd34".to_string(),
-                    provenance: crate::workflow::image::ImageProvenance {
-                        build_fingerprint: "ab12cd345678".to_string(),
-                        source_revision: Some("ab12cd345678".to_string()),
-                    },
-                    action: crate::workflow::image::ImagePushPlanAction::WouldPush,
-                }],
-            }),
-            effects: crate::workflow::plan::WorkflowEffects {
-                mutates_filesystem: false,
-                mutates_docker,
-                mutates_registry: profile_mode == crate::workflow::profile::WorkflowStepMode::Run,
-                mutates_git: false,
-                mutates_cluster: false,
-                prompts_user: false,
-            },
+        let options = crate::builder::BuildOptions {
+            cache_dir: cache_dir.path().join("cache").to_string_lossy().to_string(),
+            force: true,
+            only: vec![],
+            ignore: vec![],
+            plan: push_mode == crate::workflow::profile::WorkflowStepMode::Plan,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: environment.build.clone(),
         };
+        let planner = crate::workflow::planner::WorkflowPlanner::with_source_revision_resolver(
+            normalized.clone(),
+            std::sync::Arc::new(environment),
+            options,
+            runner_ctx.clone(),
+            std::sync::Arc::new(FixedRevision),
+        );
+        let plan = planner.plan().unwrap();
+        let item = plan.image_push_plan.as_ref().unwrap().items[0].clone();
 
-        let mut tasks = vec![];
-        if tasks_count.0 > 0 {
-            tasks.push(runkernel::TaskResult {
-                name: "plan-push".to_string(),
-                status: runkernel::TaskStatus::Completed,
-                duration: Some(std::time::Duration::from_secs(1)),
-                error: None,
-                cache_hit: false,
-                cache_reason: None,
-                rollback_status: None,
-                rollback_error: None,
-            });
-        }
-        if tasks_count.0 > 1 {
-            tasks.push(runkernel::TaskResult {
-                name: "execute-push".to_string(),
-                status: runkernel::TaskStatus::Completed,
-                duration: Some(std::time::Duration::from_secs(1)),
-                error: None,
-                cache_hit: false,
-                cache_reason: None,
-                rollback_status: None,
-                rollback_error: None,
-            });
-        } else if tasks_count.1 > 0 {
-            tasks.push(runkernel::TaskResult {
-                name: "execute-push".to_string(),
-                status: runkernel::TaskStatus::Failed,
-                duration: Some(std::time::Duration::from_secs(1)),
-                error: Some("failed".to_string()),
-                cache_hit: false,
-                cache_reason: None,
-                rollback_status: None,
-                rollback_error: None,
-            });
-        }
+        let (tasks, completed, failed, skipped, published_artifacts) =
+            if push_mode == crate::workflow::profile::WorkflowStepMode::Plan {
+                (
+                    vec![
+                        task_result(
+                            crate::workflow::task_id::VALIDATE_CONFIG,
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::BUILD_PLAN,
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::PUSH_PLAN,
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                    ],
+                    3,
+                    0,
+                    0,
+                    vec![],
+                )
+            } else if success {
+                let artifact = crate::workflow::image::PublishedImageArtifact::from_push_result(
+                    "staging",
+                    &item,
+                    "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
+                    "2024-03-20T12:00:00Z",
+                )
+                .unwrap();
+                (
+                    vec![
+                        task_result(
+                            crate::workflow::task_id::VALIDATE_CONFIG,
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::service_build("api"),
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::PUSH_PLAN,
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::service_push("api"),
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::IMAGE_REPORT,
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                    ],
+                    5,
+                    0,
+                    0,
+                    vec![artifact],
+                )
+            } else {
+                (
+                    vec![
+                        task_result(
+                            crate::workflow::task_id::VALIDATE_CONFIG,
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::service_build("api"),
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::PUSH_PLAN,
+                            runkernel::TaskStatus::Completed,
+                            None,
+                        ),
+                        task_result(
+                            crate::workflow::task_id::service_push("api"),
+                            runkernel::TaskStatus::Failed,
+                            Some("registry rejected push"),
+                        ),
+                        task_result(
+                            crate::workflow::task_id::IMAGE_REPORT,
+                            runkernel::TaskStatus::Skipped,
+                            None,
+                        ),
+                    ],
+                    3,
+                    1,
+                    1,
+                    vec![],
+                )
+            };
 
         let result = runkernel::PipelineResult {
             name: "test".to_string(),
@@ -1362,9 +1585,9 @@ mod tests {
             summary: runkernel::PipelineSummary {
                 name: "test".to_string(),
                 success,
-                completed: tasks_count.0,
-                failed: tasks_count.1,
-                skipped: 0,
+                completed,
+                failed,
+                skipped,
                 cancelled: 0,
                 cached: 0,
                 rolled_back: 0,
@@ -1394,59 +1617,115 @@ mod tests {
 
         let report_path = temp.path().join(".sailr/reports/ci-build-push/latest.json");
         let content = std::fs::read_to_string(&report_path).unwrap();
-        serde_json::from_str(&content).unwrap()
+        let decoded: WorkflowReport = serde_json::from_str(&content).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(
+            serde_json::from_str::<WorkflowReport>(&content).unwrap(),
+            decoded
+        );
+        serde_json::to_value(decoded).unwrap()
     }
 
     #[test]
     fn test_report_image_push_plan() {
-        let actual = generate_report_json(
-            crate::workflow::profile::WorkflowStepMode::Plan,
-            true,
-            vec![],
-            (1, 0),
-            false,
-        );
+        let actual = generate_report_json(crate::workflow::profile::WorkflowStepMode::Plan, true);
         let expected = load_fixture_json("image-push-plan.json");
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn test_report_image_publication_success() {
-        let published_artifacts = vec![crate::workflow::image::PublishedImageArtifact {
-            service: "api".to_string(),
-            environment: "staging".to_string(),
-            registry: "ghcr.io".to_string(),
-            repository: "org/repo/api".to_string(),
-            tag: "ab12cd34".to_string(),
-            digest: "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938".to_string(),
-            image_ref: "ghcr.io/org/repo/api@sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938".to_string(),
-            provenance: crate::workflow::image::ImageProvenance {
-                build_fingerprint: "ab12cd345678".to_string(),
-                source_revision: Some("ab12cd345678".to_string()),
-            },
-            published_at: "2024-03-20T12:00:00Z".to_string(),
-        }];
-        let actual = generate_report_json(
-            crate::workflow::profile::WorkflowStepMode::Run,
-            true,
-            published_artifacts,
-            (2, 0),
-            true,
-        );
+        let actual = generate_report_json(crate::workflow::profile::WorkflowStepMode::Run, true);
         let expected = load_fixture_json("image-publication-success.json");
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn test_report_image_publication_failure() {
-        let actual = generate_report_json(
-            crate::workflow::profile::WorkflowStepMode::Run,
-            false,
-            vec![],
-            (1, 1),
-            true,
-        );
+        let actual = generate_report_json(crate::workflow::profile::WorkflowStepMode::Run, false);
         let expected = load_fixture_json("image-publication-failure.json");
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn workflow_report_validation_rejects_inconsistent_contracts() {
+        let mut report: WorkflowReport =
+            serde_json::from_value(load_fixture_json("image-publication-success.json")).unwrap();
+        report.validate().unwrap();
+
+        report.schema_version = "future".to_string();
+        assert!(report.validate().is_err());
+        report.schema_version = "sailr.workflow-report/v1".to_string();
+
+        report.tasks.completed += 1;
+        assert!(report.validate().is_err());
+        report.tasks.completed -= 1;
+
+        report.success = true;
+        report.tasks.failed = 1;
+        report.tasks.items[0].status = "failed".to_string();
+        report.tasks.completed -= 1;
+        assert!(report.validate().is_err());
+    }
+
+    #[test]
+    fn inspection_apply_gate_is_independent_of_profile_permission() {
+        let mut profile: crate::workflow::profile::WorkflowProfile = toml::from_str(
+            r#"
+            environment = "staging"
+            mode = "build"
+            build = "run"
+            push = "run"
+            apply = true
+            "#,
+        )
+        .unwrap();
+        profile.name = "publish".to_string();
+        let normalized = profile.normalize(false);
+        assert!(normalized.apply);
+        assert!(requires_cli_apply(&normalized));
+    }
+
+    #[test]
+    fn inspection_renders_modes_registry_and_image_provenance() {
+        let inspection = WorkflowInspection {
+            profile_name: "publish".to_string(),
+            profile_mode: "build".to_string(),
+            config_path: "sailr.workflow.toml".to_string(),
+            environment: "staging".to_string(),
+            environment_path: "k8s/environments/staging/config.toml".to_string(),
+            runner_ci: true,
+            runner_provider: "CircleCi".to_string(),
+            runner_interactive: false,
+            approval: Some(crate::workflow::profile::ApprovalMode::External),
+            profile_apply: true,
+            requires_cli_apply: true,
+            build_mode: crate::workflow::profile::WorkflowStepMode::Run,
+            push_mode: crate::workflow::profile::WorkflowStepMode::Run,
+            generate_mode: crate::workflow::profile::WorkflowStepMode::Disabled,
+            deploy_mode: crate::workflow::profile::WorkflowStepMode::Disabled,
+            registry_host: "ghcr.io".to_string(),
+            registry_namespace: "acme/platform".to_string(),
+            registry_prefix: "ghcr.io/acme/platform".to_string(),
+            images: vec![WorkflowInspectionImage {
+                service: "api".to_string(),
+                local_image_ref: "ghcr.io/acme/platform/api:1.2.0".to_string(),
+                target_image_ref: "ghcr.io/acme/platform/api:abc1234".to_string(),
+                build_fingerprint: "abc123456789".to_string(),
+                source_revision: None,
+            }],
+        };
+        let rendered = inspection.render_workflow_inspection();
+        for expected in [
+            "profile apply allowed: true",
+            "CLI apply required: true",
+            "build mode: Run",
+            "push mode: Run",
+            "prefix: ghcr.io/acme/platform",
+            "build fingerprint: abc123456789",
+            "source revision: none",
+        ] {
+            assert!(rendered.contains(expected));
+        }
     }
 }

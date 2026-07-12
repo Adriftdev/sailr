@@ -75,13 +75,13 @@ pub enum DeliveryTargetKind {
     KubernetesDirect,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeploymentPlanMode {
     Static,
     LiveDiff,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowDeploymentPlan {
     pub environment: String,
     pub context: String,
@@ -91,7 +91,7 @@ pub struct WorkflowDeploymentPlan {
     pub summary: DeploymentPlanSummary,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeploymentResourcePlan {
     pub kind: String,
     pub name: String,
@@ -100,7 +100,7 @@ pub struct DeploymentResourcePlan {
     pub action: DeploymentPlanAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeploymentPlanAction {
     WouldApply,
@@ -120,7 +120,7 @@ impl std::fmt::Display for DeploymentPlanAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeploymentPlanSummary {
     pub total_resources: usize,
     pub would_apply: usize,

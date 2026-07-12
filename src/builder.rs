@@ -442,6 +442,22 @@ pub(crate) fn add_runkernel_tasks(
     pipeline: &mut Pipeline,
     plan: &SailrBuildPlan,
 ) -> Result<(), String> {
+    add_runkernel_tasks_inner(pipeline, plan, None)
+}
+
+pub(crate) fn add_runkernel_tasks_from_workflow_plan(
+    pipeline: &mut Pipeline,
+    plan: &SailrBuildPlan,
+    workflow_tasks: &[crate::workflow::plan::WorkflowTaskPlan],
+) -> Result<(), String> {
+    add_runkernel_tasks_inner(pipeline, plan, Some(workflow_tasks))
+}
+
+fn add_runkernel_tasks_inner(
+    pipeline: &mut Pipeline,
+    plan: &SailrBuildPlan,
+    workflow_tasks: Option<&[crate::workflow::plan::WorkflowTaskPlan]>,
+) -> Result<(), String> {
     let dirty_services = plan
         .services
         .iter()
@@ -451,10 +467,20 @@ pub(crate) fn add_runkernel_tasks(
     let has_dirty_services = !dirty_services.is_empty();
     let has_before_all = has_dirty_services && !plan.before_all.is_empty();
 
-    if has_before_all {
+    let planned_task =
+        |id: &str| workflow_tasks.and_then(|tasks| tasks.iter().find(|task| task.id == id));
+
+    if has_before_all
+        && workflow_tasks
+            .is_none_or(|_| planned_task(crate::workflow::task_id::BUILD_BEFORE_ALL).is_some())
+    {
         let commands = plan.before_all.clone();
+        let dependencies = planned_task(crate::workflow::task_id::BUILD_BEFORE_ALL)
+            .map(|task| task.dependencies.clone())
+            .unwrap_or_default();
         pipeline.add(
             Task::new(crate::workflow::task_id::BUILD_BEFORE_ALL)
+                .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
                 .cache_disabled()
                 .exec_fn(move |_ctx| {
                     let commands = commands.clone();
@@ -471,22 +497,28 @@ pub(crate) fn add_runkernel_tasks(
     }
 
     for service_plan in &plan.services {
-        let mut dependencies: Vec<String> = service_plan
-            .dependencies
-            .iter()
-            .map(|d| crate::workflow::task_id::service_build(d))
-            .collect();
-        if service_plan.dirty && has_before_all {
+        let task_id = crate::workflow::task_id::service_build(&service_plan.service.name);
+        if workflow_tasks.is_some() && planned_task(&task_id).is_none() {
+            continue;
+        }
+        let mut dependencies: Vec<String> = if let Some(planned) = planned_task(&task_id) {
+            planned.dependencies.clone()
+        } else {
+            service_plan
+                .dependencies
+                .iter()
+                .map(|d| crate::workflow::task_id::service_build(d))
+                .collect()
+        };
+        if workflow_tasks.is_none() && service_plan.dirty && has_before_all {
             dependencies.push(crate::workflow::task_id::BUILD_BEFORE_ALL.to_string());
         }
         dependencies.sort();
         dependencies.dedup();
 
-        let mut task = Task::new(crate::workflow::task_id::service_build(
-            &service_plan.service.name,
-        ))
-        .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
-        .cache_disabled();
+        let mut task = Task::new(task_id)
+            .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
+            .cache_disabled();
 
         if service_plan.dirty {
             let service_name = service_plan.service.name.clone();
@@ -503,19 +535,23 @@ pub(crate) fn add_runkernel_tasks(
         pipeline.add(task);
     }
 
-    if has_dirty_services && !plan.after_all.is_empty() {
+    if has_dirty_services
+        && !plan.after_all.is_empty()
+        && workflow_tasks
+            .is_none_or(|_| planned_task(crate::workflow::task_id::BUILD_AFTER_ALL).is_some())
+    {
         let commands = plan.after_all.clone();
+        let dependencies = planned_task(crate::workflow::task_id::BUILD_AFTER_ALL)
+            .map(|task| task.dependencies.clone())
+            .unwrap_or_else(|| {
+                dirty_services
+                    .iter()
+                    .map(|service| crate::workflow::task_id::service_build(service))
+                    .collect()
+            });
         pipeline.add(
             Task::new(crate::workflow::task_id::BUILD_AFTER_ALL)
-                .depends_on(
-                    &dirty_services
-                        .iter()
-                        .map(|s| crate::workflow::task_id::service_build(s))
-                        .collect::<Vec<_>>()
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                )
+                .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
                 .cache_disabled()
                 .exec_fn(move |_ctx| {
                     let commands = commands.clone();

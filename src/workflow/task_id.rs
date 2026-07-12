@@ -4,6 +4,10 @@ pub const PUSH_PLAN: &str = "workflow:push-plan";
 pub const IMAGE_REPORT: &str = "workflow:image-report";
 pub const BUILD_BEFORE_ALL: &str = "build:before-all";
 pub const BUILD_AFTER_ALL: &str = "build:after-all";
+pub const GENERATE: &str = "workflow:generate";
+pub const DEPLOYMENT_PLAN: &str = "workflow:deployment-plan";
+pub const APPROVAL: &str = "workflow:approval";
+pub const DEPLOY: &str = "workflow:deploy";
 
 pub fn service_build(service: &str) -> String {
     format!("service:{service}:build")

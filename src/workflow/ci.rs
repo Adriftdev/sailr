@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::error::WorkflowError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CiProvider {
     GitHub,
@@ -12,7 +12,7 @@ pub enum CiProvider {
     Generic,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CiEnvironment {
     pub provider: CiProvider,
     pub run_id: Option<String>,

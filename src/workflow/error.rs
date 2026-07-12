@@ -25,6 +25,12 @@ pub enum ArtifactError {
     DigestMismatch { expected: String, actual: String },
 }
 
+impl From<crate::oci::OciError> for ArtifactError {
+    fn from(error: crate::oci::OciError) -> Self {
+        Self::Validation(error.to_string())
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RegistryConfigError {
     #[error("Empty host")]
@@ -51,4 +57,10 @@ pub enum ProvenanceError {
 
     #[error("Failed to read Git revision: {0}")]
     Git(String),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum WorkflowReportError {
+    #[error("Workflow report validation error: {0}")]
+    Validation(String),
 }

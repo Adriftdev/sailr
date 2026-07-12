@@ -3,75 +3,68 @@
   "report_type": "workflow-execution",
   "profile": "ci-build-push",
   "mode": "build",
-  "environment": "staging",
-  "success": true,
   "runner": {
     "kind": "git-hub-actions",
     "ci": true,
     "interactive": false,
-    "ci_environment": null
+    "ci_environment": { "provider": "github", "run_id": "run-17" }
   },
+  "environment": "staging",
+  "success": true,
   "effects": {
+    "mutates_filesystem": true,
     "mutates_docker": true,
     "mutates_registry": true,
-    "mutates_cluster": false,
-    "mutates_filesystem": false,
     "mutates_git": false,
+    "mutates_cluster": false,
     "prompts_user": false
   },
   "tasks": {
-    "completed": 2,
+    "completed": 5,
     "failed": 0,
     "skipped": 0,
     "cancelled": 0,
     "items": [
-      {
-        "name": "plan-push",
-        "status": "completed"
-      },
-      {
-        "name": "execute-push",
-        "status": "completed"
-      }
+      { "name": "workflow:validate-config", "status": "completed" },
+      { "name": "service:api:build", "status": "completed" },
+      { "name": "workflow:push-plan", "status": "completed" },
+      { "name": "service:api:push", "status": "completed" },
+      { "name": "workflow:image-report", "status": "completed" }
     ]
   },
   "plans": {
     "image_push": {
       "environment": "staging",
       "mutates_registry": true,
-      "items": [
-        {
-          "service": "api",
-          "registry": "ghcr.io",
-          "repository": "org/repo/api",
-          "tag": "ab12cd34",
-          "target_image_ref": "ghcr.io/org/repo/api:ab12cd34",
-          "local_image_ref": "ghcr.io/org/repo/api:ab12cd34",
-          "provenance": {
-            "build_fingerprint": "ab12cd345678",
-            "source_revision": "ab12cd345678"
-          },
-          "action": "would_push"
-        }
-      ]
+      "items": [{
+        "service": "api",
+        "registry": "ghcr.io",
+        "repository": "org/repo/api",
+        "target_image_ref": "ghcr.io/org/repo/api:1bf43f1",
+        "local_image_ref": "ghcr.io/org/repo/api:1.2.0",
+        "tag": "1bf43f1",
+        "provenance": {
+          "build_fingerprint": "1bf43f1a943982aa",
+          "source_revision": "0123456789abcdef"
+        },
+        "action": "would_push"
+      }]
     }
   },
   "artifacts": {
-    "published_images": [
-      {
-        "service": "api",
-        "environment": "staging",
-        "registry": "ghcr.io",
-        "repository": "org/repo/api",
-        "tag": "ab12cd34",
-        "digest": "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
-        "image_ref": "ghcr.io/org/repo/api@sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
-        "provenance": {
-          "build_fingerprint": "ab12cd345678",
-          "source_revision": "ab12cd345678"
-        },
-        "published_at": "2024-03-20T12:00:00Z"
-      }
-    ]
+    "published_images": [{
+      "service": "api",
+      "environment": "staging",
+      "registry": "ghcr.io",
+      "repository": "org/repo/api",
+      "tag": "1bf43f1",
+      "digest": "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
+      "image_ref": "ghcr.io/org/repo/api@sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
+      "provenance": {
+        "build_fingerprint": "1bf43f1a943982aa",
+        "source_revision": "0123456789abcdef"
+      },
+      "published_at": "2024-03-20T12:00:00Z"
+    }]
   }
 }

@@ -23,6 +23,68 @@ pub enum RegistryConfig {
     },
 }
 
+#[cfg(test)]
+mod registry_contract_tests {
+    use super::{RegistryConfig, ResolvedRegistry};
+
+    #[test]
+    fn detailed_registry_separates_host_and_namespace_validation() {
+        let valid = RegistryConfig::Detailed {
+            host: "ghcr.io".to_string(),
+            namespace: Some("acme/platform".to_string()),
+        }
+        .resolve()
+        .unwrap();
+        assert_eq!(valid.prefix(), "ghcr.io/acme/platform");
+
+        for host in [
+            "",
+            "https://ghcr.io",
+            "/ghcr.io",
+            "ghcr.io/",
+            "ghcr.io/acme",
+            "ghcr .io",
+        ] {
+            assert!(RegistryConfig::Detailed {
+                host: host.to_string(),
+                namespace: None,
+            }
+            .resolve()
+            .is_err());
+        }
+        for namespace in [
+            "",
+            "/acme",
+            "acme/",
+            "acme//platform",
+            "acme platform",
+            "https://acme",
+        ] {
+            assert!(RegistryConfig::Detailed {
+                host: "ghcr.io".to_string(),
+                namespace: Some(namespace.to_string()),
+            }
+            .resolve()
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn repository_and_tag_inputs_reject_obvious_malformed_values() {
+        let registry = ResolvedRegistry::parse("ghcr.io/acme").unwrap();
+        for service in ["", "api worker", "/api", "api/", "api//worker"] {
+            assert!(registry.repository_for(service).is_err());
+        }
+        for tag in ["", "release candidate", ":latest", "release/latest"] {
+            assert!(registry.tagged_ref("api", tag).is_err());
+        }
+        assert_eq!(
+            registry.tagged_ref("api", "1.2.0").unwrap(),
+            "ghcr.io/acme/api:1.2.0"
+        );
+    }
+}
+
 impl Default for RegistryConfig {
     fn default() -> Self {
         RegistryConfig::Simple("docker.io".to_string())
@@ -53,6 +115,7 @@ impl RegistryConfig {
                 if parsed_host.contains("://")
                     || parsed_host.starts_with('/')
                     || parsed_host.ends_with('/')
+                    || parsed_host.contains('/')
                     || parsed_host.contains(|c: char| c.is_whitespace())
                 {
                     return Err(crate::workflow::error::RegistryConfigError::InvalidHost(
@@ -63,6 +126,7 @@ impl RegistryConfig {
                 if let Some(ns) = namespace {
                     let parsed_ns = ns.trim();
                     if parsed_ns.is_empty()
+                        || parsed_ns.contains("://")
                         || parsed_ns.starts_with('/')
                         || parsed_ns.ends_with('/')
                         || parsed_ns.contains(|c: char| c.is_whitespace())
@@ -122,7 +186,13 @@ impl ResolvedRegistry {
 
         let namespace = if parts.len() > 1 {
             let ns = parts[1].to_string();
-            if ns.is_empty() {
+            if ns.is_empty()
+                || ns.contains("://")
+                || ns.starts_with('/')
+                || ns.ends_with('/')
+                || ns.contains("//")
+                || ns.chars().any(char::is_whitespace)
+            {
                 return Err(
                     crate::workflow::error::RegistryConfigError::InvalidNamespace(s.to_string()),
                 );
@@ -146,7 +216,12 @@ impl ResolvedRegistry {
         &self,
         service: &str,
     ) -> Result<String, crate::workflow::error::RegistryConfigError> {
-        if service.trim().is_empty() {
+        if service.trim().is_empty()
+            || service.chars().any(char::is_whitespace)
+            || service.starts_with('/')
+            || service.ends_with('/')
+            || service.contains("//")
+        {
             return Err(crate::workflow::error::RegistryConfigError::InvalidService(
                 service.to_string(),
             ));
@@ -162,7 +237,11 @@ impl ResolvedRegistry {
         service: &str,
         tag: &str,
     ) -> Result<String, crate::workflow::error::RegistryConfigError> {
-        if tag.trim().is_empty() {
+        if tag.trim().is_empty()
+            || tag.chars().any(char::is_whitespace)
+            || tag.starts_with(':')
+            || tag.contains('/')
+        {
             return Err(crate::workflow::error::RegistryConfigError::InvalidTag(
                 tag.to_string(),
             ));

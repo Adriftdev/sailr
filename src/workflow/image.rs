@@ -197,10 +197,10 @@ pub struct ImagePushPlanReport {
     pub items: Vec<ImagePushPlanItem>,
 }
 
-pub fn derive_image_tag(source_sha: Option<&str>) -> String {
-    match source_sha {
-        Some(sha) if sha.len() >= 7 => sha[0..7].to_string(),
-        Some(sha) => sha.to_string(),
+pub fn derive_image_tag(build_fingerprint: Option<&str>) -> String {
+    match build_fingerprint {
+        Some(fingerprint) if fingerprint.len() >= 7 => fingerprint[0..7].to_string(),
+        Some(fingerprint) => fingerprint.to_string(),
         None => "dev".to_string(),
     }
 }
@@ -208,6 +208,7 @@ pub fn derive_image_tag(source_sha: Option<&str>) -> String {
 pub fn parse_pushed_digest(output: &str) -> Result<Option<String>, ArtifactError> {
     let mut digests = std::collections::HashSet::new();
     let mut has_marker = false;
+    let mut has_invalid_marker = false;
 
     for line in output.lines() {
         let marker = "digest:";
@@ -217,9 +218,19 @@ pub fn parse_pushed_digest(output: &str) -> Result<Option<String>, ArtifactError
             if let Some(digest) = rest.split_whitespace().next() {
                 if crate::oci::validate_sha256_digest(digest).is_ok() {
                     digests.insert(digest.to_string());
+                } else {
+                    has_invalid_marker = true;
                 }
+            } else {
+                has_invalid_marker = true;
             }
         }
+    }
+
+    if has_invalid_marker {
+        return Err(ArtifactError::Validation(
+            "push output contained an invalid digest marker".to_string(),
+        ));
     }
 
     if digests.is_empty() {
@@ -342,6 +353,59 @@ mod tests_derive {
         let output = "no digest here";
         let err = pushed_artifact_from_output("prod", &item, output, None).unwrap_err();
         assert!(err.contains("digest error"));
+    }
+
+    #[test]
+    fn pushed_digest_parser_rejects_invalid_and_conflicting_evidence() {
+        let a = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let b = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        assert_eq!(
+            parse_pushed_digest(&format!("digest: {a}\ndigest: {a}"))
+                .unwrap()
+                .as_deref(),
+            Some(a)
+        );
+        assert!(parse_pushed_digest(&format!("digest: {a}\ndigest: {b}")).is_err());
+        for invalid in [
+            "sha256:abc",
+            "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "sha256:１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４",
+        ] {
+            assert!(parse_pushed_digest(&format!("digest: {invalid}")).is_err());
+            assert!(parse_pushed_digest(&format!("digest: {a}\ndigest: {invalid}")).is_err());
+        }
+    }
+
+    #[test]
+    fn digest_evidence_accepts_single_or_matching_sources_and_rejects_mismatch() {
+        let a = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let b = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        for evidence in [
+            DigestEvidence {
+                push_output_digest: Some(a.to_string()),
+                inspected_digest: None,
+            },
+            DigestEvidence {
+                push_output_digest: None,
+                inspected_digest: Some(a.to_string()),
+            },
+            DigestEvidence {
+                push_output_digest: Some(a.to_string()),
+                inspected_digest: Some(a.to_string()),
+            },
+        ] {
+            assert_eq!(resolve_digest(evidence).unwrap(), a);
+        }
+        assert!(resolve_digest(DigestEvidence {
+            push_output_digest: Some(a.to_string()),
+            inspected_digest: Some(b.to_string()),
+        })
+        .is_err());
+        assert!(resolve_digest(DigestEvidence {
+            push_output_digest: None,
+            inspected_digest: None,
+        })
+        .is_err());
     }
 }
 

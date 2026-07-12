@@ -1,5 +1,15 @@
 use crate::workflow::plan::WorkflowPlan;
 
+fn external_approval_provider(runner: &crate::workflow::runner::RunnerContext) -> &'static str {
+    match runner.kind {
+        crate::workflow::runner::RunnerKind::GitHubActions => "GitHub protected environment",
+        crate::workflow::runner::RunnerKind::CircleCi => "CircleCI approval job",
+        crate::workflow::runner::RunnerKind::Travis => "Travis protected deployment gate",
+        crate::workflow::runner::RunnerKind::GenericCi => "external CI approval gate",
+        crate::workflow::runner::RunnerKind::Local => "external approval",
+    }
+}
+
 pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
     let mut out = String::new();
     out.push_str(&format!("Sailr Workflow Plan: {}\n", plan.profile.name));
@@ -28,7 +38,10 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
     if plan.profile.approval == crate::workflow::profile::ApprovalMode::External {
         out.push_str("Approval:\n");
         out.push_str("  mode: external\n");
-        out.push_str("  provider: GitHub Environment\n");
+        out.push_str(&format!(
+            "  provider: {}\n",
+            external_approval_provider(&plan.runner)
+        ));
         out.push_str(&format!("  environment: {}\n\n", plan.profile.environment));
     }
 
@@ -45,6 +58,7 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
         " - Mutates Registry: {}\n",
         plan.effects.mutates_registry
     ));
+    out.push_str(&format!(" - Mutates Git: {}\n", plan.effects.mutates_git));
     out.push_str(&format!(
         " - Mutates Cluster: {}\n",
         plan.effects.mutates_cluster
@@ -126,7 +140,10 @@ pub fn render_workflow_explain_text(plan: &WorkflowPlan, task_id: &str) -> Resul
         if plan.profile.approval == crate::workflow::profile::ApprovalMode::External {
             out.push_str("\nApproval:\n");
             out.push_str("  mode: external\n");
-            out.push_str("  provider: GitHub Environment\n");
+            out.push_str(&format!(
+                "  provider: {}\n",
+                external_approval_provider(&plan.runner)
+            ));
             out.push_str(&format!("  environment: {}\n", plan.profile.environment));
         }
 
@@ -154,6 +171,7 @@ pub fn render_workflow_explain_text(plan: &WorkflowPlan, task_id: &str) -> Resul
         " - Mutates Registry: {}\n",
         task.effects.mutates_registry
     ));
+    out.push_str(&format!(" - Mutates Git: {}\n", task.effects.mutates_git));
     out.push_str(&format!(
         " - Mutates Cluster: {}\n",
         task.effects.mutates_cluster
@@ -211,7 +229,7 @@ mod tests {
             },
             tasks: vec![
                 WorkflowTaskPlan {
-                    id: "workflow:validate".to_string(),
+                    id: crate::workflow::task_id::VALIDATE_CONFIG.to_string(),
                     label: "Validate".to_string(),
                     kind: WorkflowTaskKind::ValidateConfig,
                     dependencies: vec![],
@@ -222,7 +240,7 @@ mod tests {
                     id: crate::workflow::task_id::service_build("api"),
                     label: "Build API".to_string(),
                     kind: WorkflowTaskKind::ServiceBuild,
-                    dependencies: vec!["workflow:validate".to_string()],
+                    dependencies: vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()],
                     effects: WorkflowEffects {
                         mutates_docker: true,
                         ..Default::default()
@@ -231,7 +249,7 @@ mod tests {
                 },
             ],
             edges: vec![WorkflowEdge {
-                from: "workflow:validate".to_string(),
+                from: crate::workflow::task_id::VALIDATE_CONFIG.to_string(),
                 to: crate::workflow::task_id::service_build("api"),
             }],
             build_plan: None,
@@ -257,9 +275,9 @@ mod tests {
         let plan = dummy_plan();
         let text = render_workflow_graph_mermaid(&plan);
         assert!(text.contains("graph TD"));
-        assert!(text.contains("workflow_validate[Validate]"));
+        assert!(text.contains("workflow_validate_config[Validate]"));
         assert!(text.contains("service_api_build[Build API]"));
-        assert!(text.contains("workflow_validate --> service_api_build"));
+        assert!(text.contains("workflow_validate_config --> service_api_build"));
     }
 
     #[test]
@@ -273,6 +291,37 @@ mod tests {
             crate::workflow::task_id::service_build("api")
         )));
         assert!(text.contains("Mutates Docker: true"));
+    }
+
+    #[test]
+    fn renders_provider_specific_external_approval_and_git_effects() {
+        for (kind, provider) in [
+            (
+                crate::workflow::runner::RunnerKind::GitHubActions,
+                "GitHub protected environment",
+            ),
+            (
+                crate::workflow::runner::RunnerKind::CircleCi,
+                "CircleCI approval job",
+            ),
+            (
+                crate::workflow::runner::RunnerKind::Travis,
+                "Travis protected deployment gate",
+            ),
+            (
+                crate::workflow::runner::RunnerKind::GenericCi,
+                "external CI approval gate",
+            ),
+        ] {
+            let mut plan = dummy_plan();
+            plan.profile.approval = crate::workflow::profile::ApprovalMode::External;
+            plan.runner.kind = kind;
+            plan.runner.ci = true;
+            plan.effects.mutates_git = true;
+            let rendered = render_workflow_plan_text(&plan);
+            assert!(rendered.contains(provider));
+            assert!(rendered.contains("Mutates Git: true"));
+        }
     }
 }
 
