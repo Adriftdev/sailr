@@ -449,17 +449,18 @@ pub(crate) fn add_runkernel_tasks(
         .map(|service| service.service.name.clone())
         .collect::<BTreeSet<_>>();
     let has_dirty_services = !dirty_services.is_empty();
+    let has_before_all = has_dirty_services && !plan.before_all.is_empty();
 
-    if has_dirty_services && !plan.before_all.is_empty() {
+    if has_before_all {
         let commands = plan.before_all.clone();
         pipeline.add(
-            Task::new("build:before-all")
+            Task::new(crate::workflow::task_id::BUILD_BEFORE_ALL)
                 .cache_disabled()
                 .exec_fn(move |_ctx| {
                     let commands = commands.clone();
                     async move {
                         for command in commands {
-                            exec_cmd(".", &command, "build:before-all")
+                            exec_cmd(".", &command, crate::workflow::task_id::BUILD_BEFORE_ALL)
                                 .await
                                 .map_err(anyhow::Error::msg)?;
                         }
@@ -473,17 +474,19 @@ pub(crate) fn add_runkernel_tasks(
         let mut dependencies: Vec<String> = service_plan
             .dependencies
             .iter()
-            .map(|d| format!("service:{}:build", d))
+            .map(|d| crate::workflow::task_id::service_build(d))
             .collect();
-        if service_plan.dirty && has_dirty_services && !plan.before_all.is_empty() {
-            dependencies.push("build:before-all".to_string());
+        if service_plan.dirty && has_before_all {
+            dependencies.push(crate::workflow::task_id::BUILD_BEFORE_ALL.to_string());
         }
         dependencies.sort();
         dependencies.dedup();
 
-        let mut task = Task::new(format!("service:{}:build", service_plan.service.name))
-            .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
-            .cache_disabled();
+        let mut task = Task::new(crate::workflow::task_id::service_build(
+            &service_plan.service.name,
+        ))
+        .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
+        .cache_disabled();
 
         if service_plan.dirty {
             let service_name = service_plan.service.name.clone();
@@ -503,11 +506,11 @@ pub(crate) fn add_runkernel_tasks(
     if has_dirty_services && !plan.after_all.is_empty() {
         let commands = plan.after_all.clone();
         pipeline.add(
-            Task::new("build:after-all")
+            Task::new(crate::workflow::task_id::BUILD_AFTER_ALL)
                 .depends_on(
                     &dirty_services
                         .iter()
-                        .map(|s| format!("service:{}:build", s))
+                        .map(|s| crate::workflow::task_id::service_build(s))
                         .collect::<Vec<_>>()
                         .iter()
                         .map(String::as_str)
@@ -518,7 +521,7 @@ pub(crate) fn add_runkernel_tasks(
                     let commands = commands.clone();
                     async move {
                         for command in commands {
-                            exec_cmd(".", &command, "build:after-all")
+                            exec_cmd(".", &command, crate::workflow::task_id::BUILD_AFTER_ALL)
                                 .await
                                 .map_err(anyhow::Error::msg)?;
                         }
@@ -1155,7 +1158,7 @@ pub(crate) fn write_successful_service_caches(
         .collect::<HashSet<_>>();
 
     for service in plan.services.iter().filter(|service| service.dirty) {
-        let task_name = format!("service:{}:build", service.service.name);
+        let task_name = crate::workflow::task_id::service_build(&service.service.name);
         if !completed_tasks.contains(task_name.as_str()) {
             continue;
         }
@@ -1836,8 +1839,14 @@ mod tests {
         write_successful_service_caches(
             &plan,
             &pipeline_result(vec![
-                ("service:api:build", TaskStatus::Completed),
-                ("service:web:build", TaskStatus::Skipped),
+                (
+                    crate::workflow::task_id::service_build("api").as_str(),
+                    TaskStatus::Completed,
+                ),
+                (
+                    crate::workflow::task_id::service_build("web").as_str(),
+                    TaskStatus::Skipped,
+                ),
             ]),
         )
         .expect("cache write should succeed");

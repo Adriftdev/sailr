@@ -24,6 +24,71 @@ pub struct WorkflowPlanner {
     pub runner: RunnerContext,
 }
 
+pub fn resolve_source_revision(
+    runner: &RunnerContext,
+) -> Result<Option<String>, crate::workflow::error::ProvenanceError> {
+    let mut resolved = None;
+
+    if runner.ci {
+        if let Some(ci_env) = &runner.ci_environment {
+            match ci_env.provider {
+                crate::workflow::ci::CiProvider::GitHub => {
+                    resolved = std::env::var("GITHUB_SHA").ok();
+                }
+                crate::workflow::ci::CiProvider::CircleCi => {
+                    resolved = std::env::var("CIRCLE_SHA1").ok();
+                }
+                crate::workflow::ci::CiProvider::Travis => {
+                    resolved = std::env::var("TRAVIS_COMMIT").ok();
+                }
+                crate::workflow::ci::CiProvider::Generic => {
+                    if let Ok(output) = std::process::Command::new("git")
+                        .args(["rev-parse", "HEAD"])
+                        .output()
+                    {
+                        if output.status.success() {
+                            resolved =
+                                Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if resolved.is_none() {
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .output()
+        {
+            if output.status.success() {
+                resolved = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
+            }
+        }
+    }
+
+    if let Some(rev) = resolved {
+        let trimmed = rev.trim().to_string();
+        if trimmed.is_empty() {
+            return Err(
+                crate::workflow::error::ProvenanceError::InvalidSourceRevision(
+                    "Source revision is empty".to_string(),
+                ),
+            );
+        }
+        if trimmed.chars().any(|c| c.is_whitespace()) {
+            return Err(
+                crate::workflow::error::ProvenanceError::InvalidSourceRevision(
+                    "Source revision cannot contain whitespace".to_string(),
+                ),
+            );
+        }
+        return Ok(Some(trimmed));
+    }
+
+    Ok(None)
+}
+
 impl WorkflowPlanner {
     pub fn new(
         profile: NormalizedWorkflowProfile,
@@ -48,14 +113,14 @@ impl WorkflowPlanner {
 
         // 0. Validate Phase
         tasks.push(WorkflowTaskPlan {
-            id: "workflow:validate-config".to_string(),
+            id: crate::workflow::task_id::VALIDATE_CONFIG.to_string(),
             label: "Validate Config".to_string(),
             kind: WorkflowTaskKind::ValidateConfig,
             dependencies: vec![],
             effects: WorkflowEffects::default(),
             description: "Validates Sailr environment configuration.".to_string(),
         });
-        let mut last_tasks = vec!["workflow:validate-config".to_string()];
+        let mut last_tasks = vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()];
 
         // 1. Build Phase
         match self.profile.build {
@@ -69,20 +134,20 @@ impl WorkflowPlanner {
 
                 let task_effects = WorkflowEffects::default();
                 tasks.push(WorkflowTaskPlan {
-                    id: "workflow:build-plan".to_string(),
+                    id: crate::workflow::task_id::BUILD_PLAN.to_string(),
                     label: "Build Plan".to_string(),
                     kind: WorkflowTaskKind::BuildPlan,
-                    dependencies: vec!["workflow:validate-config".to_string()],
+                    dependencies: vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()],
                     effects: task_effects,
                     description: "Analyzes services to determine what needs to be built."
                         .to_string(),
                 });
                 edges.push(WorkflowEdge {
-                    from: "workflow:validate-config".to_string(),
-                    to: "workflow:build-plan".to_string(),
+                    from: crate::workflow::task_id::VALIDATE_CONFIG.to_string(),
+                    to: crate::workflow::task_id::BUILD_PLAN.to_string(),
                 });
 
-                last_tasks = vec!["workflow:build-plan".to_string()];
+                last_tasks = vec![crate::workflow::task_id::BUILD_PLAN.to_string()];
             }
             crate::workflow::profile::WorkflowStepMode::Run => {
                 let plan = create_sailr_build_plan(&self.env, &self.options)?;
@@ -91,43 +156,44 @@ impl WorkflowPlanner {
                 let dirty_count = plan.services.iter().filter(|s| s.dirty).count();
 
                 effects.mutates_docker = true;
-                effects.mutates_registry = true;
 
                 let mut build_tasks = Vec::new();
                 for s in &plan.services {
                     if s.dirty {
                         let service_effects = WorkflowEffects {
                             mutates_docker: true,
-                            mutates_registry: true,
                             ..Default::default()
                         };
+                        let task_id = crate::workflow::task_id::service_build(&s.service.name);
 
                         tasks.push(WorkflowTaskPlan {
-                            id: format!("build:{}", s.service.name),
+                            id: task_id.clone(),
                             label: format!("Build {}", s.service.name),
                             kind: WorkflowTaskKind::ServiceBuild,
-                            dependencies: vec!["workflow:validate-config".to_string()],
+                            dependencies: vec![
+                                crate::workflow::task_id::VALIDATE_CONFIG.to_string()
+                            ],
                             effects: service_effects,
                             description: format!(
-                                "Builds and pushes Docker image for {}.",
+                                "Builds the local Docker image for {}.",
                                 s.service.name
                             ),
                         });
                         edges.push(WorkflowEdge {
-                            from: "workflow:validate-config".to_string(),
-                            to: format!("build:{}", s.service.name),
+                            from: crate::workflow::task_id::VALIDATE_CONFIG.to_string(),
+                            to: task_id.clone(),
                         });
-                        build_tasks.push(format!("build:{}", s.service.name));
+                        build_tasks.push(task_id);
                     }
                 }
 
                 if build_tasks.is_empty() {
-                    build_tasks = vec!["workflow:validate-config".to_string()];
+                    build_tasks = vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()];
                 }
 
                 if dirty_count > 0 && !plan.after_all.is_empty() {
                     tasks.push(WorkflowTaskPlan {
-                        id: "build:after-all".to_string(),
+                        id: crate::workflow::task_id::BUILD_AFTER_ALL.to_string(),
                         label: "After All Build Hooks".to_string(),
                         kind: WorkflowTaskKind::ServiceBuild,
                         dependencies: build_tasks.clone(),
@@ -137,10 +203,10 @@ impl WorkflowPlanner {
                     for t in &build_tasks {
                         edges.push(WorkflowEdge {
                             from: t.clone(),
-                            to: "build:after-all".to_string(),
+                            to: crate::workflow::task_id::BUILD_AFTER_ALL.to_string(),
                         });
                     }
-                    build_tasks = vec!["build:after-all".to_string()];
+                    build_tasks = vec![crate::workflow::task_id::BUILD_AFTER_ALL.to_string()];
                 }
 
                 last_tasks = build_tasks;
@@ -156,15 +222,20 @@ impl WorkflowPlanner {
             crate::workflow::profile::WorkflowStepMode::Plan
             | crate::workflow::profile::WorkflowStepMode::Run => {
                 let is_run = self.profile.push == crate::workflow::profile::WorkflowStepMode::Run;
+                let source_revision =
+                    resolve_source_revision(&self.runner).map_err(|e| e.to_string())?;
 
                 if is_run {
+                    if self.runner.ci && source_revision.is_none() {
+                        return Err("CI publication requires a source revision".to_string());
+                    }
                     effects.mutates_docker = true;
                     effects.mutates_registry = true;
                     effects.mutates_filesystem = true;
                 }
 
                 tasks.push(WorkflowTaskPlan {
-                    id: "workflow:push-plan".to_string(),
+                    id: crate::workflow::task_id::PUSH_PLAN.to_string(),
                     label: "Push Plan".to_string(),
                     kind: WorkflowTaskKind::PushPlan,
                     dependencies: last_tasks.clone(),
@@ -174,13 +245,14 @@ impl WorkflowPlanner {
                 for t in &last_tasks {
                     edges.push(WorkflowEdge {
                         from: t.clone(),
-                        to: "workflow:push-plan".to_string(),
+                        to: crate::workflow::task_id::PUSH_PLAN.to_string(),
                     });
                 }
-                last_tasks = vec!["workflow:push-plan".to_string()];
+                last_tasks = vec![crate::workflow::task_id::PUSH_PLAN.to_string()];
 
                 if let Some(ref bp) = build_plan_opt {
-                    image_push_plan_opt = Some(self.build_image_push_plan_report(bp, is_run)?);
+                    image_push_plan_opt =
+                        Some(self.build_image_push_plan_report(bp, is_run, source_revision)?);
                 } else {
                     return Err("push requires build=plan or build=run".to_string());
                 }
@@ -303,6 +375,7 @@ impl WorkflowPlanner {
         &self,
         build_plan: &crate::builder::SailrBuildPlan,
         mutates_registry: bool,
+        source_revision: Option<String>,
     ) -> Result<crate::workflow::image::ImagePushPlanReport, String> {
         let mut items = Vec::new();
 
@@ -339,7 +412,10 @@ impl WorkflowPlanner {
                 target_image_ref,
                 local_image_ref,
                 tag,
-                source_sha: service_plan.fingerprint.full_hash.clone(),
+                provenance: crate::workflow::image::ImageProvenance {
+                    build_fingerprint: service_plan.fingerprint.full_hash.clone(),
+                    source_revision: source_revision.clone(),
+                },
                 action: crate::workflow::image::ImagePushPlanAction::WouldPush,
             });
         }
@@ -476,10 +552,11 @@ impl WorkflowPlanner {
                                     if !tag_output.status.success() {
                                         let stderr = String::from_utf8_lossy(&tag_output.stderr);
                                         return Err(anyhow::anyhow!(
-                                            "Docker tag failed for {} to {}: {}",
+                                            "Docker tag failed. source: {}, target: {}, status: {}, stderr: {}",
                                             local_image_ref,
                                             target_image_ref,
-                                            stderr
+                                            tag_output.status,
+                                            stderr.trim()
                                         ));
                                     }
 
@@ -493,8 +570,10 @@ impl WorkflowPlanner {
                                     if !output.status.success() {
                                         let stderr = String::from_utf8_lossy(&output.stderr);
                                         return Err(anyhow::anyhow!(
-                                            "Docker push failed: {}",
-                                            stderr
+                                            "Docker push failed. target: {}, status: {}, stderr: {}",
+                                            target_image_ref,
+                                            output.status,
+                                            stderr.trim()
                                         ));
                                     }
 
@@ -770,6 +849,7 @@ mod tests {
             kind: RunnerKind::Local,
             ci: false,
             interactive: false,
+            ci_environment: None,
         }
     }
 

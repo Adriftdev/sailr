@@ -207,6 +207,7 @@ mod tests {
                 kind: RunnerKind::Local,
                 ci: false,
                 interactive: false,
+                ci_environment: None,
             },
             tasks: vec![
                 WorkflowTaskPlan {
@@ -218,7 +219,7 @@ mod tests {
                     description: "Validates config".to_string(),
                 },
                 WorkflowTaskPlan {
-                    id: "build:api".to_string(),
+                    id: crate::workflow::task_id::service_build("api"),
                     label: "Build API".to_string(),
                     kind: WorkflowTaskKind::ServiceBuild,
                     dependencies: vec!["workflow:validate".to_string()],
@@ -231,7 +232,7 @@ mod tests {
             ],
             edges: vec![WorkflowEdge {
                 from: "workflow:validate".to_string(),
-                to: "build:api".to_string(),
+                to: crate::workflow::task_id::service_build("api"),
             }],
             build_plan: None,
             image_push_plan: None,
@@ -248,7 +249,7 @@ mod tests {
         let text = render_workflow_plan_text(&plan);
         assert!(text.contains("Sailr Workflow Plan: test"));
         assert!(text.contains("Mutates Docker: true"));
-        assert!(text.contains("build:api"));
+        assert!(text.contains(&crate::workflow::task_id::service_build("api")));
     }
 
     #[test]
@@ -257,15 +258,20 @@ mod tests {
         let text = render_workflow_graph_mermaid(&plan);
         assert!(text.contains("graph TD"));
         assert!(text.contains("workflow_validate[Validate]"));
-        assert!(text.contains("build_api[Build API]"));
-        assert!(text.contains("workflow_validate --> build_api"));
+        assert!(text.contains("service_api_build[Build API]"));
+        assert!(text.contains("workflow_validate --> service_api_build"));
     }
 
     #[test]
     fn test_render_explain() {
         let plan = dummy_plan();
-        let text = render_workflow_explain_text(&plan, "build:api").unwrap();
-        assert!(text.contains("Task Explanation: build:api"));
+        let text =
+            render_workflow_explain_text(&plan, &crate::workflow::task_id::service_build("api"))
+                .unwrap();
+        assert!(text.contains(&format!(
+            "Task Explanation: {}",
+            crate::workflow::task_id::service_build("api")
+        )));
         assert!(text.contains("Mutates Docker: true"));
     }
 }
@@ -312,7 +318,10 @@ mod tests_addendum {
                 tag: "61eaa8b".to_string(),
                 target_image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
                 local_image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
-                source_sha: "61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string(),
+                provenance: crate::workflow::image::ImageProvenance {
+                    build_fingerprint: "61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string(),
+                    source_revision: Some("61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string()),
+                },
                 action: crate::workflow::image::ImagePushPlanAction::WouldPush,
             }],
         };

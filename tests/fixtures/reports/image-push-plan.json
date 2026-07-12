@@ -3,15 +3,20 @@
   "report_type": "workflow-execution",
   "profile": "ci-build-push",
   "mode": "build",
-  "runner": "githubactions",
   "environment": "staging",
   "success": true,
+  "runner": {
+    "kind": "git-hub-actions",
+    "ci": true,
+    "interactive": false,
+    "ci_environment": null
+  },
   "effects": {
-    "mutates_filesystem": false,
     "mutates_docker": false,
     "mutates_registry": false,
-    "mutates_git": false,
     "mutates_cluster": false,
+    "mutates_filesystem": false,
+    "mutates_git": false,
     "prompts_user": false
   },
   "tasks": {
@@ -35,10 +40,13 @@
           "service": "api",
           "registry": "ghcr.io",
           "repository": "org/repo/api",
+          "tag": "ab12cd34",
           "target_image_ref": "ghcr.io/org/repo/api:ab12cd34",
           "local_image_ref": "ghcr.io/org/repo/api:ab12cd34",
-          "tag": "ab12cd34",
-          "source_sha": "ab12cd345678",
+          "provenance": {
+            "build_fingerprint": "ab12cd345678",
+            "source_revision": "ab12cd345678"
+          },
           "action": "would_push"
         }
       ]

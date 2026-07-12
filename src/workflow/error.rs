@@ -40,3 +40,15 @@ pub enum RegistryConfigError {
     #[error("Invalid digest: {0}")]
     InvalidDigest(String),
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ProvenanceError {
+    #[error("Source revision is unavailable")]
+    MissingSourceRevision,
+
+    #[error("Invalid source revision: {0}")]
+    InvalidSourceRevision(String),
+
+    #[error("Failed to read Git revision: {0}")]
+    Git(String),
+}

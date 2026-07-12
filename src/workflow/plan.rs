@@ -55,9 +55,22 @@ pub struct WorkflowEffects {
     pub prompts_user: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+impl WorkflowEffects {
+    pub fn merge(&mut self, other: &WorkflowEffects) {
+        self.mutates_filesystem |= other.mutates_filesystem;
+        self.mutates_docker |= other.mutates_docker;
+        self.mutates_registry |= other.mutates_registry;
+        self.mutates_git |= other.mutates_git;
+        self.mutates_cluster |= other.mutates_cluster;
+        self.prompts_user |= other.prompts_user;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum DeliveryTargetKind {
     RenderOnly,
+    #[serde(rename = "gitops")]
     GitOps,
     KubernetesDirect,
 }

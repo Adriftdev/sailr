@@ -25,6 +25,37 @@ impl WorkflowReportAccumulator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageProvenance {
+    pub build_fingerprint: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_revision: Option<String>,
+}
+
+impl ImageProvenance {
+    pub fn validate(&self) -> Result<(), ArtifactError> {
+        if self.build_fingerprint.trim().is_empty() {
+            return Err(ArtifactError::Validation(
+                "build_fingerprint cannot be empty".to_string(),
+            ));
+        }
+        if let Some(rev) = &self.source_revision {
+            if rev.trim().is_empty() {
+                return Err(ArtifactError::Validation(
+                    "source_revision cannot be empty".to_string(),
+                ));
+            }
+            if rev.chars().any(|c| c.is_whitespace()) {
+                return Err(ArtifactError::Validation(
+                    "source_revision cannot contain whitespace".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishedImageArtifact {
     pub service: String,
     pub environment: String,
@@ -33,7 +64,7 @@ pub struct PublishedImageArtifact {
     pub tag: String,
     pub digest: String,
     pub image_ref: String,
-    pub source_sha: String,
+    pub provenance: ImageProvenance,
     pub published_at: String,
 }
 
@@ -42,48 +73,27 @@ impl PublishedImageArtifact {
         environment: &str,
         item: &ImagePushPlanItem,
         digest: &str,
-        source_sha: &str,
         published_at: &str,
     ) -> Result<Self, ArtifactError> {
-        validate_digest(digest)?;
-
-        let image_ref = format!("{}/{}@{}", item.registry, item.repository, digest);
-
-        if source_sha.is_empty() {
-            return Err(ArtifactError::Validation(
-                "source_sha cannot be empty".to_string(),
-            ));
-        }
-        if item.service.is_empty() {
-            return Err(ArtifactError::Validation(
-                "service cannot be empty".to_string(),
-            ));
-        }
-        if item.registry.is_empty() {
-            return Err(ArtifactError::Validation(
-                "registry cannot be empty".to_string(),
-            ));
-        }
-        if item.repository.is_empty() {
-            return Err(ArtifactError::Validation(
-                "repository cannot be empty".to_string(),
-            ));
-        }
-
-        Ok(Self {
+        let artifact = Self {
             service: item.service.clone(),
             environment: environment.to_string(),
             registry: item.registry.clone(),
             repository: item.repository.clone(),
             tag: item.tag.clone(),
             digest: digest.to_string(),
-            image_ref,
-            source_sha: source_sha.to_string(),
+            image_ref: format!("{}/{}@{}", item.registry, item.repository, digest),
+            provenance: item.provenance.clone(),
             published_at: published_at.to_string(),
-        })
+        };
+
+        artifact.validate()?;
+        Ok(artifact)
     }
     pub fn validate(&self) -> Result<(), ArtifactError> {
-        validate_digest(&self.digest)?;
+        crate::oci::validate_sha256_digest(&self.digest)?;
+        self.provenance.validate()?;
+
         let expected_ref = format!("{}/{}@{}", self.registry, self.repository, self.digest);
         if self.image_ref != expected_ref {
             return Err(ArtifactError::Validation(format!(
@@ -91,33 +101,28 @@ impl PublishedImageArtifact {
                 expected_ref, self.image_ref
             )));
         }
-        if self.service.is_empty() {
+        if self.service.trim().is_empty() {
             return Err(ArtifactError::Validation(
                 "service cannot be empty".to_string(),
             ));
         }
-        if self.environment.is_empty() {
+        if self.environment.trim().is_empty() {
             return Err(ArtifactError::Validation(
                 "environment cannot be empty".to_string(),
             ));
         }
-        if self.registry.is_empty() {
+        if self.registry.trim().is_empty() {
             return Err(ArtifactError::Validation(
                 "registry cannot be empty".to_string(),
             ));
         }
-        if self.repository.is_empty() {
+        if self.repository.trim().is_empty() {
             return Err(ArtifactError::Validation(
                 "repository cannot be empty".to_string(),
             ));
         }
-        if self.tag.is_empty() {
+        if self.tag.trim().is_empty() {
             return Err(ArtifactError::Validation("tag cannot be empty".to_string()));
-        }
-        if self.source_sha.is_empty() {
-            return Err(ArtifactError::Validation(
-                "source_sha cannot be empty".to_string(),
-            ));
         }
 
         chrono::DateTime::parse_from_rfc3339(&self.published_at).map_err(|e| {
@@ -126,26 +131,6 @@ impl PublishedImageArtifact {
 
         Ok(())
     }
-}
-
-pub fn validate_digest(value: &str) -> Result<(), ArtifactError> {
-    let hex_part = value
-        .strip_prefix("sha256:")
-        .ok_or_else(|| ArtifactError::Validation("digest must start with sha256:".to_string()))?;
-
-    if hex_part.len() != 64 {
-        return Err(ArtifactError::Validation(
-            "sha256 digest must contain 64 hexadecimal characters".to_string(),
-        ));
-    }
-
-    if !hex_part.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
-        return Err(ArtifactError::Validation(
-            "sha256 digest must contain lowercase ASCII hexadecimal characters".to_string(),
-        ));
-    }
-
-    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -157,8 +142,8 @@ pub struct DigestEvidence {
 pub fn resolve_digest(evidence: DigestEvidence) -> Result<String, ArtifactError> {
     match (evidence.push_output_digest, evidence.inspected_digest) {
         (Some(push), Some(inspected)) => {
-            validate_digest(&push)?;
-            validate_digest(&inspected)?;
+            crate::oci::validate_sha256_digest(&push)?;
+            crate::oci::validate_sha256_digest(&inspected)?;
             if push != inspected {
                 return Err(ArtifactError::DigestMismatch {
                     expected: inspected,
@@ -168,11 +153,11 @@ pub fn resolve_digest(evidence: DigestEvidence) -> Result<String, ArtifactError>
             Ok(inspected)
         }
         (Some(push), None) => {
-            validate_digest(&push)?;
+            crate::oci::validate_sha256_digest(&push)?;
             Ok(push)
         }
         (None, Some(inspected)) => {
-            validate_digest(&inspected)?;
+            crate::oci::validate_sha256_digest(&inspected)?;
             Ok(inspected)
         }
         (None, None) => Err(ArtifactError::MissingDigest(
@@ -201,7 +186,7 @@ pub struct ImagePushPlanItem {
     pub target_image_ref: String,
     pub local_image_ref: String,
     pub tag: String,
-    pub source_sha: String,
+    pub provenance: ImageProvenance,
     pub action: ImagePushPlanAction,
 }
 
@@ -220,18 +205,39 @@ pub fn derive_image_tag(source_sha: Option<&str>) -> String {
     }
 }
 
-pub fn parse_pushed_digest(output: &str) -> Option<String> {
-    let mut last_digest = None;
+pub fn parse_pushed_digest(output: &str) -> Result<Option<String>, ArtifactError> {
+    let mut digests = std::collections::HashSet::new();
+    let mut has_marker = false;
+
     for line in output.lines() {
         let marker = "digest:";
         if let Some(idx) = line.find(marker) {
+            has_marker = true;
             let rest = line[idx + marker.len()..].trim();
             if let Some(digest) = rest.split_whitespace().next() {
-                last_digest = Some(digest.to_string());
+                if crate::oci::validate_sha256_digest(digest).is_ok() {
+                    digests.insert(digest.to_string());
+                }
             }
         }
     }
-    last_digest
+
+    if digests.is_empty() {
+        if has_marker {
+            return Err(ArtifactError::Validation(
+                "push output contained digest markers but no valid digest".to_string(),
+            ));
+        }
+        return Ok(None);
+    }
+
+    if digests.len() > 1 {
+        return Err(ArtifactError::Validation(
+            "ambiguous push output contained multiple digests".to_string(),
+        ));
+    }
+
+    Ok(Some(digests.into_iter().next().unwrap()))
 }
 
 pub fn pushed_artifact_from_output(
@@ -240,7 +246,7 @@ pub fn pushed_artifact_from_output(
     output: &str,
     structured_digest: Option<&str>,
 ) -> Result<PublishedImageArtifact, String> {
-    let parsed_digest = parse_pushed_digest(output);
+    let parsed_digest = parse_pushed_digest(output).map_err(|e| e.to_string())?;
 
     let evidence = DigestEvidence {
         push_output_digest: parsed_digest,
@@ -252,14 +258,8 @@ pub fn pushed_artifact_from_output(
 
     let published_at = chrono::Utc::now().to_rfc3339();
 
-    PublishedImageArtifact::from_push_result(
-        environment,
-        item,
-        &digest,
-        &item.source_sha,
-        &published_at,
-    )
-    .map_err(|e| format!("invalid published artifact: {:?}", e))
+    PublishedImageArtifact::from_push_result(environment, item, &digest, &published_at)
+        .map_err(|e| format!("invalid published artifact: {:?}", e))
 }
 
 #[cfg(test)]
@@ -277,26 +277,26 @@ mod tests_derive {
 
     #[test]
     fn parses_digest_from_stdout_style_output() {
-        let output = "latest: digest: sha256:abc123 size: 1234";
+        let output = "latest: digest: sha256:d3f443b7e71c6628b030c6a53fef1c9b6f87452140416cd64b547285227fbd87 size: 1234";
         assert_eq!(
-            parse_pushed_digest(output).as_deref(),
-            Some("sha256:abc123")
+            parse_pushed_digest(output).unwrap().as_deref(),
+            Some("sha256:d3f443b7e71c6628b030c6a53fef1c9b6f87452140416cd64b547285227fbd87")
         );
     }
 
     #[test]
     fn parses_digest_from_stderr_style_combined_output() {
-        let output = "some stdout\nlatest: digest: sha256:def456 size: 1234";
+        let output = "some stdout\nlatest: digest: sha256:d3f443b7e71c6628b030c6a53fef1c9b6f87452140416cd64b547285227fbd87 size: 1234";
         assert_eq!(
-            parse_pushed_digest(output).as_deref(),
-            Some("sha256:def456")
+            parse_pushed_digest(output).unwrap().as_deref(),
+            Some("sha256:d3f443b7e71c6628b030c6a53fef1c9b6f87452140416cd64b547285227fbd87")
         );
     }
 
     #[test]
-    fn returns_none_when_digest_missing() {
-        let output = "pushed some layers";
-        assert_eq!(parse_pushed_digest(output), None);
+    fn test_parse_pushed_digest_not_found() {
+        let output = "Some output without digest";
+        assert_eq!(parse_pushed_digest(output).unwrap(), None);
     }
 
     #[test]
@@ -308,7 +308,10 @@ mod tests_derive {
             tag: "latest".to_string(),
             target_image_ref: "ghcr.io/org/api:latest".to_string(),
             local_image_ref: "ghcr.io/org/api:latest".to_string(),
-            source_sha: "abc12345".to_string(),
+            provenance: ImageProvenance {
+                build_fingerprint: "abc12345".to_string(),
+                source_revision: Some("abc12345".to_string()),
+            },
             action: ImagePushPlanAction::WouldPush,
         };
         let output =
@@ -330,41 +333,15 @@ mod tests_derive {
             tag: "latest".to_string(),
             target_image_ref: "ghcr.io/org/api:latest".to_string(),
             local_image_ref: "ghcr.io/org/api:latest".to_string(),
-            source_sha: "dev".to_string(),
+            provenance: ImageProvenance {
+                build_fingerprint: "dev".to_string(),
+                source_revision: Some("dev".to_string()),
+            },
             action: ImagePushPlanAction::WouldPush,
         };
         let output = "no digest here";
         let err = pushed_artifact_from_output("prod", &item, output, None).unwrap_err();
         assert!(err.contains("digest error"));
-    }
-
-    #[test]
-    fn test_validate_digest_valid() {
-        assert!(validate_digest(
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn test_validate_digest_missing_prefix() {
-        assert!(validate_digest(
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn test_validate_digest_truncated() {
-        assert!(validate_digest("sha256:000").is_err());
-    }
-
-    #[test]
-    fn test_validate_digest_non_hex() {
-        assert!(validate_digest(
-            "sha256:zzzz000000000000000000000000000000000000000000000000000000000000"
-        )
-        .is_err());
     }
 }
 
@@ -384,7 +361,10 @@ mod tests_addendum {
                 tag: "61eaa8b".to_string(),
                 target_image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
                 local_image_ref: "ghcr.io/adriftdev/sailr/ci-build-hello:61eaa8b".to_string(),
-                source_sha: "61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string(),
+                provenance: ImageProvenance {
+                    build_fingerprint: "61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string(),
+                    source_revision: Some("61eaa8bb0e52f5bb1d5a621760b0a2eae601ccd3".to_string()),
+                },
                 action: ImagePushPlanAction::WouldPush,
             }],
         };

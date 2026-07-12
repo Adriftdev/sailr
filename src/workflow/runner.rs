@@ -5,7 +5,8 @@ use crate::environment::Environment;
 use super::config::WorkflowConfig;
 use super::planner::WorkflowPlanner;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum RunnerKind {
     Local,
     GitHubActions,
@@ -14,22 +15,40 @@ pub enum RunnerKind {
     GenericCi,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RunnerContext {
     pub kind: RunnerKind,
     pub ci: bool,
     pub interactive: bool,
+    pub ci_environment: Option<crate::workflow::ci::CiEnvironment>,
 }
 
 impl RunnerContext {
     pub fn detect(non_interactive: bool) -> Self {
+        let mut ci_env = None;
         let kind = if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
+            ci_env = Some(crate::workflow::ci::CiEnvironment {
+                provider: crate::workflow::ci::CiProvider::GitHub,
+                run_id: std::env::var("GITHUB_RUN_ID").ok(),
+            });
             RunnerKind::GitHubActions
         } else if std::env::var("CIRCLECI").as_deref() == Ok("true") {
+            ci_env = Some(crate::workflow::ci::CiEnvironment {
+                provider: crate::workflow::ci::CiProvider::CircleCi,
+                run_id: std::env::var("CIRCLE_WORKFLOW_ID").ok(),
+            });
             RunnerKind::CircleCi
         } else if std::env::var("TRAVIS").as_deref() == Ok("true") {
+            ci_env = Some(crate::workflow::ci::CiEnvironment {
+                provider: crate::workflow::ci::CiProvider::Travis,
+                run_id: std::env::var("TRAVIS_BUILD_ID").ok(),
+            });
             RunnerKind::Travis
         } else if std::env::var("CI").is_ok() {
+            ci_env = Some(crate::workflow::ci::CiEnvironment {
+                provider: crate::workflow::ci::CiProvider::Generic,
+                run_id: None,
+            });
             RunnerKind::GenericCi
         } else {
             RunnerKind::Local
@@ -42,6 +61,7 @@ impl RunnerContext {
             kind,
             ci,
             interactive,
+            ci_environment: ci_env,
         }
     }
 }
@@ -101,12 +121,20 @@ fn print_workflow_result(
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct WorkflowReportTaskItem {
+    pub name: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct WorkflowReportTasks {
     pub completed: usize,
     pub failed: usize,
     pub skipped: usize,
     pub cancelled: usize,
-    pub items: Vec<serde_json::Value>,
+    pub items: Vec<WorkflowReportTaskItem>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -134,7 +162,7 @@ pub struct WorkflowReport {
     pub report_type: WorkflowReportType,
     pub profile: String,
     pub mode: String,
-    pub runner: String,
+    pub runner: RunnerContext,
     pub environment: String,
     pub success: bool,
     pub effects: crate::workflow::plan::WorkflowEffects,
@@ -161,11 +189,10 @@ fn write_workflow_report_to(
     let task_items = result
         .tasks
         .iter()
-        .map(|task| {
-            serde_json::json!({
-                "name": task.name,
-                "status": format!("{:?}", task.status).to_lowercase()
-            })
+        .map(|task| WorkflowReportTaskItem {
+            name: task.name.clone(),
+            status: format!("{:?}", task.status).to_lowercase(),
+            error: task.error.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -183,7 +210,7 @@ fn write_workflow_report_to(
         report_type: WorkflowReportType::WorkflowExecution,
         profile: profile.name.clone(),
         mode: profile.mode.as_str().to_string(),
-        runner: format!("{:?}", runner.kind).to_lowercase(),
+        runner: runner.clone(),
         environment: profile.environment.clone(),
         success: result.summary.success,
         effects: plan.effects.clone(),
@@ -328,6 +355,79 @@ pub fn validate_workflow_safety(
     Ok(())
 }
 
+#[derive(Debug)]
+pub struct WorkflowInspectionImage {
+    pub service: String,
+    pub local_image_ref: String,
+    pub target_image_ref: String,
+}
+
+#[derive(Debug)]
+pub struct WorkflowInspection {
+    pub profile_name: String,
+    pub profile_mode: String,
+    pub config_path: String,
+    pub environment: String,
+    pub environment_path: String,
+    pub runner_ci: bool,
+    pub runner_provider: String,
+    pub runner_interactive: bool,
+    pub approval: Option<crate::workflow::profile::ApprovalMode>,
+    pub profile_apply: bool,
+    pub requires_cli_apply: bool,
+    pub push_mode: crate::workflow::profile::WorkflowStepMode,
+    pub registry_host: String,
+    pub registry_namespace: String,
+    pub registry_prefix: String,
+    pub images: Vec<WorkflowInspectionImage>,
+}
+
+impl WorkflowInspection {
+    pub fn render_workflow_inspection(&self) -> String {
+        let mut output = String::new();
+        output.push_str("Workflow:\n");
+        output.push_str(&format!("  profile: {}\n", self.profile_name));
+        output.push_str(&format!("  mode: {}\n", self.profile_mode));
+        output.push_str(&format!("  config: {}\n", self.config_path));
+        output.push_str(&format!("  environment: {}\n", self.environment));
+        output.push_str(&format!(
+            "  environment config: {}\n",
+            self.environment_path
+        ));
+
+        output.push_str("\nRunner:\n");
+        output.push_str(&format!("  ci: {}\n", self.runner_ci));
+        output.push_str(&format!("  provider: {}\n", self.runner_provider));
+        output.push_str(&format!("  interactive: {}\n", self.runner_interactive));
+
+        output.push_str("\nSafety:\n");
+        output.push_str(&format!("  approval: {:?}\n", self.approval));
+        output.push_str(&format!("  profile apply: {}\n", self.profile_apply));
+        output.push_str(&format!(
+            "  CLI apply required: {}\n",
+            self.requires_cli_apply
+        ));
+        output.push_str(&format!("  push mode: {:?}\n", self.push_mode));
+
+        output.push_str("\nRegistry:\n");
+        output.push_str(&format!("  host: {}\n", self.registry_host));
+        output.push_str(&format!("  namespace: {}\n", self.registry_namespace));
+        output.push_str(&format!("  prefix: {}\n", self.registry_prefix));
+
+        output.push_str("\nImages:\n");
+        if self.images.is_empty() {
+            output.push_str("  (no image push plan)\n");
+        } else {
+            for item in &self.images {
+                output.push_str(&format!("  service: {}\n", item.service));
+                output.push_str(&format!("  local image ref: {}\n", item.local_image_ref));
+                output.push_str(&format!("  target image ref: {}\n", item.target_image_ref));
+            }
+        }
+        output
+    }
+}
+
 pub struct WorkflowRunner;
 
 impl WorkflowRunner {
@@ -441,6 +541,7 @@ impl WorkflowRunner {
         crate::LOGGER.info("✅ Workflow completed successfully.");
         Ok(())
     }
+
     pub async fn inspect(args: crate::cli::WorkflowInspectArgs) -> Result<(), String> {
         let runner_ctx = RunnerContext::detect(false);
         let config_path = std::path::Path::new("sailr.workflow.toml");
@@ -464,51 +565,6 @@ impl WorkflowRunner {
             .resolve()
             .map_err(|e| format!("Invalid registry configuration: {}", e))?;
 
-        println!("Workflow:");
-        println!("  profile: {}", normalized.name);
-        println!(
-            "  mode: {}",
-            format!("{:?}", normalized.mode).to_lowercase()
-        );
-        println!(
-            "  config: {}",
-            std::fs::canonicalize(config_path)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "sailr.workflow.toml".to_string())
-        );
-        println!("  environment: {}", normalized.environment);
-        println!(
-            "  environment config: {}",
-            std::fs::canonicalize(&env_path_str)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| env_path_str)
-        );
-
-        println!("\nRunner:");
-        println!("  ci: {}", runner_ctx.ci);
-        println!("  provider: {:?}", runner_ctx.kind);
-        println!("  interactive: {}", runner_ctx.interactive);
-
-        println!("\nSafety:");
-        println!("  approval: {:?}", normalized.approval);
-        println!("  profile apply: {}", profile.apply.unwrap_or(false));
-        println!("  CLI apply required: {}", !normalized.apply);
-        println!("  push mode: {:?}", normalized.push);
-
-        println!("\nRegistry:");
-        println!("  host: {}", resolved_registry.host);
-        println!(
-            "  namespace: {}",
-            env.registry
-                .namespace()
-                .unwrap_or_default()
-                .unwrap_or_else(|| "none".to_string())
-        );
-        println!(
-            "  prefix: {}",
-            env.registry.prefix().unwrap_or_else(|_| "none".to_string())
-        );
-
         let env_arc = std::sync::Arc::new(env);
         let build_options = crate::builder::BuildOptions {
             cache_dir: ".sailr/cache".to_string(),
@@ -523,7 +579,7 @@ impl WorkflowRunner {
         };
         let planner = crate::workflow::planner::WorkflowPlanner::new(
             normalized.clone(),
-            env_arc,
+            env_arc.clone(),
             build_options,
             runner_ctx.clone(),
         );
@@ -531,16 +587,49 @@ impl WorkflowRunner {
             .plan()
             .map_err(|e| format!("Failed to generate plan: {}", e))?;
 
-        println!("\nImages:");
-        if let Some(push_plan) = plan.image_push_plan {
-            for item in &push_plan.items {
-                println!("  service: {}", item.service);
-                println!("  local image ref: {}", item.local_image_ref);
-                println!("  target image ref: {}", item.target_image_ref);
-            }
-        } else {
-            println!("  (no image push plan)");
-        }
+        let inspection = WorkflowInspection {
+            profile_name: normalized.name.clone(),
+            profile_mode: format!("{:?}", normalized.mode).to_lowercase(),
+            config_path: std::fs::canonicalize(config_path)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "sailr.workflow.toml".to_string()),
+            environment: normalized.environment.clone(),
+            environment_path: std::fs::canonicalize(&env_path_str)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| env_path_str),
+            runner_ci: runner_ctx.ci,
+            runner_provider: format!("{:?}", runner_ctx.kind),
+            runner_interactive: runner_ctx.interactive,
+            approval: Some(normalized.approval),
+            profile_apply: profile.apply.unwrap_or(false),
+            requires_cli_apply: !normalized.apply,
+            push_mode: normalized.push,
+            registry_host: resolved_registry.host.clone(),
+            registry_namespace: env_arc
+                .registry
+                .namespace()
+                .unwrap_or_default()
+                .unwrap_or_else(|| "none".to_string()),
+            registry_prefix: env_arc
+                .registry
+                .prefix()
+                .unwrap_or_else(|_| "none".to_string()),
+            images: {
+                let mut images = Vec::new();
+                if let Some(push_plan) = plan.image_push_plan {
+                    for item in &push_plan.items {
+                        images.push(WorkflowInspectionImage {
+                            service: item.service.clone(),
+                            local_image_ref: item.local_image_ref.clone(),
+                            target_image_ref: item.target_image_ref.clone(),
+                        });
+                    }
+                }
+                images
+            },
+        };
+
+        println!("{}", inspection.render_workflow_inspection());
 
         Ok(())
     }
@@ -831,6 +920,7 @@ mod tests {
         };
 
         let runner = RunnerContext {
+            ci_environment: None,
             kind: RunnerKind::Local,
             ci: false,
             interactive: true,
@@ -882,6 +972,7 @@ mod tests {
         };
 
         let runner = RunnerContext {
+            ci_environment: None,
             kind: RunnerKind::GitHubActions,
             ci: true,
             interactive: false,
@@ -932,9 +1023,10 @@ mod tests {
         };
 
         let runner = RunnerContext {
+            ci_environment: None,
             kind: RunnerKind::Local,
             ci: false,
-            interactive: false, // user ran with --non-interactive
+            interactive: false,
         };
 
         let res = validate_workflow_safety(
@@ -983,6 +1075,7 @@ mod tests {
         };
 
         let runner = RunnerContext {
+            ci_environment: None,
             kind: RunnerKind::Local,
             ci: false,
             interactive: true,
@@ -1031,6 +1124,7 @@ mod tests {
         };
 
         let runner = RunnerContext {
+            ci_environment: None,
             kind: RunnerKind::GitHubActions,
             ci: true,
             interactive: false,
@@ -1129,10 +1223,9 @@ mod tests {
 
         // Write report into a temp directory to avoid polluting the project.
         let temp = tempfile::tempdir().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp.path()).unwrap();
 
-        write_workflow_report(
+        write_workflow_report_to(
+            temp.path(),
             &normalized,
             &runner_ctx,
             &result,
@@ -1151,8 +1244,6 @@ mod tests {
             json["plans"]["image_push"]["items"][0]["action"],
             "would_push"
         );
-
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     fn load_fixture_json(name: &str) -> serde_json::Value {
@@ -1189,6 +1280,7 @@ mod tests {
         let normalized = profile.normalize(true);
 
         let runner_ctx = RunnerContext {
+            ci_environment: None,
             kind: RunnerKind::GitHubActions,
             ci: true,
             interactive: false,
@@ -1210,7 +1302,10 @@ mod tests {
                     target_image_ref: "ghcr.io/org/repo/api:ab12cd34".to_string(),
                     local_image_ref: "ghcr.io/org/repo/api:ab12cd34".to_string(),
                     tag: "ab12cd34".to_string(),
-                    source_sha: "ab12cd345678".to_string(),
+                    provenance: crate::workflow::image::ImageProvenance {
+                        build_fingerprint: "ab12cd345678".to_string(),
+                        source_revision: Some("ab12cd345678".to_string()),
+                    },
                     action: crate::workflow::image::ImagePushPlanAction::WouldPush,
                 }],
             }),
@@ -1325,7 +1420,10 @@ mod tests {
             tag: "ab12cd34".to_string(),
             digest: "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938".to_string(),
             image_ref: "ghcr.io/org/repo/api@sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938".to_string(),
-            source_sha: "ab12cd345678".to_string(),
+            provenance: crate::workflow::image::ImageProvenance {
+                build_fingerprint: "ab12cd345678".to_string(),
+                source_revision: Some("ab12cd345678".to_string()),
+            },
             published_at: "2024-03-20T12:00:00Z".to_string(),
         }];
         let actual = generate_report_json(

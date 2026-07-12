@@ -3,10 +3,19 @@ use std::path::PathBuf;
 
 use super::error::WorkflowError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CiProvider {
     GitHub,
     CircleCi,
     Travis,
+    Generic,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CiEnvironment {
+    pub provider: CiProvider,
+    pub run_id: Option<String>,
 }
 
 impl std::str::FromStr for CiProvider {
@@ -33,6 +42,7 @@ impl CiTemplateGenerator {
             CiProvider::GitHub => Self::generate_github(profile_name),
             CiProvider::CircleCi => Self::generate_circleci(profile_name),
             CiProvider::Travis => Self::generate_travis(profile_name),
+            CiProvider::Generic => String::new(),
         }
     }
 
@@ -43,6 +53,7 @@ impl CiTemplateGenerator {
             }
             CiProvider::CircleCi => PathBuf::from(".circleci/config.yml"),
             CiProvider::Travis => PathBuf::from(".travis.yml"),
+            CiProvider::Generic => PathBuf::from("sailr-workflow.sh"),
         }
     }
 

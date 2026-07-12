@@ -176,7 +176,7 @@ impl ResolvedRegistry {
         service: &str,
         digest: &str,
     ) -> Result<String, crate::workflow::error::RegistryConfigError> {
-        if crate::workflow::image::validate_digest(digest).is_err() {
+        if crate::oci::validate_sha256_digest(digest).is_err() {
             return Err(crate::workflow::error::RegistryConfigError::InvalidDigest(
                 digest.to_string(),
             ));
@@ -670,17 +670,15 @@ impl Environment {
         Ok(())
     }
 
-    pub fn get_variables(&self, service: &Service) -> Vec<(String, String)> {
+    pub fn get_variables(
+        &self,
+        service: &Service,
+    ) -> Result<Vec<(String, String)>, crate::workflow::error::RegistryConfigError> {
         let mut variables = vec![
             ("name".to_string(), self.name.clone()),
             ("log_level".to_string(), self.log_level.clone()),
             ("replicas".to_string(), self.default_replicas.to_string()),
-            (
-                "registry".to_string(),
-                self.registry
-                    .prefix()
-                    .unwrap_or_else(|_| "docker.io".to_string()),
-            ),
+            ("registry".to_string(), self.registry.prefix()?),
             ("domain".to_string(), self.domain.clone()),
             ("deployment_date".to_string(), get_current_timestamp()),
             (
@@ -719,7 +717,7 @@ impl Environment {
             })
         }
 
-        variables
+        Ok(variables)
     }
 
     fn upgrade_builds_to_v05(&mut self) {
