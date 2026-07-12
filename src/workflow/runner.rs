@@ -230,12 +230,65 @@ pub struct WorkflowFinalizerResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct WorkflowReportFinalizers {
-    pub completed: usize,
-    pub failed: usize,
-    pub skipped: usize,
+    #[serde(default)]
+    pub planned: Vec<String>,
+    #[serde(default)]
     pub items: Vec<WorkflowFinalizerResult>,
+    #[serde(default)]
+    pub completed: usize,
+    #[serde(default)]
+    pub skipped: usize,
+    #[serde(default)]
+    pub failed: usize,
+}
+
+impl WorkflowReportFinalizers {
+    pub fn validate(&self) -> Result<(), crate::workflow::error::WorkflowReportError> {
+        use crate::workflow::error::WorkflowReportError;
+        let total = self.completed + self.skipped + self.failed;
+        if total != self.items.len() {
+            return Err(WorkflowReportError::Validation(format!(
+                "finalizer item count {} does not match sum of completed/skipped/failed {}",
+                self.items.len(),
+                total
+            )));
+        }
+
+        let mut unique_ids = std::collections::BTreeSet::new();
+        for item in &self.items {
+            if !unique_ids.insert(&item.id) {
+                return Err(WorkflowReportError::Validation(format!(
+                    "duplicate finalizer id: {}",
+                    item.id
+                )));
+            }
+            if !self.planned.contains(&item.id) {
+                return Err(WorkflowReportError::Validation(format!(
+                    "unplanned finalizer executed: {}",
+                    item.id
+                )));
+            }
+            if item.status == WorkflowFinalizerStatus::Failed && item.error.is_none() {
+                return Err(WorkflowReportError::Validation(format!(
+                    "failed finalizer '{}' missing error message",
+                    item.id
+                )));
+            }
+        }
+
+        for planned_id in &self.planned {
+            if !unique_ids.contains(planned_id) {
+                return Err(WorkflowReportError::Validation(format!(
+                    "planned finalizer missing from results: {}",
+                    planned_id
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -341,13 +394,50 @@ impl WorkflowReport {
                 "rollback_failed exceeds the task item count".to_string(),
             ));
         }
-        let expected_success = self.tasks.failed == 0
+
+        self.finalizers.validate()?;
+
+        let require_source_revision = |service: &str,
+                                       provenance: &crate::workflow::image::ImageProvenance|
+         -> Result<(), WorkflowReportError> {
+            if provenance
+                .source_revision
+                .as_deref()
+                .is_none_or(|r| r.trim().is_empty())
+            {
+                return Err(WorkflowReportError::Validation(format!(
+                    "mutating publication for '{}' requires a source revision",
+                    service
+                )));
+            }
+            Ok(())
+        };
+
+        if let Some(push_plan) = self.plans.image_push.as_ref() {
+            if push_plan.mutates_registry {
+                for item in &push_plan.items {
+                    require_source_revision(&item.service, &item.provenance)?;
+                }
+
+                for artifact in &self.artifacts.published_images {
+                    require_source_revision(&artifact.service, &artifact.provenance)?;
+                }
+            }
+        }
+
+        let tasks_successful = self.tasks.failed == 0
             && self.tasks.skipped == 0
             && self.tasks.cancelled == 0
             && self.tasks.rollback_failed == 0;
+
+        let finalizers_successful = self.finalizers.failed == 0 && self.finalizers.skipped == 0;
+
+        let expected_success = tasks_successful && finalizers_successful;
+
         if self.success != expected_success {
             return Err(WorkflowReportError::Validation(format!(
-                "report success does not match task summary: expected {expected_success}"
+                "success is {} but expected {} based on task outcomes (tasks_successful={}, finalizers_successful={})",
+                self.success, expected_success, tasks_successful, finalizers_successful
             )));
         }
 
@@ -491,40 +581,73 @@ fn write_workflow_report_document(
     root: &std::path::Path,
     report: &WorkflowReport,
 ) -> Result<(), String> {
+    report.validate().map_err(|e| e.to_string())?;
+
     let report_dir = root.join(".sailr").join("reports").join(&report.profile);
 
     std::fs::create_dir_all(&report_dir)
         .map_err(|e| format!("Failed to create report directory: {}", e))?;
 
     let report_path = report_dir.join("latest.json");
-    let json_string = serde_json::to_string_pretty(&report)
+    let temporary_path = report_dir.join("latest.json.tmp");
+    let json_string = serde_json::to_vec_pretty(&report)
         .map_err(|e| format!("Failed to serialize report: {}", e))?;
 
-    std::fs::write(&report_path, &json_string)
-        .map_err(|e| format!("Failed to write report: {}", e))?;
+    let write_result = (|| -> Result<(), String> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temporary_path)
+            .map_err(|e| format!("failed to create temporary report: {}", e))?;
+        file.write_all(&json_string)
+            .map_err(|e| format!("failed to write temporary report: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("failed to sync temporary report: {}", e))?;
+        std::fs::rename(&temporary_path, &report_path)
+            .map_err(|e| format!("failed to atomically replace workflow report: {}", e))?;
+        Ok(())
+    })();
 
-    Ok(())
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+
+    write_result
 }
 
 fn execute_before_report_finalizers(
     plan: &crate::workflow::plan::WorkflowPlan,
     result: &runkernel::PipelineResult,
 ) -> Result<WorkflowReportFinalizers, String> {
-    let mut finalizers = WorkflowReportFinalizers::default();
+    let planned: Vec<_> = plan
+        .finalizers
+        .iter()
+        .filter(|f| f.kind.phase() == crate::workflow::plan::WorkflowFinalizerPhase::BeforeReport)
+        .collect();
 
-    for finalizer in &plan.finalizers {
-        if finalizer.kind.phase() != crate::workflow::plan::WorkflowFinalizerPhase::BeforeReport {
-            continue;
+    let mut finalizers = WorkflowReportFinalizers {
+        planned: planned.iter().map(|f| f.id.to_string()).collect(),
+        items: Vec::new(),
+        completed: 0,
+        skipped: 0,
+        failed: 0,
+    };
+
+    if !result.summary.success {
+        for finalizer in planned {
+            finalizers.items.push(WorkflowFinalizerResult {
+                id: finalizer.id.clone(),
+                status: WorkflowFinalizerStatus::Skipped,
+                error: Some("pipeline did not complete successfully".to_string()),
+            });
+            finalizers.skipped += 1;
         }
+        return Ok(finalizers);
+    }
 
+    for finalizer in planned {
         let res = match finalizer.kind {
             crate::workflow::plan::WorkflowFinalizerKind::WriteBuildCache => {
-                if result.summary.success {
-                    if let Some(build_plan) = &plan.build_plan {
-                        crate::builder::write_successful_service_caches(build_plan, result)
-                    } else {
-                        Ok(())
-                    }
+                if let Some(build_plan) = &plan.build_plan {
+                    crate::builder::write_successful_service_caches(build_plan, result)
                 } else {
                     Ok(())
                 }
@@ -1827,7 +1950,12 @@ mod tests {
         );
         let mut val = serde_json::to_value(decoded).unwrap();
         if let Some(obj) = val.as_object_mut() {
-            obj.remove("finalizers");
+            if let Some(runner) = obj.get_mut("runner").and_then(|r| r.as_object_mut()) {
+                runner.insert("version".to_string(), serde_json::json!("VERSION"));
+                runner.insert("start_time".to_string(), serde_json::json!("TIMESTAMP"));
+                runner.insert("end_time".to_string(), serde_json::json!("TIMESTAMP"));
+                runner.insert("duration".to_string(), serde_json::json!("DURATION"));
+            }
         }
         val
     }

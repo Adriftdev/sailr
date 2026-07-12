@@ -307,23 +307,30 @@ impl WorkflowPlanner {
             }
             crate::workflow::profile::WorkflowStepMode::Plan
             | crate::workflow::profile::WorkflowStepMode::Run => {
-                let is_run = self.profile.push == crate::workflow::profile::WorkflowStepMode::Run;
-                let source_revision = match self.source_revision_resolver.resolve(&self.runner) {
-                    Ok(revision) => revision,
-                    Err(_) if !is_run => None,
-                    Err(_) => {
-                        return Err(
-                            crate::workflow::error::ProvenanceError::MissingSourceRevision
-                                .to_string(),
-                        )
-                    }
-                };
+                let has_publications = build_plan_opt
+                    .as_ref()
+                    .map(|bp| bp.services.iter().any(|s| s.dirty))
+                    .unwrap_or(false);
 
-                if is_run && source_revision.is_none() {
-                    return Err(
-                        crate::workflow::error::ProvenanceError::MissingSourceRevision.to_string(),
-                    );
-                }
+                let is_run = self.profile.push == crate::workflow::profile::WorkflowStepMode::Run;
+
+                let source_revision = match (is_run, has_publications) {
+                    (true, true) => Some(
+                        self.source_revision_resolver
+                            .resolve(&self.runner)
+                            .map_err(|error| error.to_string())?
+                            .ok_or_else(|| {
+                                crate::workflow::error::ProvenanceError::MissingSourceRevision
+                                    .to_string()
+                            })?,
+                    ),
+                    (true, false) => None,
+                    (false, _) => self
+                        .source_revision_resolver
+                        .resolve(&self.runner)
+                        .ok()
+                        .flatten(),
+                };
 
                 tasks.push(WorkflowTaskPlan {
                     id: crate::workflow::task_id::PUSH_PLAN.to_string(),

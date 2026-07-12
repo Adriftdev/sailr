@@ -279,6 +279,22 @@ impl ImagePushPlanReport {
                 "empty push plan cannot mutate the registry".to_string(),
             ));
         }
+
+        if self.mutates_registry {
+            for item in &self.items {
+                if item
+                    .provenance
+                    .source_revision
+                    .as_deref()
+                    .is_none_or(|revision| revision.trim().is_empty())
+                {
+                    return Err(ArtifactError::Validation(format!(
+                        "mutating publication for '{}' requires a source revision",
+                        item.service,
+                    )));
+                }
+            }
+        }
         let mut services = std::collections::BTreeSet::new();
         let mut targets = std::collections::BTreeSet::new();
         for item in &self.items {
