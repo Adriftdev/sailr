@@ -112,8 +112,8 @@ impl BuildBackend for RoomserviceBuildBackend {
         );
 
         for service in selected_services {
-            let room = build_room(env, service, &buildable_names);
-            roomservice.add_room(room)?;
+            let room = build_room(env, service, &buildable_names)?;
+            roomservice.add_room(room).map_err(|e| e.to_string())?;
         }
 
         let plan = roomservice.plan(self.options.dump_scope)?;
@@ -337,7 +337,7 @@ pub(crate) fn create_sailr_build_plan(
         let matched_input_files =
             resolve_input_files(&build.path, &input_patterns, &dependency_paths)?;
         let source_hash = hash_files(&matched_input_files);
-        let normalized = normalize_build_config(env, service, &build);
+        let normalized = normalize_build_config(env, service, &build)?;
         let dependency_hash = hash_text(
             &dependencies
                 .iter()
@@ -871,7 +871,7 @@ fn build_room(
     env: &Environment,
     service: &Service,
     buildable_names: &BTreeSet<String>,
-) -> RoomBuilder {
+) -> Result<RoomBuilder, String> {
     let build_cfg = service
         .build
         .as_ref()
@@ -880,12 +880,12 @@ fn build_room(
         build_cfg.relies_on.clone().unwrap_or_default(),
         buildable_names,
     );
-    let normalized = normalize_build_config(env, service, build_cfg);
+    let normalized = normalize_build_config(env, service, build_cfg)?;
     let phases = normalized.phases;
     let build_command = phases.build.into_iter().next();
     let push_command = phases.push.into_iter().next();
 
-    RoomBuilder::new(
+    Ok(RoomBuilder::new(
         service.name.clone(),
         build_cfg.path.clone(),
         ".roomservice".to_string(),
@@ -906,20 +906,21 @@ fn build_room(
         },
         build_command,
         push_command,
-        Some(format!(
-            "{}/{}:{}",
-            env.registry.host(),
-            service.name,
-            service.version
-        )),
-    )
+        Some(
+            env.registry
+                .resolve()
+                .map_err(|e| format!("Invalid registry configuration: {e}"))?
+                .tagged_ref(&service.name, &service.version)
+                .map_err(|e| format!("Failed to resolve image reference: {e}"))?,
+        ),
+    ))
 }
 
 fn normalize_build_config(
     env: &Environment,
     service: &Service,
     build_cfg: &ServiceBuildConfig,
-) -> NormalizedBuildConfig {
+) -> Result<NormalizedBuildConfig, String> {
     let legacy_semantics = env.schema_version != "0.5.0";
     let explicit_new_phase_fields = build_cfg.before_synchronous.is_some()
         || build_cfg.run_parallel.is_some()
@@ -931,12 +932,12 @@ fn normalize_build_config(
     let before = if legacy_semantics && !explicit_new_phase_fields {
         Vec::new()
     } else {
-        render_commands(build_cfg.before.clone(), env, service)
+        render_commands(build_cfg.before.clone(), env, service)?
     };
     let after = if legacy_semantics && !explicit_new_phase_fields {
         Vec::new()
     } else {
-        render_commands(build_cfg.after.clone(), env, service)
+        render_commands(build_cfg.after.clone(), env, service)?
     };
 
     let build_command = build_cfg
@@ -962,29 +963,29 @@ fn normalize_build_config(
         })
         .unwrap_or_else(|| default_push_command(env));
 
-    NormalizedBuildConfig {
+    Ok(NormalizedBuildConfig {
         phases: ServicePhases {
             before_synchronously: render_commands(
                 build_cfg.before_synchronous.clone(),
                 env,
                 service,
-            ),
+            )?,
             before,
-            run_parallel: render_commands(build_cfg.run_parallel.clone(), env, service),
-            run_synchronously: render_commands(build_cfg.run_synchronous.clone(), env, service),
+            run_parallel: render_commands(build_cfg.run_parallel.clone(), env, service)?,
+            run_synchronously: render_commands(build_cfg.run_synchronous.clone(), env, service)?,
             after,
-            finally: render_commands(build_cfg.finally.clone(), env, service),
-            build: vec![render_build_command(&build_command, env, service)],
-            push: vec![render_build_command(&push_command, env, service)],
+            finally: render_commands(build_cfg.finally.clone(), env, service)?,
+            build: vec![render_build_command(&build_command, env, service)?],
+            push: vec![render_build_command(&push_command, env, service)?],
         },
-    }
+    })
 }
 
 fn render_commands(
     commands: Option<CommandSpec>,
     env: &Environment,
     service: &Service,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     commands
         .map(CommandSpec::into_vec)
         .unwrap_or_default()
@@ -993,16 +994,20 @@ fn render_commands(
         .collect()
 }
 
-fn render_build_command(command: &str, env: &Environment, service: &Service) -> String {
+fn render_build_command(
+    command: &str,
+    env: &Environment,
+    service: &Service,
+) -> Result<String, String> {
     let mut rendered = command.to_string();
 
     let resolved_registry = env
         .registry
         .resolve()
-        .expect("Failed to parse registry config");
+        .map_err(|e| format!("Failed to parse registry config: {e}"))?;
     let image_ref = resolved_registry
         .tagged_ref(&service.name, &service.version)
-        .expect("Failed to build image ref");
+        .map_err(|e| format!("Failed to build image ref: {e}"))?;
 
     for (key, value) in [
         ("image_ref", image_ref.as_str()),
@@ -1016,7 +1021,7 @@ fn render_build_command(command: &str, env: &Environment, service: &Service) -> 
         rendered = replace_template_var(&rendered, key, value);
     }
 
-    rendered
+    Ok(rendered)
 }
 
 fn default_build_command(env: &Environment, build_cfg: &ServiceBuildConfig) -> String {
@@ -1638,7 +1643,7 @@ mod tests {
         build.build_command = None;
         build.push_command = None;
 
-        let normalized = normalize_build_config(&env, &service, &build);
+        let normalized = normalize_build_config(&env, &service, &build).unwrap();
         let commands = normalized.phases.commands_for_hash().join("\n");
         assert!(commands.contains("registry.local/api:1.2.3"));
         assert!(!commands.contains("{{"));

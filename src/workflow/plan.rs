@@ -1,7 +1,7 @@
 use crate::builder::SailrBuildPlan;
 use crate::workflow::profile::NormalizedWorkflowProfile;
 use crate::workflow::runner::RunnerContext;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct WorkflowPlan {
@@ -45,7 +45,7 @@ pub struct WorkflowEdge {
     pub to: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkflowEffects {
     pub mutates_filesystem: bool,
     pub mutates_docker: bool,

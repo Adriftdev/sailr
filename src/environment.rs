@@ -30,25 +30,16 @@ impl Default for RegistryConfig {
 }
 
 impl RegistryConfig {
-    pub fn host(&self) -> String {
-        match self {
-            Self::Simple(s) => s.clone(),
-            Self::Detailed { host, .. } => host.clone(),
-        }
+    pub fn host(&self) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        Ok(self.resolve()?.host)
     }
 
-    pub fn namespace(&self) -> Option<String> {
-        match self {
-            Self::Simple(_) => None,
-            Self::Detailed { namespace, .. } => namespace.clone(),
-        }
+    pub fn namespace(&self) -> Result<Option<String>, crate::workflow::error::RegistryConfigError> {
+        Ok(self.resolve()?.namespace)
     }
 
-    pub fn prefix(&self) -> String {
-        match self.namespace() {
-            Some(ns) => format!("{}/{}", self.host(), ns),
-            None => self.host(),
-        }
+    pub fn prefix(&self) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        Ok(self.resolve()?.prefix())
     }
 
     pub fn resolve(&self) -> Result<ResolvedRegistry, crate::workflow::error::RegistryConfigError> {
@@ -144,6 +135,13 @@ impl ResolvedRegistry {
         Ok(Self { host, namespace })
     }
 
+    pub fn prefix(&self) -> String {
+        match &self.namespace {
+            Some(ns) => format!("{}/{}", self.host, ns),
+            None => self.host.clone(),
+        }
+    }
+
     pub fn repository_for(
         &self,
         service: &str,
@@ -164,6 +162,11 @@ impl ResolvedRegistry {
         service: &str,
         tag: &str,
     ) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        if tag.trim().is_empty() {
+            return Err(crate::workflow::error::RegistryConfigError::InvalidTag(
+                tag.to_string(),
+            ));
+        }
         let repo = self.repository_for(service)?;
         Ok(format!("{}/{}:{}", self.host, repo, tag))
     }
@@ -173,6 +176,11 @@ impl ResolvedRegistry {
         service: &str,
         digest: &str,
     ) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        if crate::workflow::image::validate_digest(digest).is_err() {
+            return Err(crate::workflow::error::RegistryConfigError::InvalidDigest(
+                digest.to_string(),
+            ));
+        }
         let repo = self.repository_for(service)?;
         Ok(format!("{}/{}@{}", self.host, repo, digest))
     }
@@ -667,7 +675,12 @@ impl Environment {
             ("name".to_string(), self.name.clone()),
             ("log_level".to_string(), self.log_level.clone()),
             ("replicas".to_string(), self.default_replicas.to_string()),
-            ("registry".to_string(), self.registry.prefix()),
+            (
+                "registry".to_string(),
+                self.registry
+                    .prefix()
+                    .unwrap_or_else(|_| "docker.io".to_string()),
+            ),
             ("domain".to_string(), self.domain.clone()),
             ("deployment_date".to_string(), get_current_timestamp()),
             (
@@ -1458,7 +1471,7 @@ value = "enabled"
         assert_eq!(env.name, "child");
         assert_eq!(env.domain, "child.example.com");
         assert_eq!(env.default_replicas, 3);
-        assert_eq!(env.registry.host(), "docker.io/base");
+        assert_eq!(env.registry.prefix().unwrap(), "docker.io/base");
         assert_eq!(env.platform.as_deref(), Some("linux/amd64"));
         assert_eq!(env.build.as_ref().unwrap().max_parallelism, Some(2));
         assert_eq!(env.build.as_ref().unwrap().fail_fast, Some(false));
@@ -1508,7 +1521,7 @@ domain = "prod.example.com"
 
         assert_eq!(env.name, "prod");
         assert_eq!(env.domain, "prod.example.com");
-        assert_eq!(env.registry.host(), "docker.io/staging");
+        assert_eq!(env.registry.prefix().unwrap(), "docker.io/staging");
     }
 
     #[test]

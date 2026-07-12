@@ -1,0 +1,54 @@
+{
+  "schema_version": "sailr.workflow-report/v1",
+  "report_type": "workflow-execution",
+  "profile": "ci-build-push",
+  "mode": "build",
+  "runner": "githubactions",
+  "environment": "staging",
+  "success": false,
+  "effects": {
+    "mutates_filesystem": false,
+    "mutates_docker": true,
+    "mutates_registry": true,
+    "mutates_git": false,
+    "mutates_cluster": false,
+    "prompts_user": false
+  },
+  "tasks": {
+    "completed": 1,
+    "failed": 1,
+    "skipped": 0,
+    "cancelled": 0,
+    "items": [
+      {
+        "name": "plan-push",
+        "status": "completed"
+      },
+      {
+        "name": "execute-push",
+        "status": "failed"
+      }
+    ]
+  },
+  "plans": {
+    "image_push": {
+      "environment": "staging",
+      "mutates_registry": true,
+      "items": [
+        {
+          "service": "api",
+          "registry": "ghcr.io",
+          "repository": "org/repo/api",
+          "target_image_ref": "ghcr.io/org/repo/api:ab12cd34",
+          "local_image_ref": "ghcr.io/org/repo/api:ab12cd34",
+          "tag": "ab12cd34",
+          "source_sha": "ab12cd345678",
+          "action": "would_push"
+        }
+      ]
+    }
+  },
+  "artifacts": {
+    "published_images": []
+  }
+}

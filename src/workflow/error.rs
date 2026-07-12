@@ -35,4 +35,8 @@ pub enum RegistryConfigError {
     InvalidNamespace(String),
     #[error("Invalid service: {0}")]
     InvalidService(String),
+    #[error("Invalid tag: {0}")]
+    InvalidTag(String),
+    #[error("Invalid digest: {0}")]
+    InvalidDigest(String),
 }

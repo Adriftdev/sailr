@@ -8,23 +8,32 @@
   "success": true,
   "effects": {
     "mutates_filesystem": false,
-    "mutates_docker": false,
-    "mutates_registry": false,
+    "mutates_docker": true,
+    "mutates_registry": true,
     "mutates_git": false,
     "mutates_cluster": false,
     "prompts_user": false
   },
   "tasks": {
-    "completed": 1,
+    "completed": 2,
     "failed": 0,
     "skipped": 0,
     "cancelled": 0,
-    "items": []
+    "items": [
+      {
+        "name": "plan-push",
+        "status": "completed"
+      },
+      {
+        "name": "execute-push",
+        "status": "completed"
+      }
+    ]
   },
   "plans": {
     "image_push": {
       "environment": "staging",
-      "mutates_registry": false,
+      "mutates_registry": true,
       "items": [
         {
           "service": "api",
@@ -34,7 +43,7 @@
           "local_image_ref": "ghcr.io/org/repo/api:ab12cd34",
           "tag": "ab12cd34",
           "source_sha": "ab12cd345678",
-          "action": "WouldPush"
+          "action": "would_push"
         }
       ]
     }
@@ -42,8 +51,8 @@
   "artifacts": {
     "published_images": [
       {
-        "environment": "staging",
         "service": "api",
+        "environment": "staging",
         "registry": "ghcr.io",
         "repository": "org/repo/api",
         "tag": "ab12cd34",
