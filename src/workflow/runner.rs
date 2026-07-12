@@ -572,14 +572,15 @@ fn execute_report_sink(
                 write_workflow_report_document(root, report)?;
             }
             _ => {
-                return Err(format!("Finalizer kind {:?} is not a ReportSink", finalizer.kind));
+                return Err(format!(
+                    "Finalizer kind {:?} is not a ReportSink",
+                    finalizer.kind
+                ));
             }
         }
     }
     Ok(())
 }
-
-
 
 pub fn validate_workflow_safety(
     profile: &crate::workflow::profile::NormalizedWorkflowProfile,

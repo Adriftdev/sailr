@@ -319,7 +319,6 @@ pub(crate) fn create_sailr_build_plan(
     let mut dirty_state = HashMap::new();
     let mut plans = Vec::new();
 
-
     for service in selected_services {
         let build = service
             .build
@@ -404,8 +403,6 @@ pub(crate) fn create_sailr_build_plan(
             }
         }
         dedupe_dirty_reasons(&mut dirty_reasons);
-
-
 
         let dirty = !dirty_reasons.is_empty();
         dirty_state.insert(service.name.clone(), dirty);
@@ -1204,11 +1201,12 @@ pub(crate) fn write_successful_service_caches(
             .map_err(|error| format!("Failed to serialize Sailr service cache: {}", error))?;
         let cache_path = service_cache_path(&plan.cache_dir, &service.service.name);
         if let Some(parent) = cache_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("Failed to create Sailr build cache directory: {}", error))?;
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("Failed to create Sailr build cache directory: {}", error)
+            })?;
         }
         fs::write(cache_path, serialized)
-        .map_err(|error| format!("Failed to write Sailr service cache: {}", error))?;
+            .map_err(|error| format!("Failed to write Sailr service cache: {}", error))?;
     }
     Ok(())
 }
@@ -1227,11 +1225,7 @@ fn sailr_build_cache_dir(configured_cache_dir: &str) -> PathBuf {
     }
 }
 
-fn write_scope_dump(
-    cache_dir: &Path,
-    service_name: &str,
-    files: &[PathBuf],
-) -> Result<(), String> {
+fn write_scope_dump(cache_dir: &Path, service_name: &str, files: &[PathBuf]) -> Result<(), String> {
     let scope_dir = cache_dir.join("scopes");
     fs::create_dir_all(&scope_dir)
         .map_err(|error| format!("Failed to create Sailr build scope directory: {}", error))?;
@@ -1246,7 +1240,11 @@ fn write_scope_dump(
 
 pub(crate) fn write_scope_dumps(plan: &SailrBuildPlan) -> Result<(), String> {
     for service_plan in &plan.services {
-        write_scope_dump(&plan.cache_dir, &service_plan.service.name, &service_plan.matched_input_files)?;
+        write_scope_dump(
+            &plan.cache_dir,
+            &service_plan.service.name,
+            &service_plan.matched_input_files,
+        )?;
     }
     Ok(())
 }
