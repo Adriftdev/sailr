@@ -13,6 +13,245 @@ const SCHEMA_V03: &str = "0.3.0";
 const SCHEMA_V04: &str = "0.4.0";
 const SCHEMA_V05: &str = "0.5.0";
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+pub enum RegistryConfig {
+    Simple(String),
+    Detailed {
+        host: String,
+        namespace: Option<String>,
+    },
+}
+
+#[cfg(test)]
+mod registry_contract_tests {
+    use super::{RegistryConfig, ResolvedRegistry};
+
+    #[test]
+    fn detailed_registry_separates_host_and_namespace_validation() {
+        let valid = RegistryConfig::Detailed {
+            host: "ghcr.io".to_string(),
+            namespace: Some("acme/platform".to_string()),
+        }
+        .resolve()
+        .unwrap();
+        assert_eq!(valid.prefix(), "ghcr.io/acme/platform");
+
+        for host in [
+            "",
+            "https://ghcr.io",
+            "/ghcr.io",
+            "ghcr.io/",
+            "ghcr.io/acme",
+            "ghcr .io",
+        ] {
+            assert!(RegistryConfig::Detailed {
+                host: host.to_string(),
+                namespace: None,
+            }
+            .resolve()
+            .is_err());
+        }
+        for namespace in [
+            "",
+            "/acme",
+            "acme/",
+            "acme//platform",
+            "acme platform",
+            "https://acme",
+        ] {
+            assert!(RegistryConfig::Detailed {
+                host: "ghcr.io".to_string(),
+                namespace: Some(namespace.to_string()),
+            }
+            .resolve()
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn repository_and_tag_inputs_reject_obvious_malformed_values() {
+        let registry = ResolvedRegistry::parse("ghcr.io/acme").unwrap();
+        for service in ["", "api worker", "/api", "api/", "api//worker"] {
+            assert!(registry.repository_for(service).is_err());
+        }
+        for tag in ["", "release candidate", ":latest", "release/latest"] {
+            assert!(registry.tagged_ref("api", tag).is_err());
+        }
+        assert_eq!(
+            registry.tagged_ref("api", "1.2.0").unwrap(),
+            "ghcr.io/acme/api:1.2.0"
+        );
+    }
+}
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        RegistryConfig::Simple("docker.io".to_string())
+    }
+}
+
+impl RegistryConfig {
+    pub fn host(&self) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        Ok(self.resolve()?.host)
+    }
+
+    pub fn namespace(&self) -> Result<Option<String>, crate::workflow::error::RegistryConfigError> {
+        Ok(self.resolve()?.namespace)
+    }
+
+    pub fn prefix(&self) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        Ok(self.resolve()?.prefix())
+    }
+
+    pub fn resolve(&self) -> Result<ResolvedRegistry, crate::workflow::error::RegistryConfigError> {
+        match self {
+            Self::Simple(s) => ResolvedRegistry::parse(s),
+            Self::Detailed { host, namespace } => {
+                let parsed_host = host.trim();
+                if parsed_host.is_empty() {
+                    return Err(crate::workflow::error::RegistryConfigError::EmptyHost);
+                }
+                if parsed_host.contains("://")
+                    || parsed_host.starts_with('/')
+                    || parsed_host.ends_with('/')
+                    || parsed_host.contains('/')
+                    || parsed_host.contains(|c: char| c.is_whitespace())
+                {
+                    return Err(crate::workflow::error::RegistryConfigError::InvalidHost(
+                        parsed_host.to_string(),
+                    ));
+                }
+
+                if let Some(ns) = namespace {
+                    let parsed_ns = ns.trim();
+                    if parsed_ns.is_empty()
+                        || parsed_ns.contains("://")
+                        || parsed_ns.starts_with('/')
+                        || parsed_ns.ends_with('/')
+                        || parsed_ns.contains(|c: char| c.is_whitespace())
+                        || parsed_ns.contains("//")
+                    {
+                        return Err(
+                            crate::workflow::error::RegistryConfigError::InvalidNamespace(
+                                parsed_ns.to_string(),
+                            ),
+                        );
+                    }
+                    Ok(ResolvedRegistry {
+                        host: parsed_host.to_string(),
+                        namespace: Some(parsed_ns.to_string()),
+                    })
+                } else {
+                    Ok(ResolvedRegistry {
+                        host: parsed_host.to_string(),
+                        namespace: None,
+                    })
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRegistry {
+    pub host: String,
+    pub namespace: Option<String>,
+}
+
+impl ResolvedRegistry {
+    pub fn parse(s: &str) -> Result<Self, crate::workflow::error::RegistryConfigError> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(crate::workflow::error::RegistryConfigError::EmptyHost);
+        }
+        if s.contains("://")
+            || s.starts_with('/')
+            || s.ends_with('/')
+            || s.contains(|c: char| c.is_whitespace())
+            || s.contains("//")
+        {
+            return Err(crate::workflow::error::RegistryConfigError::InvalidHost(
+                s.to_string(),
+            ));
+        }
+
+        let parts: Vec<&str> = s.splitn(2, '/').collect();
+        let host = parts[0].to_string();
+        if host.is_empty() {
+            return Err(crate::workflow::error::RegistryConfigError::InvalidHost(
+                s.to_string(),
+            ));
+        }
+
+        let namespace = if parts.len() > 1 {
+            let ns = parts[1].to_string();
+            if ns.is_empty()
+                || ns.contains("://")
+                || ns.starts_with('/')
+                || ns.ends_with('/')
+                || ns.contains("//")
+                || ns.chars().any(char::is_whitespace)
+            {
+                return Err(
+                    crate::workflow::error::RegistryConfigError::InvalidNamespace(s.to_string()),
+                );
+            }
+            Some(ns)
+        } else {
+            None
+        };
+
+        Ok(Self { host, namespace })
+    }
+
+    pub fn prefix(&self) -> String {
+        match &self.namespace {
+            Some(ns) => format!("{}/{}", self.host, ns),
+            None => self.host.clone(),
+        }
+    }
+
+    pub fn repository_for(
+        &self,
+        service: &str,
+    ) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        crate::oci::validate_repository_component(service).map_err(|_| {
+            crate::workflow::error::RegistryConfigError::InvalidService(service.to_string())
+        })?;
+        match &self.namespace {
+            Some(ns) => Ok(format!("{}/{}", ns, service)),
+            None => Ok(service.to_string()),
+        }
+    }
+
+    pub fn tagged_ref(
+        &self,
+        service: &str,
+        tag: &str,
+    ) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        crate::oci::validate_tag(tag).map_err(|_| {
+            crate::workflow::error::RegistryConfigError::InvalidTag(tag.to_string())
+        })?;
+        let repo = self.repository_for(service)?;
+        Ok(format!("{}/{}:{}", self.host, repo, tag))
+    }
+
+    pub fn digest_ref(
+        &self,
+        service: &str,
+        digest: &str,
+    ) -> Result<String, crate::workflow::error::RegistryConfigError> {
+        if crate::oci::validate_sha256_digest(digest).is_err() {
+            return Err(crate::workflow::error::RegistryConfigError::InvalidDigest(
+                digest.to_string(),
+            ));
+        }
+        let repo = self.repository_for(service)?;
+        Ok(format!("{}/{}@{}", self.host, repo, digest))
+    }
+}
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Environment {
     pub schema_version: String,
@@ -22,8 +261,9 @@ pub struct Environment {
     pub services: Vec<Service>,
     pub domain: String,
     pub default_replicas: u8,
-    pub registry: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub registry: RegistryConfig,
+
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<BuildPolicy>,
@@ -43,7 +283,7 @@ impl Environment {
             services: Vec::new(),
             domain: "localhost".to_string(),
             default_replicas: 1,
-            registry: "docker.io".to_string(),
+            registry: RegistryConfig::default(),
             platform: None,
             build: None,
             environment_variables: Some(Vec::new()),
@@ -496,17 +736,21 @@ impl Environment {
         Ok(())
     }
 
-    pub fn get_variables(&self, service: &Service) -> Vec<(String, String)> {
+    pub fn get_variables(
+        &self,
+        service: &Service,
+    ) -> Result<Vec<(String, String)>, crate::workflow::error::RegistryConfigError> {
         let mut variables = vec![
             ("name".to_string(), self.name.clone()),
             ("log_level".to_string(), self.log_level.clone()),
+            ("replicas".to_string(), self.default_replicas.to_string()),
+            ("registry".to_string(), self.registry.prefix()?),
             ("domain".to_string(), self.domain.clone()),
             ("deployment_date".to_string(), get_current_timestamp()),
             (
                 "default_replicas".to_string(),
                 self.default_replicas.to_string(),
             ),
-            ("registry".to_string(), self.registry.clone()),
             (
                 "platform".to_string(),
                 self.platform.clone().unwrap_or_default(),
@@ -539,7 +783,7 @@ impl Environment {
             })
         }
 
-        variables
+        Ok(variables)
     }
 
     fn upgrade_builds_to_v05(&mut self) {
@@ -1291,7 +1535,7 @@ value = "enabled"
         assert_eq!(env.name, "child");
         assert_eq!(env.domain, "child.example.com");
         assert_eq!(env.default_replicas, 3);
-        assert_eq!(env.registry, "docker.io/base");
+        assert_eq!(env.registry.prefix().unwrap(), "docker.io/base");
         assert_eq!(env.platform.as_deref(), Some("linux/amd64"));
         assert_eq!(env.build.as_ref().unwrap().max_parallelism, Some(2));
         assert_eq!(env.build.as_ref().unwrap().fail_fast, Some(false));
@@ -1341,7 +1585,7 @@ domain = "prod.example.com"
 
         assert_eq!(env.name, "prod");
         assert_eq!(env.domain, "prod.example.com");
-        assert_eq!(env.registry, "docker.io/staging");
+        assert_eq!(env.registry.prefix().unwrap(), "docker.io/staging");
     }
 
     #[test]

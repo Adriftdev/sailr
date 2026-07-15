@@ -3,7 +3,7 @@ name = "staging"
 log_level = "INFO"
 domain = "staging.example.local"
 default_replicas = 1
-registry = "docker.io"
+registry = "ttl.sh"
 
 [[service]]
 name = "hello-sailr"
@@ -14,3 +14,7 @@ path = "hello-sailr"
 name = "ci-build-hello"
 version = "ci"
 path = "examples/ci-build/hello"
+
+[service.build]
+path = "examples/ci-build/hello"
+include = ["Dockerfile", "index.html"]

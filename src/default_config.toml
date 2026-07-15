@@ -45,3 +45,29 @@ namespace = "default"
 approval = "external"
 apply = true
 report = "both"
+
+[workflow.ci-build-push-plan]
+environment = "staging"
+mode = "build"
+interactive = false
+build = "plan"
+push = "plan"
+generate = "disabled"
+deploy = "disabled"
+approval = "none"
+apply = false
+report = "both"
+
+[workflow.ci-build-push]
+environment = "staging"
+mode = "build"
+interactive = false
+apply = true
+approval = "external"
+build = "run"
+push = "run"
+generate = "disabled"
+deploy = "disabled"
+approval = "external"
+apply = true
+report = "both"

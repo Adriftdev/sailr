@@ -1,7 +1,7 @@
 use crate::builder::SailrBuildPlan;
 use crate::workflow::profile::NormalizedWorkflowProfile;
 use crate::workflow::runner::RunnerContext;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct WorkflowPlan {
@@ -10,7 +10,40 @@ pub struct WorkflowPlan {
     pub tasks: Vec<WorkflowTaskPlan>,
     pub edges: Vec<WorkflowEdge>,
     pub build_plan: Option<SailrBuildPlan>,
+    pub image_push_plan: Option<crate::workflow::image::ImagePushPlanReport>,
+    pub finalizers: Vec<WorkflowFinalizerPlan>,
     pub effects: WorkflowEffects,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowFinalizerPhase {
+    BeforeReport,
+    ReportSink,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowFinalizerKind {
+    WriteBuildCache,
+    WriteWorkflowReport,
+}
+
+impl WorkflowFinalizerKind {
+    pub fn phase(self) -> WorkflowFinalizerPhase {
+        match self {
+            WorkflowFinalizerKind::WriteBuildCache => WorkflowFinalizerPhase::BeforeReport,
+            WorkflowFinalizerKind::WriteWorkflowReport => WorkflowFinalizerPhase::ReportSink,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkflowFinalizerPlan {
+    pub id: String,
+    pub label: String,
+    pub kind: WorkflowFinalizerKind,
+    pub effects: WorkflowEffects,
+    pub description: String,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +61,9 @@ pub enum WorkflowTaskKind {
     ValidateConfig,
     BuildPlan,
     ServiceBuild,
+    PushPlan,
+    ServicePush,
+    ImageReport,
     Generate,
     DeploymentPlan,
     Deploy,
@@ -41,22 +77,43 @@ pub struct WorkflowEdge {
     pub to: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkflowEffects {
     pub mutates_filesystem: bool,
     pub mutates_docker: bool,
     pub mutates_registry: bool,
+    pub mutates_git: bool,
     pub mutates_cluster: bool,
     pub prompts_user: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+impl WorkflowEffects {
+    pub fn merge(&mut self, other: &WorkflowEffects) {
+        self.mutates_filesystem |= other.mutates_filesystem;
+        self.mutates_docker |= other.mutates_docker;
+        self.mutates_registry |= other.mutates_registry;
+        self.mutates_git |= other.mutates_git;
+        self.mutates_cluster |= other.mutates_cluster;
+        self.prompts_user |= other.prompts_user;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeliveryTargetKind {
+    RenderOnly,
+    #[serde(rename = "gitops")]
+    GitOps,
+    KubernetesDirect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeploymentPlanMode {
     Static,
     LiveDiff,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowDeploymentPlan {
     pub environment: String,
     pub context: String,
@@ -66,7 +123,7 @@ pub struct WorkflowDeploymentPlan {
     pub summary: DeploymentPlanSummary,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeploymentResourcePlan {
     pub kind: String,
     pub name: String,
@@ -75,7 +132,7 @@ pub struct DeploymentResourcePlan {
     pub action: DeploymentPlanAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeploymentPlanAction {
     WouldApply,
@@ -95,7 +152,7 @@ impl std::fmt::Display for DeploymentPlanAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeploymentPlanSummary {
     pub total_resources: usize,
     pub would_apply: usize,

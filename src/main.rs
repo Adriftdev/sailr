@@ -824,6 +824,13 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
         return Ok(());
     }
 
+    if let WorkflowCommands::Inspect(args) = cmd {
+        sailr::workflow::runner::WorkflowRunner::inspect(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
     let config = WorkflowConfig::load()?;
 
     match cmd {
@@ -877,7 +884,8 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
         WorkflowCommands::Run(_)
         | WorkflowCommands::Plan(_)
         | WorkflowCommands::Graph(_)
-        | WorkflowCommands::Explain(_) => unreachable!(),
+        | WorkflowCommands::Explain(_)
+        | WorkflowCommands::Inspect(_) => unreachable!(),
     }
 
     Ok(())

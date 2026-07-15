@@ -1,0 +1,79 @@
+{
+  "schema_version": "sailr.workflow-report/v1",
+  "report_type": "workflow-execution",
+  "profile": "ci-build-push",
+  "mode": "build",
+  "runner": {
+    "kind": "git-hub-actions",
+    "ci": true,
+    "interactive": false,
+    "ci_environment": {
+      "provider": "github",
+      "run_id": "run-17"
+    }
+  },
+  "environment": "staging",
+  "success": true,
+  "effects": {
+    "mutates_filesystem": true,
+    "mutates_docker": false,
+    "mutates_registry": false,
+    "mutates_git": false,
+    "mutates_cluster": false,
+    "prompts_user": false
+  },
+  "tasks": {
+    "completed": 3,
+    "failed": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "cached": 0,
+    "rolled_back": 0,
+    "rollback_failed": 0,
+    "items": [
+      {
+        "name": "workflow:validate-config",
+        "status": "completed"
+      },
+      {
+        "name": "workflow:build-plan",
+        "status": "completed"
+      },
+      {
+        "name": "workflow:push-plan",
+        "status": "completed"
+      }
+    ]
+  },
+  "plans": {
+    "image_push": {
+      "environment": "staging",
+      "mutates_registry": false,
+      "items": [
+        {
+          "service": "api",
+          "registry": "ghcr.io",
+          "repository": "org/repo/api",
+          "target_image_ref": "ghcr.io/org/repo/api:1bf43f1",
+          "local_image_ref": "ghcr.io/org/repo/api:1.2.0",
+          "tag": "1bf43f1",
+          "provenance": {
+            "build_fingerprint": "1bf43f1a943982aa",
+            "source_revision": "0123456789abcdef"
+          },
+          "action": "would_push"
+        }
+      ]
+    }
+  },
+  "artifacts": {
+    "published_images": []
+  },
+  "finalizers": {
+    "completed": 0,
+    "failed": 0,
+    "skipped": 0,
+    "items": [],
+    "planned": []
+  }
+}

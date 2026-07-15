@@ -3,10 +3,19 @@ use std::path::PathBuf;
 
 use super::error::WorkflowError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CiProvider {
     GitHub,
     CircleCi,
     Travis,
+    Generic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CiEnvironment {
+    pub provider: CiProvider,
+    pub run_id: Option<String>,
 }
 
 impl std::str::FromStr for CiProvider {
@@ -17,6 +26,7 @@ impl std::str::FromStr for CiProvider {
             "github" => Ok(CiProvider::GitHub),
             "circleci" => Ok(CiProvider::CircleCi),
             "travis" => Ok(CiProvider::Travis),
+            "generic" => Ok(CiProvider::Generic),
             _ => Err(WorkflowError::ConfigError(format!(
                 "Unsupported CI provider: {}",
                 s
@@ -33,6 +43,7 @@ impl CiTemplateGenerator {
             CiProvider::GitHub => Self::generate_github(profile_name),
             CiProvider::CircleCi => Self::generate_circleci(profile_name),
             CiProvider::Travis => Self::generate_travis(profile_name),
+            CiProvider::Generic => String::new(),
         }
     }
 
@@ -43,6 +54,7 @@ impl CiTemplateGenerator {
             }
             CiProvider::CircleCi => PathBuf::from(".circleci/config.yml"),
             CiProvider::Travis => PathBuf::from(".travis.yml"),
+            CiProvider::Generic => PathBuf::from("sailr-workflow.sh"),
         }
     }
 
@@ -157,6 +169,10 @@ mod tests {
         assert!(matches!(
             CiProvider::from_str("Travis").unwrap(),
             CiProvider::Travis
+        ));
+        assert!(matches!(
+            CiProvider::from_str("generic").unwrap(),
+            CiProvider::Generic
         ));
         assert!(CiProvider::from_str("jenkins").is_err());
     }

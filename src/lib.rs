@@ -20,6 +20,7 @@ pub mod filesystem;
 pub mod generate;
 pub mod infra;
 pub mod interactive;
+pub mod oci;
 pub mod orchestrator;
 pub mod plan;
 pub mod provider;
@@ -86,7 +87,9 @@ pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) -> anyho
     let mut generator = Generator::new();
 
     for service in services {
-        let variables = &env.get_variables(service);
+        let variables = &env
+            .get_variables(service)
+            .map_err(|e| anyhow::anyhow!("Registry config error: {}", e))?;
         for template in &templates {
             if template.name != service.name && template.name != service.get_path() {
                 continue;

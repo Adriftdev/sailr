@@ -215,10 +215,10 @@ impl TemplateManager {
                     .read_file(config_file, Some(&"./k8s/templates".to_string()))
                     .unwrap();
 
-                acc.0.push_str(&format!("\n  {:?}: |", &config));
+                acc.0.push_str(&format!("\n  {:?}: |", config));
 
                 for line in config_content.lines() {
-                    acc.0.push_str(&format!("\n    {}", &line))
+                    acc.0.push_str(&format!("\n    {}", line))
                 }
 
                 acc.1.push(config);
