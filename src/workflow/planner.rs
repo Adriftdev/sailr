@@ -987,7 +987,7 @@ mod tests {
 
     fn dummy_options(plan: bool) -> BuildOptions {
         BuildOptions {
-            cache_dir: ".sailr".to_string(),
+            cache_dir: ".sailr/cache/build".to_string(),
             force: false,
             only: vec![],
             ignore: vec![],
@@ -1550,7 +1550,7 @@ mod tests_addendum {
         let normalized = profile.normalize(false);
         let runner_ctx = RunnerContext::detect(true);
         let options = crate::builder::BuildOptions {
-            cache_dir: ".sailr/cache".to_string(),
+            cache_dir: ".sailr/cache/build".to_string(),
             force: false,
             only: vec![],
             ignore: vec![],
@@ -1615,7 +1615,7 @@ mod tests_addendum {
             let normalized = profile.normalize(false);
             let runner_ctx = RunnerContext::detect(true);
             let options = crate::builder::BuildOptions {
-                cache_dir: ".sailr/cache".to_string(),
+                cache_dir: ".sailr/cache/build".to_string(),
                 force: false,
                 only: vec![],
                 ignore: vec![],

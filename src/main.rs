@@ -351,7 +351,7 @@ async fn main() -> Result<(), CliError> {
             };
 
             let mut builder = Builder::new(
-                ".roomservice".to_string(),
+                ".sailr/cache/build".to_string(),
                 arg.force.unwrap_or(false),
                 split_matches(arg.only),
                 split_matches(arg.ignore),
@@ -392,7 +392,7 @@ async fn main() -> Result<(), CliError> {
 
             if !arg.skip_build {
                 let mut builder = Builder::new(
-                    ".roomservice".to_string(),
+                    ".sailr/cache/build".to_string(),
                     arg.force,
                     split_matches(arg.only.clone()),
                     split_matches(arg.ignore),

@@ -1118,7 +1118,7 @@ impl WorkflowRunner {
 
         let env_arc = std::sync::Arc::new(env);
         let build_options = crate::builder::BuildOptions {
-            cache_dir: ".sailr/cache".to_string(),
+            cache_dir: ".sailr/cache/build".to_string(),
             force: false,
             only: vec![],
             ignore: vec![],
