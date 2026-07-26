@@ -112,7 +112,7 @@ impl BuildBackend for RoomserviceBuildBackend {
         );
 
         for service in selected_services {
-            let room = build_room(env, service, &buildable_names)?;
+            let room = build_room(env, service, &buildable_names, &self.options.cache_dir)?;
             roomservice.add_room(room).map_err(|e| e.to_string())?;
         }
 
@@ -452,6 +452,9 @@ fn add_runkernel_tasks_inner(
     plan: &SailrBuildPlan,
     workflow_tasks: Option<&[crate::workflow::plan::WorkflowTaskPlan]>,
 ) -> Result<(), String> {
+    // Standalone builds (including `sailr go`) own image publication. Workflow
+    // runs model publication as separate, reportable `service:*:push` tasks.
+    let execute_push = workflow_tasks.is_none();
     let dirty_services = plan
         .services
         .iter()
@@ -522,7 +525,7 @@ fn add_runkernel_tasks_inner(
                 let service_name = service_name.clone();
                 let cwd = cwd.clone();
                 let phases = phases.clone();
-                async move { execute_service_build(service_name, cwd, phases).await }
+                async move { execute_service_build(service_name, cwd, phases, execute_push).await }
             });
         }
 
@@ -568,13 +571,15 @@ async fn execute_service_build(
     service_name: String,
     cwd: PathBuf,
     phases: ServicePhases,
+    execute_push: bool,
 ) -> anyhow::Result<()> {
     let cwd = cwd.to_string_lossy().to_string();
     let mut started = false;
     let mut first_error = None;
 
     for (phase_name, commands) in phases.printable() {
-        if commands.is_empty() || phase_name == "finally" || phase_name == "push" {
+        if commands.is_empty() || phase_name == "finally" || (phase_name == "push" && !execute_push)
+        {
             continue;
         }
         started = true;
@@ -904,6 +909,7 @@ fn build_room(
     env: &Environment,
     service: &Service,
     buildable_names: &BTreeSet<String>,
+    cache_dir: &str,
 ) -> Result<RoomBuilder, String> {
     let build_cfg = service
         .build
@@ -921,7 +927,7 @@ fn build_room(
     Ok(RoomBuilder::new(
         service.name.clone(),
         build_cfg.path.clone(),
-        ".roomservice".to_string(),
+        cache_dir.to_string(),
         build_cfg
             .include
             .clone()
@@ -1218,11 +1224,7 @@ fn service_cache_path(cache_dir: &Path, service_name: &str) -> PathBuf {
 }
 
 fn sailr_build_cache_dir(configured_cache_dir: &str) -> PathBuf {
-    if configured_cache_dir == ".roomservice" {
-        PathBuf::from(".sailr").join("cache").join("build")
-    } else {
-        PathBuf::from(configured_cache_dir)
-    }
+    PathBuf::from(configured_cache_dir)
 }
 
 fn write_scope_dump(cache_dir: &Path, service_name: &str, files: &[PathBuf]) -> Result<(), String> {
@@ -1571,7 +1573,7 @@ mod tests {
     #[test]
     fn backend_selection_defaults_to_roomservice() {
         let builder = Builder::new(
-            ".roomservice".to_string(),
+            ".sailr/cache/build".to_string(),
             false,
             Vec::new(),
             Vec::new(),
@@ -1588,7 +1590,7 @@ mod tests {
     #[test]
     fn backend_selection_uses_config_engine() {
         let builder = Builder::new(
-            ".roomservice".to_string(),
+            ".sailr/cache/build".to_string(),
             false,
             Vec::new(),
             Vec::new(),
@@ -1608,7 +1610,7 @@ mod tests {
     #[test]
     fn backend_selection_cli_override_beats_config() {
         let builder = Builder::new(
-            ".roomservice".to_string(),
+            ".sailr/cache/build".to_string(),
             false,
             Vec::new(),
             Vec::new(),
@@ -1791,6 +1793,89 @@ mod tests {
         let result = builder.build(&env).await.expect("dry run should succeed");
         assert!(!result.executed);
         assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn runkernel_standalone_build_executes_push_command() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let service_path = temp.path().join("api");
+        write_project(&service_path);
+        let build_marker = temp.path().join("built.txt");
+        let push_marker = temp.path().join("pushed.txt");
+
+        let mut service = service(
+            "api",
+            &service_path,
+            format!("printf built > {}", build_marker.display()),
+        );
+        service.build.as_mut().unwrap().push_command =
+            Some(format!("printf pushed > {}", push_marker.display()));
+
+        let mut env = Environment::new("dev");
+        env.services = vec![service];
+
+        let mut builder = Builder::new(
+            temp.path()
+                .join(".sailr/cache/build")
+                .to_string_lossy()
+                .to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            false,
+            false,
+            None,
+            Some(BuildEngine::Runkernel),
+        );
+        builder.build(&env).await.expect("build should succeed");
+
+        assert_eq!(fs::read_to_string(build_marker).unwrap(), "built");
+        assert_eq!(fs::read_to_string(push_marker).unwrap(), "pushed");
+    }
+
+    #[tokio::test]
+    async fn runkernel_workflow_build_leaves_push_to_workflow_task() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let service_path = temp.path().join("api");
+        write_project(&service_path);
+        let build_marker = temp.path().join("workflow-built.txt");
+        let push_marker = temp.path().join("workflow-pushed.txt");
+
+        let mut service = service(
+            "api",
+            &service_path,
+            format!("printf built > {}", build_marker.display()),
+        );
+        service.build.as_mut().unwrap().push_command =
+            Some(format!("printf pushed > {}", push_marker.display()));
+
+        let mut env = Environment::new("dev");
+        env.services = vec![service];
+        let plan = create_sailr_build_plan(&env, &options(temp.path().join(".sailr/cache/build")))
+            .expect("build plan should be created");
+        let task_id = crate::workflow::task_id::service_build("api");
+        let workflow_tasks = vec![crate::workflow::plan::WorkflowTaskPlan {
+            id: task_id,
+            label: "Build api".to_string(),
+            kind: crate::workflow::plan::WorkflowTaskKind::ServiceBuild,
+            dependencies: Vec::new(),
+            effects: crate::workflow::plan::WorkflowEffects {
+                mutates_docker: true,
+                ..Default::default()
+            },
+            description: "Builds the local Docker image for api.".to_string(),
+        }];
+        let mut pipeline = Pipeline::new("workflow build boundary");
+        add_runkernel_tasks_from_workflow_plan(&mut pipeline, &plan, &workflow_tasks)
+            .expect("workflow build tasks should be added");
+
+        let result = pipeline.run().await.expect("workflow build should run");
+
+        assert!(result.summary.success);
+        assert_eq!(fs::read_to_string(build_marker).unwrap(), "built");
+        assert!(!push_marker.exists());
     }
 
     #[tokio::test]
