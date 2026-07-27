@@ -25,6 +25,7 @@ const sidebars = {
 			label: 'Migration',
 			items: [
 				'migration/roomservice-to-runkernel',
+				'workflow-audit-gate',
 			],
 		},
 		{

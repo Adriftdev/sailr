@@ -182,6 +182,7 @@ pub fn verify_signature(
     signature_base64: &str,
 ) -> anyhow::Result<()> {
     let public_key = decode_trusted_public_key(public_key_base64)?;
+
     let signature = base64::engine::general_purpose::STANDARD
         .decode(signature_base64.trim())
         .map_err(|_| anyhow::anyhow!("DEPLOY_APPROVAL_SIG is not valid base64"))?;
@@ -242,6 +243,7 @@ pub fn build_verification_task(
                 crate::LOGGER.info(&format!(
                     "[GATE] verified immutable deployment plan {}",
                     bundle.plan_hash
+
                 ));
                 Ok(())
             }

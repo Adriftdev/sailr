@@ -274,6 +274,7 @@ impl WorkflowPlanner {
                         phase: Some(translated_task.phase.clone()),
                         dependencies,
                         effects: translated_task.effects.clone(),
+
                         description: format!(
                             "Runs deterministic build phase '{}'.",
                             translated_task.phase
@@ -966,6 +967,9 @@ impl WorkflowPlanner {
                 let only = only.clone();
                 let ignore = ignore.clone();
                 let env_clone = env_clone.clone();
+                let profile_name = profile_name.clone();
+                let deploy_context = deploy_context.clone();
+                let namespace = namespace.clone();
                 async move {
                     crate::LOGGER.info("Generating Kubernetes manifests...");
 
@@ -977,6 +981,19 @@ impl WorkflowPlanner {
 
                     crate::generate(&name, &env_clone, services)
                         .map_err(|e| anyhow::anyhow!("Generate failed: {}", e))?;
+
+                    if produce_audit_artifact {
+                        let artifact = crate::workflow::gate::build_and_write_artifact(
+                            &profile_name,
+                            &name,
+                            &deploy_context,
+                            &namespace,
+                        )?;
+                        ctx.set_output(
+                            crate::workflow::gate::MANIFEST_HASH_OUTPUT,
+                            artifact.plan_hash,
+                        )?;
+                    }
 
                     Ok(())
                 }

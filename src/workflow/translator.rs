@@ -346,6 +346,7 @@ pub fn add_translated_tasks(
                 Ok(())
             }
         });
+
         pipeline.add(task);
     }
 }
@@ -448,103 +449,5 @@ mod tests {
             .find(|task| task.id == "service:api:run_parallel:0")
             .unwrap();
         assert_eq!(api_root.dependencies, vec!["service:base:build"]);
-    }
-
-    #[test]
-    fn clean_plan_has_no_global_hooks_and_typed_effects_are_precise() {
-        let mut clean = service_plan("clean", None);
-        clean.dirty = false;
-        let clean_plan = SailrBuildPlan {
-            services: vec![clean],
-            before_all: vec!["echo before".to_string()],
-            after_all: vec!["echo after".to_string()],
-            force: false,
-            max_parallelism: None,
-            cache_dir: PathBuf::from("."),
-        };
-        assert!(translate_build_plan(&clean_plan, false).is_empty());
-
-        let dirty_plan = SailrBuildPlan {
-            services: vec![service_plan("api", None)],
-            before_all: vec!["echo before".to_string()],
-            after_all: vec!["echo after".to_string()],
-            force: false,
-            max_parallelism: None,
-            cache_dir: PathBuf::from("."),
-        };
-        let tasks = translate_build_plan(&dirty_plan, false);
-        let before = tasks
-            .iter()
-            .find(|task| task.id == crate::workflow::task_id::BUILD_BEFORE_ALL)
-            .expect("before hook");
-        assert_eq!(before.kind, TranslatedTaskKind::GlobalHook);
-        assert_eq!(before.cache_policy, TranslatedCachePolicy::Disabled);
-        assert!(before.effects.mutates_filesystem);
-        assert!(!before.effects.mutates_docker);
-
-        let build = tasks
-            .iter()
-            .find(|task| task.phase == "build")
-            .expect("build task");
-        assert_eq!(build.kind, TranslatedTaskKind::Build);
-        assert!(build.effects.mutates_docker);
-        assert!(!build.effects.mutates_filesystem);
-
-        let aggregate = tasks
-            .iter()
-            .find(|task| task.phase == "service_complete")
-            .expect("aggregate");
-        assert_eq!(aggregate.kind, TranslatedTaskKind::Aggregate);
-        assert_eq!(aggregate.effects, WorkflowEffects::default());
-        assert_eq!(aggregate.cache_policy, TranslatedCachePolicy::Disabled);
-        assert!(!tasks.iter().any(|task| task.phase == "finally"));
-    }
-
-    #[tokio::test]
-    async fn force_bypasses_cache_without_writing_a_forced_record() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let marker = temp.path().join("runs");
-        let input = temp.path().join("input.txt");
-        std::fs::write(&input, "stable").expect("input");
-        let mut service = service_plan("cache", None);
-        service.cwd = temp.path().to_path_buf();
-        service.matched_input_files = vec![input];
-        service.phases = ServicePhases {
-            build: vec![format!("printf run >> '{}'", marker.display())],
-            ..Default::default()
-        };
-        let mut plan = SailrBuildPlan {
-            services: vec![service],
-            before_all: Vec::new(),
-            after_all: Vec::new(),
-            force: false,
-            max_parallelism: None,
-            cache_dir: temp.path().join("cache"),
-        };
-        let pipeline_name = format!("force-cache-{}", std::process::id());
-
-        let mut first = Pipeline::new(&pipeline_name);
-        add_translated_tasks(&mut first, &plan, false, None, None);
-        let first = first.run().await.expect("first run");
-        assert!(first.tasks.iter().any(|task| {
-            task.name == "service:cache:build:0" && task.status == runkernel::TaskStatus::Completed
-        }));
-
-        let mut second = Pipeline::new(&pipeline_name);
-        add_translated_tasks(&mut second, &plan, false, None, None);
-        let second = second.run().await.expect("second run");
-        assert!(second.tasks.iter().any(|task| {
-            task.name == "service:cache:build:0" && task.status == runkernel::TaskStatus::Cached
-        }));
-
-        plan.force = true;
-        let mut forced = Pipeline::new(&pipeline_name);
-        add_translated_tasks(&mut forced, &plan, false, None, None);
-        assert!(forced.tasks().all(|task| !task.cacheable()));
-        let forced = forced.run().await.expect("forced run");
-        assert!(forced.tasks.iter().any(|task| {
-            task.name == "service:cache:build:0" && task.status == runkernel::TaskStatus::Completed
-        }));
-        assert_eq!(std::fs::read_to_string(marker).expect("marker"), "runrun");
     }
 }

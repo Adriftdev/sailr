@@ -14,7 +14,10 @@ background reconciler.
 [workflow.production]
 environment = "production"
 mode = "deploy"
+<<<<<<< HEAD
 build = "disabled"
+=======
+>>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
 generate = "run"
 deploy = "run"
 deploy_context = "production-cluster"
@@ -22,6 +25,7 @@ namespace = "app"
 approval = "signature"
 apply = true
 report = "both"
+<<<<<<< HEAD
 
 [workflow.production.signature]
 trusted_public_key = "<base64-encoded raw 32-byte Ed25519 public key>"
@@ -39,6 +43,11 @@ required_approval = "signature"
 Policy is explicit: environment names have no security meaning. The other
 policy levels are `none` and `external`. The runner still requires the normal
 `--apply` acknowledgement:
+=======
+```
+
+The runner still requires the normal `--apply` acknowledgement:
+>>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
 
 ```bash
 sailr workflow run production --non-interactive --apply
@@ -50,6 +59,7 @@ The first unsigned run generates manifests, writes
 
 ## Signing contract
 
+<<<<<<< HEAD
 The immutable bundle task reads all generated YAML once. It sorts paths,
 preserves document order within each file, validates Kubernetes type/name
 metadata and effective namespaces, rejects empty bundles and duplicate resource
@@ -65,6 +75,14 @@ contains:
 - target Kubernetes context and namespace;
 - ordered `{relative_path, document_index, sha256}` records, where each digest
   covers the canonical JSON bytes that Sailr will apply.
+=======
+The audit payload contains:
+
+- schema identifier `sailr.audit/v1`;
+- workflow profile and environment;
+- Kubernetes context and namespace;
+- sorted manifest paths and SHA-256 digests.
+>>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
 
 Sailr computes the SHA-256 digest of the canonical JSON payload. Sign the UTF-8 bytes of:
 
@@ -72,14 +90,22 @@ Sailr computes the SHA-256 digest of the canonical JSON payload. Sign the UTF-8 
 sailr-deployment-plan-v1:<64-character-plan-hash>
 ```
 
+<<<<<<< HEAD
 Provide only the base64-encoded raw 64-byte Ed25519 signature when retrying:
 
 ```bash
+=======
+Provide the base64-encoded raw Ed25519 values when retrying:
+
+```bash
+export DEPLOY_APPROVAL_PUBKEY="<base64 32-byte public key>"
+>>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
 export DEPLOY_APPROVAL_SIG="<base64 64-byte signature>"
 sailr workflow run production --non-interactive --apply
 ```
 
 The private key remains outside Sailr. On retry, deterministic build and generation tasks may
+<<<<<<< HEAD
 return `[CACHE]`; the bundle and verification gate are never cached. Sailr constructs a fresh
 bundle on every run, so changing a manifest, profile, environment, context, or namespace changes
 the plan hash and invalidates the signature. A missing signature is reported as
@@ -106,3 +132,18 @@ the pipeline and cleanup both succeed; report persistence runs last.
 
 Rollback covers Kubernetes objects managed by the generated manifests. Pre- and post-deployment
 hooks may affect external systems and are observable but not automatically reversible.
+=======
+return `[CACHE]`; the verification gate itself is never cached. Sailr recomputes the artifact at
+the gate, so changing a manifest, context, or namespace invalidates the signature.
+
+## Rollback behavior
+
+Before applying a workflow deployment, Sailr snapshots every managed target object. A partial
+failure restores prior objects and deletes newly created objects in reverse order. A successfully
+completed deployment also retains this journal for runkernel reverse-order rollback if a later
+workflow task fails.
+
+Rollback covers Kubernetes objects managed by the generated manifests. Pre- and post-deployment
+hooks may affect external systems and are not automatically reversible. Rollback failures are
+included in the workflow result and cause the run to fail.
+>>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242

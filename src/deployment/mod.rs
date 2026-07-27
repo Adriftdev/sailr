@@ -92,6 +92,7 @@ impl KubernetesDeploymentBackend {
             .discovery
             .resolve_gvk(&gvk)
             .ok_or_else(|| format!("Unable to resolve {} during rollback", gvk.kind))?;
+
         let api = k8sm8::dynamic_api(
             resource,
             capabilities,
@@ -159,6 +160,7 @@ impl DeploymentBackend for KubernetesDeploymentBackend {
                 "Failed to serialize rollback snapshot for {kind} {name}: {error}"
             ))
         })?;
+
         sanitize_snapshot_for_apply(&mut value);
         api.patch(
             &name,
@@ -169,6 +171,7 @@ impl DeploymentBackend for KubernetesDeploymentBackend {
         .map_err(|error| {
             DeployError::ManifestApplicationFailed(format!("{kind} {name}: {error}"))
         })?;
+
         LOGGER.info(&format!("[ROLLBACK] restored {kind} {name}"));
         Ok(())
     }
@@ -186,6 +189,7 @@ impl DeploymentBackend for KubernetesDeploymentBackend {
                 )));
             }
         }
+
         LOGGER.info(&format!("[ROLLBACK] deleted newly created {kind} {name}"));
         Ok(())
     }

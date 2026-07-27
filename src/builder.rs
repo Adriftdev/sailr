@@ -157,6 +157,7 @@ impl BuildBackend for RunkernelBuildBackend {
         let policy = self.options.policy.clone().unwrap_or_default();
         let mut pipeline =
             Pipeline::new(RUNKERNEL_PIPELINE_NAME).failure_policy(FailurePolicy::FinishRunning);
+
         crate::workflow::translator::add_translated_tasks(
             &mut pipeline,
             &plan,
