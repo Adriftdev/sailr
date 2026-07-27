@@ -112,17 +112,36 @@ after_all = "echo finished build"
 
 ### `fail_fast` (boolean)
 *   **Optional**
-*   When enabled, the build backend stops scheduling remaining work after a build failure.
+*   Roomservice uses this policy where supported.
+*   Runkernel always stops scheduling new forward work after a failure and
+    allows already-running siblings to settle before Sailr finalizers.
 
 ### `max_parallelism` (integer)
 *   **Optional**
 *   Accepted by Sailr build policy.
 *   Roomservice uses this where supported.
-*   The runkernel backend currently accepts this setting but does not enforce it yet; Sailr emits a warning when `max_parallelism` is set with `engine = "runkernel"`.
+*   The runkernel translator enforces this limit across phase tasks with a shared concurrency semaphore.
 
 ### `before_all` and `after_all` (string or array of strings)
 *   **Optional**
 *   Commands that run before all selected dirty service builds and after all selected dirty service builds complete successfully.
+*   They are suppressed when no selected service is dirty and are never cached.
+
+## Deployment Policy (`[deployment_policy]`)
+
+The optional root environment policy declares the minimum approval required
+before a workflow may mutate a cluster:
+
+```toml
+[deployment_policy]
+required_approval = "signature"
+```
+
+Valid values are `none`, `external`, and `signature`. This is the only
+environment-level security selector; names such as `production` or `staging`
+have no implicit security behavior. A signature policy requires the workflow
+profile to use `approval = "signature"` with a configured trusted Ed25519
+public key. See the [deterministic deployment audit gate](../workflow-audit-gate.md).
 
 ## Services (`[[service]]`)
 
@@ -184,6 +203,18 @@ Sailr integrates a build system to build your service's container images. Roomse
 *   These commands run sequentially for this service.
 *   Example: `run_synchronous = "./scripts/prepare_data.sh"`
 
+#### `ignore_cache` (array of strings)
+*   **Optional**
+*   Excludes matching paths, relative to the service build path, from runkernel cache inputs.
+*   `ignoreCache` is accepted as a compatibility alias.
+*   Exclusions are resolved by Sailr before exact input paths are passed to runkernel.
+*   Example: `ignore_cache = ["dist/**", "*.log"]`
+
+`sailr build/go --force` disables both runkernel cache reads and writes for
+every executable translated service task. It does not delete or randomize
+existing cache state, so a later normal run can still use the last successful
+record.
+
 #### `before` (string or array of strings)
 *   **Optional**
 *   A shell command or list of shell commands to run *before* the main build steps (`run_parallel`, `run_synchronous`, Docker build) for this service. Executed within the `build` context directory.
@@ -211,6 +242,16 @@ For a single service, Sailr runs build hooks in this order:
 6.  `after` commands
 
 Inter-service ordering follows service build dependencies. Global `before_all` and `after_all` hooks are configured in the top-level `[build]` table.
+
+#### `finally` (string or array of strings)
+
+*   **Optional**
+*   Runs once after all already-running build siblings have settled, on both
+    success and failure.
+*   Dirty services are cleaned up in reverse dependency order, with stable
+    service-name ordering for independent services.
+*   Cleanup failures remain visible and fail the workflow. Build cache records
+    are written only after successful pipeline execution and cleanup.
 
 ## Environment Variables (`[[environment_variables]]`)
 

@@ -118,6 +118,7 @@ pub fn create_default_env_config(
     name: String,
     config_template: Option<String>,
     registry: Option<String>,
+    engine: Option<environment::BuildEngine>,
 ) {
     let mut vars = load_global_vars().unwrap();
 
@@ -143,7 +144,8 @@ pub fn create_default_env_config(
             .read_file(&config.1, Some(&"".to_string()))
             .unwrap();
 
-        let generated_config = replace_variables(content.clone(), vars);
+        let generated_config =
+            configure_build_engine(&replace_variables(content.clone(), vars), engine);
 
         file_manager
             .create_file(
@@ -160,7 +162,8 @@ pub fn create_default_env_config(
             .read_file(&config_template.clone(), Some(&"".to_string()))
             .unwrap();
 
-        let generated_config = replace_variables(content.clone(), vars);
+        let generated_config =
+            configure_build_engine(&replace_variables(content.clone(), vars), engine);
 
         file_manager
             .create_file(
@@ -177,7 +180,8 @@ pub fn create_default_env_config(
             "config.toml".to_string(),
             include_str!("default_config.toml").to_string(),
         );
-        let generated_config = replace_variables(default_env_config.1, vars);
+        let generated_config =
+            configure_build_engine(&replace_variables(default_env_config.1, vars), engine);
 
         file_manager
             .create_file(
@@ -190,6 +194,20 @@ pub fn create_default_env_config(
             )
             .unwrap();
     }
+}
+
+fn configure_build_engine(contents: &str, engine: Option<environment::BuildEngine>) -> String {
+    let Some(engine) = engine else {
+        return contents.to_string();
+    };
+    let mut document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .expect("generated environment config must be valid TOML");
+    document["build"]["engine"] = toml_edit::value(match engine {
+        environment::BuildEngine::Roomservice => "roomservice",
+        environment::BuildEngine::Runkernel => "runkernel",
+    });
+    document.to_string()
 }
 
 pub fn create_default_env_infra(

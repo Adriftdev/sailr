@@ -267,6 +267,8 @@ pub struct Environment {
     pub platform: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<BuildPolicy>,
+    #[serde(default, skip_serializing_if = "DeploymentPolicy::is_empty")]
+    pub deployment_policy: DeploymentPolicy,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
 }
 
@@ -286,6 +288,7 @@ impl Environment {
             registry: RegistryConfig::default(),
             platform: None,
             build: None,
+            deployment_policy: DeploymentPolicy::default(),
             environment_variables: Some(Vec::new()),
         }
     }
@@ -421,6 +424,7 @@ impl Environment {
             let mapped_build = ServiceBuildConfig {
                 path,
                 include: Some(vec![include]),
+                ignore_cache: None,
                 relies_on: None,
                 before_synchronous: before_synchronous.map(CommandSpec::Single),
                 before: None,
@@ -706,7 +710,10 @@ impl Environment {
         Ok(migrated)
     }
 
-    pub fn migrate_file_to_v05(name: &String) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn migrate_file_to_v05(
+        name: &String,
+        engine: Option<BuildEngine>,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let filemanager = filesystem::FileSystemManager::new(
             Path::new("./k8s/environments")
                 .join(name)
@@ -716,7 +723,15 @@ impl Environment {
         );
 
         let contents = filemanager.read_file(&"config.toml".to_string(), None)?;
-        let migrated = Self::migrate_contents_to_v05(&contents)?;
+        let mut migrated = Self::migrate_contents_to_v05(&contents)?;
+        if let Some(engine) = engine {
+            let mut document = migrated.parse::<toml_edit::DocumentMut>()?;
+            document["build"]["engine"] = toml_edit::value(match engine {
+                BuildEngine::Roomservice => "roomservice",
+                BuildEngine::Runkernel => "runkernel",
+            });
+            migrated = document.to_string();
+        }
         filemanager.create_file(&"config.toml".to_string(), &migrated)?;
         Ok(migrated)
     }
@@ -805,6 +820,26 @@ impl Environment {
                 build.push_command = build.after.take().map(command_spec_to_shell);
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequiredDeploymentApproval {
+    None,
+    External,
+    Signature,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq, Default)]
+pub struct DeploymentPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_approval: Option<RequiredDeploymentApproval>,
+}
+
+impl DeploymentPolicy {
+    fn is_empty(&self) -> bool {
+        self.required_approval.is_none()
     }
 }
 
@@ -992,6 +1027,7 @@ where
         Some(Value::String(path)) => Ok(Some(ServiceBuildConfig {
             path,
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1101,6 +1137,12 @@ pub struct ServiceBuildConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub include: Option<Vec<String>>,
+    #[serde(
+        default,
+        alias = "ignoreCache",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ignore_cache: Option<Vec<String>>,
     #[serde(default, alias = "depends_on", skip_serializing_if = "Option::is_none")]
     pub relies_on: Option<Vec<String>>,
     #[serde(
@@ -1312,6 +1354,7 @@ mod tests {
             Some(ServiceBuildConfig {
                 path: "./services/api".to_string(),
                 include: None,
+                ignore_cache: None,
                 relies_on: None,
                 before_synchronous: None,
                 before: None,
@@ -1323,6 +1366,25 @@ mod tests {
                 build_command: None,
                 push_command: None,
             })
+        );
+    }
+
+    #[test]
+    fn test_deserialize_explicit_deployment_policy() {
+        let content = r#"
+            schema_version = "0.5.0"
+            name = "arbitrary-name"
+            log_level = "info"
+            domain = "example.test"
+            default_replicas = 1
+
+            [deployment_policy]
+            required_approval = "signature"
+        "#;
+        let env: Environment = toml::from_str(content).expect("environment");
+        assert_eq!(
+            env.deployment_policy.required_approval,
+            Some(RequiredDeploymentApproval::Signature)
         );
     }
 

@@ -1,0 +1,31 @@
+[workflow.kind-signed]
+environment = "kind-signed"
+mode = "deploy"
+interactive = false
+build = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "kind-sailr"
+namespace = "default"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.kind-signed.signature]
+trusted_public_key = "__TRUSTED_PUBLIC_KEY__"
+
+[workflow.kind-rollback]
+environment = "kind-rollback"
+mode = "deploy"
+interactive = false
+build = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "kind-sailr"
+namespace = "default"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.kind-rollback.signature]
+trusted_public_key = "__TRUSTED_PUBLIC_KEY__"

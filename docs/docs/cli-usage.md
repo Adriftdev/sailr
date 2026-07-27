@@ -40,6 +40,8 @@ Initializes a new Sailr environment, creating its directory structure (e.g., `./
     sailr init --name staging --registry quay.io/my-company --provider Aws --region us-east-1
     ```
 *   **Note on Default Service:** The `sailr init` command also creates a default "sample-app" service. This includes generating basic Kubernetes manifest templates (Deployment, Service, ConfigMap) in `k8s/templates/sample-app/` and adding a corresponding service entry to the new environment's `config.toml`. This makes the newly initialized environment immediately runnable and provides a quick way to demonstrate Sailr's capabilities.
+*   Use `sailr init --name dev --engine runkernel` to opt a new environment into the deterministic build backend. Omitting `--engine` preserves the Roomservice default.
+*   Use `sailr migrate --name dev --engine runkernel` to migrate to schema 0.5.0 and opt in atomically. A migration without `--engine` does not change backend selection.
 
 ---
 
@@ -178,6 +180,10 @@ Builds container images for services defined in an environment's `config.toml` t
 *   **Options:**
     *   `-n, --name <NAME>`: (Required) Name of the environment whose services need building.
     *   `-f, --force`: Force all services with a `build` configuration to rebuild, ignoring any cached build status or previous image digests.
+        * With runkernel, this bypasses cache reads and writes for executable
+          service phase tasks without deleting prior cache state.
+    *   `--engine <ENGINE>`: Selects `roomservice` or `runkernel`. Roomservice
+        remains the default unless configuration or this flag opts in.
     *   `-i, --ignore <SERVICES>`: Comma-separated list of service names to ignore during the build process.
 *   **Examples:**
     ```bash
@@ -217,6 +223,32 @@ A comprehensive command that performs a sequence of actions:
     # Run 'go' using a Rolling update strategy for deployment
     sailr go --name production --context prod-cluster --strategy Rolling
     ```
+
+---
+
+### `sailr workflow`
+
+Runs deterministic workflow profiles from `sailr.workflow.toml`.
+
+* `sailr workflow plan <PROFILE> [--format text|json]` builds and validates the
+  actual runkernel graph and predicts cache eligibility. Text output uses
+  `[CACHE]`, `[RUN]`, and `[SKIP]`.
+* `sailr workflow graph <PROFILE> --format text|mermaid` renders the same typed
+  plan, including the post-settlement Sailr finalizer chain.
+* `sailr workflow explain <PROFILE> --task <TASK_ID>` shows a task's typed kind,
+  phase, effects, dependencies, and cache policy.
+* `sailr workflow inspect <PROFILE>` shows the deployment target, explicit
+  environment policy, forced cache bypass, signer fingerprint, and finalizers.
+* `sailr workflow run <PROFILE> --non-interactive --apply` executes a mutating
+  profile after its configured safety checks.
+
+Signature profiles configure a trusted Ed25519 public key under
+`[workflow.<profile>.signature]`. The first unsigned run writes
+`.sailr/audit/<profile>/deployment-plan.json` and a workflow report, then stops
+before cluster mutation. Sign
+`sailr-deployment-plan-v1:<plan_hash>` externally and retry with only the
+base64 raw signature in `DEPLOY_APPROVAL_SIG`. See the
+[deterministic deployment audit gate](workflow-audit-gate.md).
 
 ---
 

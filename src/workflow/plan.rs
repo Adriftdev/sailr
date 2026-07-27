@@ -2,6 +2,8 @@ use crate::builder::SailrBuildPlan;
 use crate::workflow::profile::NormalizedWorkflowProfile;
 use crate::workflow::runner::RunnerContext;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct WorkflowPlan {
@@ -13,6 +15,9 @@ pub struct WorkflowPlan {
     pub image_push_plan: Option<crate::workflow::image::ImagePushPlanReport>,
     pub finalizers: Vec<WorkflowFinalizerPlan>,
     pub effects: WorkflowEffects,
+    pub cache_predictions: BTreeMap<String, String>,
+    pub signer_key_fingerprint: Option<String>,
+    pub deployment_state: crate::workflow::gate::DeploymentRunState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -22,15 +27,28 @@ pub enum WorkflowFinalizerPhase {
     ReportSink,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowFinalizerTrigger {
+    Always,
+    OnSuccess,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowFinalizerKind {
+    RunServiceFinally {
+        service: String,
+        cwd: PathBuf,
+        commands: Vec<String>,
+    },
     WriteBuildCache,
     WriteWorkflowReport,
 }
 
 impl WorkflowFinalizerKind {
-    pub fn phase(self) -> WorkflowFinalizerPhase {
+    pub fn phase(&self) -> WorkflowFinalizerPhase {
         match self {
+            WorkflowFinalizerKind::RunServiceFinally { .. } => WorkflowFinalizerPhase::BeforeReport,
             WorkflowFinalizerKind::WriteBuildCache => WorkflowFinalizerPhase::BeforeReport,
             WorkflowFinalizerKind::WriteWorkflowReport => WorkflowFinalizerPhase::ReportSink,
         }
@@ -42,6 +60,8 @@ pub struct WorkflowFinalizerPlan {
     pub id: String,
     pub label: String,
     pub kind: WorkflowFinalizerKind,
+    pub phase: WorkflowFinalizerPhase,
+    pub trigger: WorkflowFinalizerTrigger,
     pub effects: WorkflowEffects,
     pub description: String,
 }
@@ -51,13 +71,19 @@ pub struct WorkflowTaskPlan {
     pub id: String,
     pub label: String,
     pub kind: WorkflowTaskKind,
+    pub cache_policy: WorkflowTaskCachePolicy,
+    pub service: Option<String>,
+    pub phase: Option<String>,
     pub dependencies: Vec<String>,
     pub effects: WorkflowEffects,
     pub description: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkflowTaskKind {
+    #[default]
+    Unknown,
     ValidateConfig,
     BuildPlan,
     ServiceBuild,
@@ -65,10 +91,22 @@ pub enum WorkflowTaskKind {
     ServicePush,
     ImageReport,
     Generate,
+    PreDeployHooks,
+    DeploymentBundle,
     DeploymentPlan,
     Deploy,
+    PostDeployHooks,
     Verify,
     Approval,
+    VerificationGate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowTaskCachePolicy {
+    Disabled,
+    InputsAndKey,
+    ForcedBypass,
 }
 
 #[derive(Debug, Clone)]

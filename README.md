@@ -99,7 +99,10 @@ Use `--engine runkernel` or `[build].engine = "runkernel"` to try the new backen
 
 Roomservice stores build cache under `.roomservice`. The runkernel backend stores Sailr-owned build cache under `.sailr/cache/build`, keeping embedded runkernel state inside Sailr's project cache instead of exposing `.runkernel` as a user-facing project directory.
 
-`[build].max_parallelism` is accepted by the runkernel backend, but not enforced yet. Sailr emits a warning when this setting is used with `engine = "runkernel"`.
+`[build].max_parallelism` is enforced across executable runkernel phase tasks.
+Translated tasks use stable service/phase IDs, exact sorted inputs, and explicit
+command/configuration cache fingerprints. `--force` bypasses cache reads and
+writes without deleting prior cache state.
 
 ```bash 
 sailr build <environment_name> [--ignore <service1,service2,...>]

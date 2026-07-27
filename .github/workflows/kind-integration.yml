@@ -1,0 +1,164 @@
+name: Kind signed deployment integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  KIND_VERSION: v0.31.0
+  KIND_NODE_IMAGE: kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
+
+jobs:
+  signed-transactional-deployment:
+    name: Signed transactional deployment (Kind)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Sailr
+        run: cargo build --release --locked
+
+      - name: Install Kind
+        run: |
+          curl --fail --location --silent --show-error \
+            --output kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x kind
+          sudo mv kind /usr/local/bin/kind
+          kind version
+
+      - name: Create digest-pinned Kubernetes 1.35 cluster
+        run: |
+          kind create cluster \
+            --name sailr \
+            --image "${KIND_NODE_IMAGE}" \
+            --wait 120s
+          kubectl cluster-info --context kind-sailr
+
+      - name: Configure external signer and fixtures
+        run: |
+          openssl genpkey -algorithm ED25519 -out "${RUNNER_TEMP}/sailr-private.pem"
+          openssl pkey \
+            -in "${RUNNER_TEMP}/sailr-private.pem" \
+            -pubout \
+            -outform DER \
+            -out "${RUNNER_TEMP}/sailr-public.der"
+          tail -c 32 "${RUNNER_TEMP}/sailr-public.der" \
+            | base64 --wrap=0 > "${RUNNER_TEMP}/sailr-public.base64"
+          cp tests/fixtures/kind/sailr.workflow.toml sailr.workflow.toml
+          cp -R tests/fixtures/kind/k8s/environments/. k8s/environments/
+          cp -R tests/fixtures/kind/k8s/templates/. k8s/templates/
+          sed -i \
+            "s|__TRUSTED_PUBLIC_KEY__|$(cat "${RUNNER_TEMP}/sailr-public.base64")|g" \
+            sailr.workflow.toml
+
+      - name: Prove unsigned workflow produces evidence without mutation
+        run: |
+          set +e
+          target/release/sailr workflow run kind-signed --non-interactive --apply
+          unsigned_status=$?
+          set -e
+          test "${unsigned_status}" -ne 0
+          test -f .sailr/audit/kind-signed/deployment-plan.json
+          test -f .sailr/reports/kind-signed/latest.json
+          cp .sailr/reports/kind-signed/latest.json \
+            .sailr/reports/kind-signed/unsigned.json
+          test "$(jq -r '.artifacts.deployment.verification_status' \
+            .sailr/reports/kind-signed/unsigned.json)" = "awaiting_signature"
+          ! kubectl --context kind-sailr get configmap sailr-approved
+
+      - name: Sign externally and apply the exact approved bundle
+        run: |
+          plan_hash="$(jq -r '.plan_hash' \
+            .sailr/audit/kind-signed/deployment-plan.json)"
+          DEPLOY_APPROVAL_SIG="$(
+            printf '%s' "sailr-deployment-plan-v1:${plan_hash}" \
+              | openssl pkeyutl \
+                  -sign \
+                  -rawin \
+                  -inkey "${RUNNER_TEMP}/sailr-private.pem" \
+              | base64 --wrap=0
+          )"
+          export DEPLOY_APPROVAL_SIG
+          target/release/sailr workflow run kind-signed --non-interactive --apply
+          test "$(kubectl --context kind-sailr get configmap sailr-approved \
+            -o jsonpath='{.data.approval}')" = "verified"
+          test "$(jq -r '.artifacts.deployment.verification_status' \
+            .sailr/reports/kind-signed/latest.json)" = "verified"
+          test "$(jq '.artifacts.deployment.applied_resources | length' \
+            .sailr/reports/kind-signed/latest.json)" -eq 1
+
+      - name: Generate rollback approval without cluster mutation
+        run: |
+          unset DEPLOY_APPROVAL_SIG
+          kubectl --context kind-sailr create configmap sailr-rollback-update \
+            --from-literal=state=before
+          set +e
+          target/release/sailr workflow run kind-rollback --non-interactive --apply
+          unsigned_status=$?
+          set -e
+          test "${unsigned_status}" -ne 0
+          cp .sailr/reports/kind-rollback/latest.json \
+            .sailr/reports/kind-rollback/unsigned.json
+          test "$(kubectl --context kind-sailr get configmap sailr-rollback-update \
+            -o jsonpath='{.data.state}')" = "before"
+          ! kubectl --context kind-sailr get configmap sailr-rollback-create
+          ! kubectl --context kind-sailr get configmap sailr-rollback-never
+
+      - name: Verify successful-mutation-only rollback
+        run: |
+          plan_hash="$(jq -r '.plan_hash' \
+            .sailr/audit/kind-rollback/deployment-plan.json)"
+          DEPLOY_APPROVAL_SIG="$(
+            printf '%s' "sailr-deployment-plan-v1:${plan_hash}" \
+              | openssl pkeyutl \
+                  -sign \
+                  -rawin \
+                  -inkey "${RUNNER_TEMP}/sailr-private.pem" \
+              | base64 --wrap=0
+          )"
+          export DEPLOY_APPROVAL_SIG
+          set +e
+          target/release/sailr workflow run kind-rollback --non-interactive --apply
+          rollback_status=$?
+          set -e
+          test "${rollback_status}" -ne 0
+          test "$(kubectl --context kind-sailr get configmap sailr-rollback-update \
+            -o jsonpath='{.data.state}')" = "before"
+          ! kubectl --context kind-sailr get configmap sailr-rollback-create
+          ! kubectl --context kind-sailr get configmap sailr-rollback-never
+          test "$(jq -r '.artifacts.deployment.verification_status' \
+            .sailr/reports/kind-rollback/latest.json)" = "verified"
+          test "$(jq '.artifacts.deployment.applied_resources | length' \
+            .sailr/reports/kind-rollback/latest.json)" -eq 2
+          test "$(jq -r '.artifacts.deployment.rollback.attempted' \
+            .sailr/reports/kind-rollback/latest.json)" = "true"
+          test "$(jq -r '.artifacts.deployment.rollback.succeeded' \
+            .sailr/reports/kind-rollback/latest.json)" = "true"
+
+      - name: Capture cluster diagnostics
+        if: always()
+        run: |
+          mkdir -p .sailr/diagnostics
+          kubectl --context kind-sailr get configmaps \
+            --all-namespaces \
+            --output yaml > .sailr/diagnostics/configmaps.yaml
+          kubectl --context kind-sailr get events \
+            --all-namespaces \
+            --sort-by=.metadata.creationTimestamp \
+            --output yaml > .sailr/diagnostics/events.yaml
+
+      - name: Upload audit evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sailr-kind-signed-transactional-evidence
+          if-no-files-found: warn
+          path: |
+            .sailr/audit/**
+            .sailr/reports/**
+            .sailr/diagnostics/**

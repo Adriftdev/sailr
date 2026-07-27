@@ -70,7 +70,7 @@ The environment file `k8s/environments/<env>/config.toml` strictly follows **Sch
 ```toml
 [build]
 engine = "runkernel"      # "roomservice" (default) or "runkernel"
-fail_fast = false         # Stop scheduling on build failure
+fail_fast = false         # Roomservice policy; runkernel settles active siblings
 max_parallelism = 4       # Concurrency level
 before_all = "echo 'Starting builds'"
 after_all = "echo 'Builds completed'"
@@ -86,13 +86,31 @@ path = "api"             # Relative to k8s/templates/ (defaults to name)
 namespace = "default"    # Target k8s namespace (defaults to env name)
 
 [service.build]
-build = "./services/api" # Build context path relative to root
+path = "./services/api"  # Build context path relative to root
 dockerfile = "Dockerfile"
 before = "echo 'Preparing build'"
 run_parallel = "npm run test"
 run_synchronous = "npm run build"
 after = "echo 'Build complete'"
-ignore = ["*.md", "tests/**"]
+finally = "echo 'Clean up after settlement'"
+ignore_cache = ["*.md", "tests/**"]
+```
+
+`ignoreCache` is accepted as an alias. Runkernel resolves and sorts exact input
+files; ignored patterns are relative to the build path. `--force` bypasses
+cache reads and writes for executable translated service tasks without deleting
+the prior cache. Global hooks and aggregates are never cached, and global hooks
+are suppressed when no selected service is dirty. Service `finally` commands
+run exactly once after active siblings settle, in stable reverse dependency
+order.
+
+### 3.3 Deployment Policy
+
+Cluster security is explicit and never inferred from an environment name:
+
+```toml
+[deployment_policy]
+required_approval = "signature" # none | external | signature
 ```
 
 ### 3.4 Environment Variables (`[[environment_variables]]`)
@@ -167,6 +185,35 @@ apply = true
 report = "both"
 ```
 
+For an immutable, signed deployment:
+
+```toml
+[workflow.production]
+environment = "production"
+mode = "deploy"
+interactive = false
+build = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "production-cluster"
+namespace = "app"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.production.signature]
+trusted_public_key = "<base64 raw 32-byte Ed25519 public key>"
+```
+
+Sailr renders only the key's `sha256:<hex>` fingerprint. The first run writes
+`.sailr/audit/<profile>/deployment-plan.json` and reports
+`awaiting_signature` without cluster mutation. Sign the exact ASCII message
+`sailr-deployment-plan-v1:<plan_hash>` outside Sailr, set only
+`DEPLOY_APPROVAL_SIG` to the base64 raw 64-byte signature, and retry. The
+bundle and gate are uncached; deterministic earlier work may be `[CACHE]`.
+Planning and deployment use the same in-memory canonical JSON resources and do
+not reopen generated YAML.
+
 ---
 
 ## 6. CLI Command Reference
@@ -174,7 +221,7 @@ report = "both"
 ### 6.1 Project & Service Initialization
 * **Initialize a new environment**:
   ```bash
-  sailr init --name <ENV_NAME> [--registry <REGISTRY>] [--provider Local|Aws|Gcp]
+  sailr init --name <ENV_NAME> [--engine roomservice|runkernel]
   ```
 * **Add a new service**:
   ```bash
@@ -189,7 +236,7 @@ report = "both"
   ```
 * **Migrate configuration to schema 0.5.0**:
   ```bash
-  sailr migrate [--config <PATH>]
+  sailr migrate --name <ENV_NAME> [--engine roomservice|runkernel]
   ```
 * **Bump service version**:
   ```bash
@@ -222,7 +269,7 @@ report = "both"
 ### 6.5 Workflow Management (`sailr workflow`)
 * **List workflow profiles**: `sailr workflow list`
 * **Show profile configuration**: `sailr workflow show <PROFILE>`
-* **Plan a workflow run**: `sailr workflow plan <PROFILE>`
+* **Plan a workflow run**: `sailr workflow plan <PROFILE> [--format text|json]`
 * **Run a workflow profile**: `sailr workflow run <PROFILE> [--dry-run] [--apply]`
 * **Export workflow dependency graph**: `sailr workflow graph <PROFILE> --format mermaid`
 * **Generate CI configuration**: `sailr workflow generate-ci <PROFILE> --provider github`
@@ -249,6 +296,10 @@ When acting on behalf of a user to perform tasks with Sailr, follow these step-b
 2. Plan execution with `sailr workflow plan <profile_name>`.
 3. Run the workflow with `sailr workflow run <profile_name>`.
 
+For signature approval, expect two runs: the unsigned run creates the audit
+artifact and report; an external operator signs the reported plan hash; the
+retry supplies only `DEPLOY_APPROVAL_SIG`. Never place a private key in Sailr.
+
 ---
 
 ## 8. Best Practices & Critical Rules
@@ -261,3 +312,10 @@ When acting on behalf of a user to perform tasks with Sailr, follow these step-b
 
 > [!CAUTION]
 > **Schema Integrity**: Always ensure `config.toml` uses `schema_version = "0.5.0"`. Avoid legacy `service_whitelist` configurations and migrate using `sailr migrate`.
+
+> [!CAUTION]
+> **Rollback scope**: Sailr journals only successful Kubernetes mutations.
+> Partial failure restores updates and deletes creates in reverse order; later
+> post-deploy failure can reuse the completed journal. Hook side effects are
+> observable but not reversible. Rollback errors are aggregated and fail the
+> workflow.

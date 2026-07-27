@@ -13,6 +13,7 @@
     }
   },
   "environment": "staging",
+  "approval": "none",
   "success": true,
   "effects": {
     "mutates_filesystem": true,
@@ -23,7 +24,7 @@
     "prompts_user": false
   },
   "tasks": {
-    "completed": 5,
+    "completed": 6,
     "failed": 0,
     "skipped": 0,
     "cancelled": 0,
@@ -33,22 +34,38 @@
     "items": [
       {
         "name": "workflow:validate-config",
+        "kind": "validate_config",
+        "status": "completed"
+      },
+      {
+        "name": "service:api:build:0",
+        "kind": "service_build",
+        "service": "api",
+        "phase": "build",
         "status": "completed"
       },
       {
         "name": "service:api:build",
+        "kind": "service_build",
+        "service": "api",
+        "phase": "service_complete",
         "status": "completed"
       },
       {
         "name": "workflow:push-plan",
+        "kind": "push_plan",
         "status": "completed"
       },
       {
         "name": "service:api:push",
+        "kind": "service_push",
+        "service": "api",
+        "phase": "push",
         "status": "completed"
       },
       {
         "name": "workflow:image-report",
+        "kind": "image_report",
         "status": "completed"
       }
     ]

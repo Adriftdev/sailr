@@ -178,6 +178,12 @@ impl From<&runkernel::TaskStatus> for WorkflowReportTaskStatus {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowReportTaskItem {
     pub name: String,
+    #[serde(default)]
+    pub kind: crate::workflow::plan::WorkflowTaskKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
     pub status: WorkflowReportTaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -212,6 +218,50 @@ pub enum WorkflowReportType {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowReportArtifacts {
     pub published_images: Vec<crate::workflow::image::PublishedImageArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<DeploymentAuditEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeploymentTargetEvidence {
+    pub context: String,
+    pub namespace: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AppliedResourceEvidence {
+    pub sequence: usize,
+    pub api_version: String,
+    pub kind: String,
+    pub namespace: Option<String>,
+    pub name: String,
+    pub source_path: String,
+    pub document_index: usize,
+    pub sha256: String,
+    pub previous_existed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeploymentRollbackEvidence {
+    pub attempted: bool,
+    pub succeeded: bool,
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeploymentAuditEvidence {
+    pub schema: String,
+    pub plan_hash: String,
+    pub signer_key_fingerprint: String,
+    pub verification_status: crate::workflow::gate::DeploymentVerificationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_error: Option<String>,
+    pub target: DeploymentTargetEvidence,
+    pub manifests: Vec<crate::deployment::bundle::ManifestDigest>,
+    pub applied_resources: Vec<AppliedResourceEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback: Option<DeploymentRollbackEvidence>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -384,6 +434,8 @@ pub struct WorkflowReport {
     pub mode: String,
     pub runner: RunnerContext,
     pub environment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<crate::workflow::profile::ApprovalMode>,
     pub success: bool,
     pub effects: crate::workflow::plan::WorkflowEffects,
     pub tasks: WorkflowReportTasks,
@@ -470,6 +522,15 @@ impl WorkflowReport {
             {
                 return Err(WorkflowReportError::Validation(format!(
                     "failed task '{}' must contain an error",
+                    item.name
+                )));
+            }
+        }
+        let mut task_names = std::collections::BTreeSet::new();
+        for item in &self.tasks.items {
+            if !task_names.insert(item.name.as_str()) {
+                return Err(WorkflowReportError::Validation(format!(
+                    "duplicate task name: {}",
                     item.name
                 )));
             }
@@ -585,8 +646,237 @@ impl WorkflowReport {
             ));
         }
 
+        if let Some(deployment) = &self.artifacts.deployment {
+            validate_deployment_audit_evidence(
+                deployment,
+                self.success,
+                &self.profile,
+                &self.environment,
+            )?;
+        }
+        let bundle_completed = self.tasks.items.iter().any(|item| {
+            item.name == crate::workflow::task_id::DEPLOYMENT_BUNDLE
+                && matches!(
+                    item.status,
+                    WorkflowReportTaskStatus::Completed | WorkflowReportTaskStatus::Cached
+                )
+        });
+        if self.effects.mutates_cluster
+            && self.approval == Some(crate::workflow::profile::ApprovalMode::Signature)
+            && bundle_completed
+            && self.artifacts.deployment.is_none()
+        {
+            return Err(WorkflowReportError::Validation(
+                "signed deployment report requires deployment audit evidence".to_string(),
+            ));
+        }
+
         Ok(())
     }
+}
+
+fn validate_deployment_audit_evidence(
+    evidence: &DeploymentAuditEvidence,
+    workflow_success: bool,
+    profile: &str,
+    environment: &str,
+) -> Result<(), crate::workflow::error::WorkflowReportError> {
+    use crate::workflow::error::WorkflowReportError;
+    let is_lower_hex = |value: &str, length: usize| {
+        value.len() == length
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    if evidence.schema != crate::deployment::bundle::DEPLOYMENT_BUNDLE_SCHEMA {
+        return Err(WorkflowReportError::Validation(format!(
+            "unsupported deployment evidence schema: {}",
+            evidence.schema
+        )));
+    }
+    if !is_lower_hex(&evidence.plan_hash, 64) {
+        return Err(WorkflowReportError::Validation(
+            "deployment plan hash must be 64 lowercase hexadecimal characters".to_string(),
+        ));
+    }
+    let fingerprint = evidence
+        .signer_key_fingerprint
+        .strip_prefix("sha256:")
+        .ok_or_else(|| {
+            WorkflowReportError::Validation(
+                "deployment signer fingerprint must use sha256:<hex>".to_string(),
+            )
+        })?;
+    if !is_lower_hex(fingerprint, 64) {
+        return Err(WorkflowReportError::Validation(
+            "deployment signer fingerprint must use sha256:<64 lowercase hex>".to_string(),
+        ));
+    }
+    if evidence.manifests.is_empty() {
+        return Err(WorkflowReportError::Validation(
+            "deployment evidence requires nonempty manifest digests".to_string(),
+        ));
+    }
+    if evidence.target.context.trim().is_empty() || evidence.target.namespace.trim().is_empty() {
+        return Err(WorkflowReportError::Validation(
+            "deployment evidence target context and namespace cannot be blank".to_string(),
+        ));
+    }
+    let mut manifests = std::collections::BTreeSet::new();
+    for manifest in &evidence.manifests {
+        if manifest.relative_path.trim().is_empty() {
+            return Err(WorkflowReportError::Validation(
+                "deployment manifest relative path cannot be blank".to_string(),
+            ));
+        }
+        if !is_lower_hex(&manifest.sha256, 64) {
+            return Err(WorkflowReportError::Validation(format!(
+                "invalid manifest digest for {} document {}",
+                manifest.relative_path, manifest.document_index
+            )));
+        }
+        if !manifests.insert((manifest.relative_path.as_str(), manifest.document_index)) {
+            return Err(WorkflowReportError::Validation(format!(
+                "duplicate manifest record: {} document {}",
+                manifest.relative_path, manifest.document_index
+            )));
+        }
+    }
+    let payload = crate::deployment::bundle::ApprovalPayload {
+        schema: evidence.schema.clone(),
+        profile: profile.to_string(),
+        environment: environment.to_string(),
+        target: crate::deployment::bundle::DeploymentTarget {
+            context: evidence.target.context.clone(),
+            namespace: evidence.target.namespace.clone(),
+        },
+        manifests: evidence.manifests.clone(),
+    };
+    let canonical = serde_json::to_vec(&payload).map_err(|error| {
+        WorkflowReportError::Validation(format!(
+            "failed to canonicalize deployment evidence: {error}"
+        ))
+    })?;
+    let expected_plan_hash = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(canonical))
+    };
+    if evidence.plan_hash != expected_plan_hash {
+        return Err(WorkflowReportError::Validation(
+            "deployment plan hash does not match the reported payload".to_string(),
+        ));
+    }
+    let mut identities = std::collections::BTreeSet::new();
+    for (expected_sequence, resource) in evidence.applied_resources.iter().enumerate() {
+        if resource.sequence != expected_sequence {
+            return Err(WorkflowReportError::Validation(
+                "applied resource sequence numbers must be contiguous".to_string(),
+            ));
+        }
+        if !identities.insert((
+            resource.api_version.as_str(),
+            resource.kind.as_str(),
+            resource.namespace.as_deref(),
+            resource.name.as_str(),
+        )) {
+            return Err(WorkflowReportError::Validation(format!(
+                "duplicate applied resource identity: {} {}",
+                resource.kind, resource.name
+            )));
+        }
+        if resource.api_version.trim().is_empty()
+            || resource.kind.trim().is_empty()
+            || resource.name.trim().is_empty()
+        {
+            return Err(WorkflowReportError::Validation(
+                "applied resource identity fields cannot be blank".to_string(),
+            ));
+        }
+        if !evidence.manifests.iter().any(|manifest| {
+            manifest.relative_path == resource.source_path
+                && manifest.document_index == resource.document_index
+                && manifest.sha256 == resource.sha256
+        }) {
+            return Err(WorkflowReportError::Validation(format!(
+                "applied resource {} {} does not match a bundle digest",
+                resource.kind, resource.name
+            )));
+        }
+    }
+    if matches!(
+        evidence.verification_status,
+        crate::workflow::gate::DeploymentVerificationStatus::AwaitingSignature
+            | crate::workflow::gate::DeploymentVerificationStatus::Failed
+    ) && !evidence.applied_resources.is_empty()
+    {
+        return Err(WorkflowReportError::Validation(
+            "unverified deployment evidence cannot contain applied resources".to_string(),
+        ));
+    }
+    match evidence.verification_status {
+        crate::workflow::gate::DeploymentVerificationStatus::NotRequired => {
+            return Err(WorkflowReportError::Validation(
+                "signed deployment evidence cannot use not_required verification".to_string(),
+            ));
+        }
+        crate::workflow::gate::DeploymentVerificationStatus::AwaitingSignature => {
+            if evidence.verification_error.is_some() {
+                return Err(WorkflowReportError::Validation(
+                    "awaiting-signature evidence cannot contain a verification error".to_string(),
+                ));
+            }
+        }
+        crate::workflow::gate::DeploymentVerificationStatus::Verified => {
+            if evidence.verification_error.is_some() {
+                return Err(WorkflowReportError::Validation(
+                    "verified deployment evidence cannot contain a verification error".to_string(),
+                ));
+            }
+        }
+        crate::workflow::gate::DeploymentVerificationStatus::Failed => {
+            if evidence
+                .verification_error
+                .as_deref()
+                .is_none_or(|error| error.trim().is_empty())
+            {
+                return Err(WorkflowReportError::Validation(
+                    "failed verification evidence requires a nonblank error".to_string(),
+                ));
+            }
+        }
+    }
+    if workflow_success {
+        if evidence.verification_status
+            != crate::workflow::gate::DeploymentVerificationStatus::Verified
+        {
+            return Err(WorkflowReportError::Validation(
+                "successful signed deployment must be verified".to_string(),
+            ));
+        }
+        if evidence.applied_resources.len() != evidence.manifests.len() {
+            return Err(WorkflowReportError::Validation(
+                "successful signed deployment must cover every bundle resource".to_string(),
+            ));
+        }
+    }
+    if let Some(rollback) = &evidence.rollback {
+        if !rollback.attempted {
+            return Err(WorkflowReportError::Validation(
+                "rollback evidence must represent an attempted rollback".to_string(),
+            ));
+        }
+        if rollback.succeeded != rollback.errors.is_empty() {
+            return Err(WorkflowReportError::Validation(
+                "rollback success does not agree with rollback errors".to_string(),
+            ));
+        }
+    }
+    if !workflow_success && !evidence.applied_resources.is_empty() && evidence.rollback.is_none() {
+        return Err(WorkflowReportError::Validation(
+            "failed deployment with applied resources requires rollback evidence".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn build_workflow_report(
@@ -601,12 +891,24 @@ fn build_workflow_report(
     let task_items = result
         .tasks
         .iter()
-        .map(|task| WorkflowReportTaskItem {
-            name: task.name.clone(),
-            status: WorkflowReportTaskStatus::from(&task.status),
-            error: task.error.clone(),
+        .map(|task| {
+            let planned = plan.tasks.iter().find(|planned| planned.id == task.name);
+            WorkflowReportTaskItem {
+                name: task.name.clone(),
+                kind: planned.map(|planned| planned.kind).unwrap_or_default(),
+                service: planned.and_then(|planned| planned.service.clone()),
+                phase: planned.and_then(|planned| planned.phase.clone()),
+                status: WorkflowReportTaskStatus::from(&task.status),
+                error: task.error.clone(),
+            }
         })
         .collect::<Vec<_>>();
+    let count_status = |status: WorkflowReportTaskStatus| {
+        task_items
+            .iter()
+            .filter(|task| task.status == status)
+            .count()
+    };
 
     let published_artifacts = report_data.published_artifacts.clone();
     for artifact in &published_artifacts {
@@ -624,15 +926,16 @@ fn build_workflow_report(
         mode: profile.mode.as_str().to_string(),
         runner: runner.clone(),
         environment: profile.environment.clone(),
+        approval: Some(profile.approval),
         success: final_success,
         effects: plan.effects.clone(),
         tasks: WorkflowReportTasks {
-            completed: result.summary.completed,
-            failed: result.summary.failed,
-            skipped: result.summary.skipped,
-            cancelled: result.summary.cancelled,
-            cached: result.summary.cached,
-            rolled_back: result.summary.rolled_back,
+            completed: count_status(WorkflowReportTaskStatus::Completed),
+            failed: count_status(WorkflowReportTaskStatus::Failed),
+            skipped: count_status(WorkflowReportTaskStatus::Skipped),
+            cancelled: count_status(WorkflowReportTaskStatus::Cancelled),
+            cached: count_status(WorkflowReportTaskStatus::Cached),
+            rolled_back: count_status(WorkflowReportTaskStatus::RolledBack),
             rollback_failed: result.summary.rollback_failed,
             items: task_items,
         },
@@ -643,6 +946,7 @@ fn build_workflow_report(
         },
         artifacts: WorkflowReportArtifacts {
             published_images: published_artifacts,
+            deployment: build_deployment_audit_evidence(plan)?,
         },
     };
 
@@ -660,6 +964,83 @@ fn build_workflow_report(
 
     report.validate().map_err(|error| error.to_string())?;
     Ok(report)
+}
+
+fn build_deployment_audit_evidence(
+    plan: &crate::workflow::plan::WorkflowPlan,
+) -> Result<Option<DeploymentAuditEvidence>, String> {
+    if plan.profile.approval != crate::workflow::profile::ApprovalMode::Signature {
+        return Ok(None);
+    }
+    let Some(bundle) = plan
+        .deployment_state
+        .bundle_optional()
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let verification = plan
+        .deployment_state
+        .verification()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "signed deployment verification evidence is missing".to_string())?;
+    let journal = plan
+        .deployment_state
+        .journal()
+        .map_err(|error| error.to_string())?;
+    let journal = match journal {
+        Some(journal) => Some(
+            journal
+                .lock()
+                .map_err(|_| "Deployment journal lock is poisoned".to_string())?
+                .clone(),
+        ),
+        None => None,
+    };
+    let applied_resources = journal
+        .as_ref()
+        .map(|journal| {
+            journal
+                .entries
+                .iter()
+                .map(|entry| AppliedResourceEvidence {
+                    sequence: entry.sequence,
+                    api_version: entry.identity.api_version.clone(),
+                    kind: entry.identity.kind.clone(),
+                    namespace: entry.identity.namespace.clone(),
+                    name: entry.identity.name.clone(),
+                    source_path: entry.source_path.clone(),
+                    document_index: entry.document_index,
+                    sha256: entry.sha256.clone(),
+                    previous_existed: entry.previous.is_some(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let rollback = journal.as_ref().and_then(|journal| {
+        journal
+            .rollback_attempted
+            .then(|| DeploymentRollbackEvidence {
+                attempted: true,
+                succeeded: journal.rollback_errors.is_empty(),
+                errors: journal.rollback_errors.clone(),
+            })
+    });
+
+    Ok(Some(DeploymentAuditEvidence {
+        schema: bundle.schema.clone(),
+        plan_hash: bundle.plan_hash.clone(),
+        signer_key_fingerprint: verification.signer_key_fingerprint,
+        verification_status: verification.status,
+        verification_error: verification.error,
+        target: DeploymentTargetEvidence {
+            context: bundle.target.context.clone(),
+            namespace: bundle.target.namespace.clone(),
+        },
+        manifests: bundle.approval_artifact().payload.manifests,
+        applied_resources,
+        rollback,
+    }))
 }
 
 fn write_workflow_report_document(
@@ -698,14 +1079,14 @@ fn write_workflow_report_document(
     write_result
 }
 
-fn execute_before_report_finalizers(
+async fn execute_before_report_finalizers(
     plan: &crate::workflow::plan::WorkflowPlan,
     result: &runkernel::PipelineResult,
 ) -> Result<WorkflowReportFinalizers, String> {
     let planned: Vec<_> = plan
         .finalizers
         .iter()
-        .filter(|f| f.kind.phase() == crate::workflow::plan::WorkflowFinalizerPhase::BeforeReport)
+        .filter(|f| f.phase == crate::workflow::plan::WorkflowFinalizerPhase::BeforeReport)
         .collect();
 
     let mut finalizers = WorkflowReportFinalizers {
@@ -716,20 +1097,41 @@ fn execute_before_report_finalizers(
         failed: 0,
     };
 
-    if !result.summary.success {
-        for finalizer in planned {
+    for finalizer in planned {
+        let prerequisite_success = result.summary.success && finalizers.failed == 0;
+        if finalizer.trigger == crate::workflow::plan::WorkflowFinalizerTrigger::OnSuccess
+            && !prerequisite_success
+        {
             finalizers.items.push(WorkflowFinalizerResult {
                 id: finalizer.id.clone(),
                 status: WorkflowFinalizerStatus::Skipped,
-                error: Some("pipeline did not complete successfully".to_string()),
+                error: Some(
+                    "pipeline or an earlier finalizer did not complete successfully".to_string(),
+                ),
             });
             finalizers.skipped += 1;
+            continue;
         }
-        return Ok(finalizers);
-    }
 
-    for finalizer in planned {
-        let res = match finalizer.kind {
+        let res = match &finalizer.kind {
+            crate::workflow::plan::WorkflowFinalizerKind::RunServiceFinally {
+                service,
+                cwd,
+                commands,
+            } => {
+                let cwd = cwd.to_string_lossy().to_string();
+                let mut errors = Vec::new();
+                for command in commands {
+                    if let Err(error) = crate::builder::exec_cmd(&cwd, command, service).await {
+                        errors.push(format!("{command}: {error}"));
+                    }
+                }
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors.join("; "))
+                }
+            }
             crate::workflow::plan::WorkflowFinalizerKind::WriteBuildCache => {
                 if let Some(build_plan) = &plan.build_plan {
                     crate::builder::write_successful_service_caches(build_plan, result)
@@ -771,11 +1173,11 @@ fn execute_report_sink(
     report: &WorkflowReport,
 ) -> Result<(), String> {
     for finalizer in &plan.finalizers {
-        if finalizer.kind.phase() != crate::workflow::plan::WorkflowFinalizerPhase::ReportSink {
+        if finalizer.phase != crate::workflow::plan::WorkflowFinalizerPhase::ReportSink {
             continue;
         }
 
-        match finalizer.kind {
+        match &finalizer.kind {
             crate::workflow::plan::WorkflowFinalizerKind::WriteWorkflowReport => {
                 write_workflow_report_document(root, report)?;
             }
@@ -794,6 +1196,7 @@ pub fn validate_workflow_safety(
     profile: &crate::workflow::profile::NormalizedWorkflowProfile,
     runner: &RunnerContext,
     args: &crate::cli::WorkflowRunArgs,
+    environment: &crate::environment::Environment,
 ) -> Result<(), String> {
     if profile.push == crate::workflow::profile::WorkflowStepMode::Run {
         if !profile.apply {
@@ -830,17 +1233,53 @@ pub fn validate_workflow_safety(
             return Err("deploy=run requires an explicit real deploy_context".to_string());
         }
 
-        if profile.environment == "production" {
-            return Err("production deploy is not enabled in this stage".to_string());
+        if profile.approval == crate::workflow::profile::ApprovalMode::Signature
+            && !profile.generate.is_active()
+        {
+            return Err("approval=signature requires generate to be enabled".to_string());
+        }
+        if profile.approval == crate::workflow::profile::ApprovalMode::Signature {
+            let signature = profile.signature.as_ref().ok_or_else(|| {
+                "approval=signature requires configured trusted_public_key".to_string()
+            })?;
+            crate::workflow::gate::decode_trusted_public_key(&signature.trusted_public_key)
+                .map_err(|error| format!("Invalid trusted signer: {error}"))?;
+        }
+
+        match environment.deployment_policy.required_approval {
+            None | Some(crate::environment::RequiredDeploymentApproval::None) => {}
+            Some(crate::environment::RequiredDeploymentApproval::External) => {
+                if !matches!(
+                    profile.approval,
+                    crate::workflow::profile::ApprovalMode::External
+                        | crate::workflow::profile::ApprovalMode::Signature
+                ) {
+                    return Err(
+                        "environment deployment policy requires external or signature approval"
+                            .to_string(),
+                    );
+                }
+            }
+            Some(crate::environment::RequiredDeploymentApproval::Signature) => {
+                if profile.approval != crate::workflow::profile::ApprovalMode::Signature {
+                    return Err(
+                        "environment deployment policy requires signature approval".to_string()
+                    );
+                }
+            }
         }
 
         if runner.ci {
-            if profile.approval != crate::workflow::profile::ApprovalMode::External {
+            if !matches!(
+                profile.approval,
+                crate::workflow::profile::ApprovalMode::External
+                    | crate::workflow::profile::ApprovalMode::Signature
+            ) {
                 let msg = match runner.kind {
                     RunnerKind::CircleCi => "CI deploy requires approval=external.\n\nDetected CircleCI.\nAdd approval = \"external\" to [workflow.ci-build-push] and gate the mutating CircleCI job behind:\n\n  approve_image_push:\n    type: approval",
                     RunnerKind::GitHubActions => "CI deploy requires approval=external.\n\nDetected GitHub Actions.\nAdd approval = \"external\" to [workflow.ci-build-push] and run the job behind a protected GitHub Environment.",
                     RunnerKind::Travis => "CI deploy requires approval=external.\n\nDetected Travis.\nAdd approval = \"external\" to [workflow.ci-build-push] and guard the mutating job with branch and environment variable conditions.",
-                    _ => "CI deploy requires approval=external",
+                    _ => "CI deploy requires approval=external or approval=signature",
                 };
                 return Err(msg.to_string());
             }
@@ -901,6 +1340,12 @@ pub struct WorkflowInspection {
     pub push_mode: crate::workflow::profile::WorkflowStepMode,
     pub generate_mode: crate::workflow::profile::WorkflowStepMode,
     pub deploy_mode: crate::workflow::profile::WorkflowStepMode,
+    pub deploy_context: Option<String>,
+    pub namespace: String,
+    pub required_deployment_approval: Option<crate::environment::RequiredDeploymentApproval>,
+    pub signer_key_fingerprint: Option<String>,
+    pub force: bool,
+    pub finalizers: Vec<String>,
     pub registry_host: String,
     pub registry_namespace: String,
     pub registry_prefix: String,
@@ -939,6 +1384,29 @@ impl WorkflowInspection {
         output.push_str(&format!("  push mode: {:?}\n", self.push_mode));
         output.push_str(&format!("  generate mode: {:?}\n", self.generate_mode));
         output.push_str(&format!("  deploy mode: {:?}\n", self.deploy_mode));
+        output.push_str(&format!("  force cache bypass: {}\n", self.force));
+        output.push_str(&format!(
+            "  required deployment approval: {:?}\n",
+            self.required_deployment_approval
+        ));
+        output.push_str(&format!(
+            "  trusted signer fingerprint: {}\n",
+            self.signer_key_fingerprint.as_deref().unwrap_or("none")
+        ));
+        output.push_str(&format!(
+            "  deploy context: {}\n",
+            self.deploy_context.as_deref().unwrap_or("none")
+        ));
+        output.push_str(&format!("  namespace: {}\n", self.namespace));
+
+        output.push_str("\nSailr finalizers after pipeline settlement:\n");
+        if self.finalizers.is_empty() {
+            output.push_str("  (none)\n");
+        } else {
+            for finalizer in &self.finalizers {
+                output.push_str(&format!("  - {finalizer}\n"));
+            }
+        }
 
         output.push_str("\nRegistry:\n");
         output.push_str(&format!("  host: {}\n", self.registry_host));
@@ -1017,7 +1485,7 @@ impl WorkflowRunner {
         };
 
         // 6. Safety validation
-        validate_workflow_safety(&normalized_profile, &runner_ctx, &args)?;
+        validate_workflow_safety(&normalized_profile, &runner_ctx, &args, &env)?;
 
         // 7. Plan Pipeline
         let planner = WorkflowPlanner::new(
@@ -1027,7 +1495,6 @@ impl WorkflowRunner {
             runner_ctx.clone(),
         );
         let plan = planner.plan()?;
-
         let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
         let (mut pipeline, build_execution) =
             planner.build_pipeline_from_plan(&plan, accumulator.clone())?;
@@ -1049,7 +1516,7 @@ impl WorkflowRunner {
 
         let report_data = accumulator.snapshot().await;
 
-        let finalizer_results = execute_before_report_finalizers(&plan, &result)?;
+        let finalizer_results = execute_before_report_finalizers(&plan, &result).await?;
 
         let final_success = result.summary.success
             && finalizer_results.failed == 0
@@ -1158,6 +1625,22 @@ impl WorkflowRunner {
             push_mode: normalized.push,
             generate_mode: normalized.generate,
             deploy_mode: normalized.deploy,
+            deploy_context: normalized.deploy_context.clone(),
+            namespace: normalized
+                .namespace
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
+            required_deployment_approval: env_arc.deployment_policy.required_approval,
+            signer_key_fingerprint: plan.signer_key_fingerprint.clone(),
+            force: plan
+                .build_plan
+                .as_ref()
+                .is_some_and(|build_plan| build_plan.force),
+            finalizers: plan
+                .finalizers
+                .iter()
+                .map(|finalizer| finalizer.id.clone())
+                .collect(),
             registry_host: resolved_registry.host.clone(),
             registry_namespace: resolved_registry
                 .namespace
@@ -1227,7 +1710,29 @@ impl WorkflowRunner {
             options,
             runner_ctx.clone(),
         );
-        let plan = planner.plan()?;
+        let mut plan = planner.plan()?;
+        let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
+        let (pipeline, _) = planner.build_pipeline_from_plan(&plan, accumulator)?;
+        pipeline
+            .graph()
+            .map_err(|error| format!("Invalid workflow graph: {error}"))?;
+        let cache_manager = runkernel::cache::CacheManager::for_pipeline(pipeline.name());
+        for task in pipeline.tasks() {
+            let status = match cache_manager
+                .compute_hash(pipeline.name(), task)
+                .map_err(|error| format!("Failed to predict task cache: {error}"))?
+            {
+                runkernel::cache::CacheEligibility::Disabled(_) => "RUN",
+                runkernel::cache::CacheEligibility::Enabled { hash, .. } => {
+                    match cache_manager.lookup(&task.name, &hash) {
+                        runkernel::cache::CacheLookup::Hit { .. } => "CACHE",
+                        runkernel::cache::CacheLookup::Miss { .. } => "RUN",
+                    }
+                }
+            };
+            plan.cache_predictions
+                .insert(task.name.clone(), status.to_string());
+        }
 
         match args.format {
             crate::cli::WorkflowOutputFormat::Text => {
@@ -1237,7 +1742,10 @@ impl WorkflowRunner {
                 );
             }
             crate::cli::WorkflowOutputFormat::Json => {
-                return Err("JSON plan format not yet implemented".to_string());
+                println!(
+                    "{}",
+                    crate::workflow::render::render_workflow_plan_json(&plan)?
+                );
             }
         }
 
@@ -1358,7 +1866,12 @@ mod tests {
         plan: &crate::workflow::plan::WorkflowPlan,
         report_data: &crate::workflow::image::WorkflowReportData,
     ) -> Result<(), String> {
-        let finalizer_results = super::execute_before_report_finalizers(plan, result)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("failed to create finalizer test runtime: {error}"))?;
+        let finalizer_results =
+            runtime.block_on(super::execute_before_report_finalizers(plan, result))?;
         let final_success = result.summary.success
             && finalizer_results.failed == 0
             && finalizer_results.skipped == 0;
@@ -1382,6 +1895,77 @@ mod tests {
                 .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
                 .collect(),
         }
+    }
+
+    #[tokio::test]
+    async fn service_finally_waits_for_parallel_siblings_and_runs_once() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let events = temp.path().join("events");
+        let sibling_events = events.clone();
+        let mut pipeline = runkernel::Pipeline::new("finalizer-settlement-test")
+            .failure_policy(runkernel::FailurePolicy::FinishRunning);
+        pipeline.add(
+            runkernel::Task::new("task-a")
+                .cache_disabled()
+                .exec_fn(|_ctx| async move { anyhow::bail!("fails immediately") }),
+        );
+        pipeline.add(
+            runkernel::Task::new("task-b")
+                .cache_disabled()
+                .exec_fn(move |_ctx| {
+                    let sibling_events = sibling_events.clone();
+                    async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                        std::fs::write(&sibling_events, "finished\n")?;
+                        Ok(())
+                    }
+                }),
+        );
+        let result = pipeline.run().await.expect("pipeline result");
+        assert!(!result.summary.success);
+
+        let profile: crate::workflow::profile::WorkflowProfile =
+            toml::from_str("environment = \"test\"\nmode = \"build\"\nbuild = \"run\"\n")
+                .expect("profile");
+        let plan = crate::workflow::plan::WorkflowPlan {
+            profile: profile.normalize(false),
+            runner: RunnerContext::detect(true),
+            tasks: Vec::new(),
+            edges: Vec::new(),
+            build_plan: None,
+            image_push_plan: None,
+            finalizers: vec![crate::workflow::plan::WorkflowFinalizerPlan {
+                id: crate::workflow::task_id::service_finally("api"),
+                label: "Finalize api".to_string(),
+                kind: crate::workflow::plan::WorkflowFinalizerKind::RunServiceFinally {
+                    service: "api".to_string(),
+                    cwd: temp.path().to_path_buf(),
+                    commands: vec![format!(
+                        "printf 'cleanup-started\\n' >> '{}'",
+                        events.display()
+                    )],
+                },
+                phase: crate::workflow::plan::WorkflowFinalizerPhase::BeforeReport,
+                trigger: crate::workflow::plan::WorkflowFinalizerTrigger::Always,
+                effects: crate::workflow::plan::WorkflowEffects {
+                    mutates_filesystem: true,
+                    ..Default::default()
+                },
+                description: "cleanup".to_string(),
+            }],
+            effects: crate::workflow::plan::WorkflowEffects::default(),
+            cache_predictions: Default::default(),
+            signer_key_fingerprint: None,
+            deployment_state: crate::workflow::gate::DeploymentRunState::default(),
+        };
+        let finalizers = execute_before_report_finalizers(&plan, &result)
+            .await
+            .expect("finalizers");
+        assert_eq!(finalizers.completed, 1);
+        assert_eq!(
+            std::fs::read_to_string(events).expect("events"),
+            "finished\ncleanup-started\n"
+        );
     }
 
     #[test]
@@ -1456,6 +2040,7 @@ mod tests {
             deploy_context: None,
             namespace: None,
             approval: ApprovalMode::Prompt,
+            signature: None,
             apply: true,
             report: ReportMode::Text,
         };
@@ -1479,6 +2064,7 @@ mod tests {
                 dry_run: false,
                 apply: false,
             },
+            &crate::environment::Environment::new("test"),
         );
         assert!(res.is_err());
         assert!(res
@@ -1508,6 +2094,7 @@ mod tests {
             deploy_context: Some("prod-cluster".to_string()),
             namespace: None,
             approval: ApprovalMode::External,
+            signature: None,
             apply: true,
             report: ReportMode::Text,
         };
@@ -1531,6 +2118,7 @@ mod tests {
                 dry_run: false,
                 apply: false,
             },
+            &crate::environment::Environment::new("prod"),
         );
         assert!(res.is_err());
         // Since we added a check for apply=true in CI first, it'll hit that instead.
@@ -1559,6 +2147,7 @@ mod tests {
             deploy_context: Some("minikube".to_string()),
             namespace: None,
             approval: ApprovalMode::Prompt,
+            signature: None,
             apply: false,
             report: ReportMode::Text,
         };
@@ -1582,6 +2171,7 @@ mod tests {
                 dry_run: false,
                 apply: false,
             },
+            &crate::environment::Environment::new("local"),
         );
         assert!(res.is_err());
         assert!(res
@@ -1611,6 +2201,7 @@ mod tests {
             deploy_context: Some("minikube".to_string()),
             namespace: None,
             approval: ApprovalMode::Prompt,
+            signature: None,
             apply: false, // apply is false!
             report: ReportMode::Text,
         };
@@ -1634,6 +2225,7 @@ mod tests {
                 dry_run: false,
                 apply: false,
             },
+            &crate::environment::Environment::new("local"),
         );
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("deploy=run requires apply=true"));
@@ -1660,6 +2252,7 @@ mod tests {
             deploy_context: Some("staging".to_string()),
             namespace: Some("default".to_string()),
             approval: ApprovalMode::External,
+            signature: None,
             apply: true,
             report: ReportMode::Both,
         };
@@ -1681,8 +2274,76 @@ mod tests {
             apply: true,
         };
 
-        let res = validate_workflow_safety(&profile, &runner, &args);
+        let res = validate_workflow_safety(
+            &profile,
+            &runner,
+            &args,
+            &crate::environment::Environment::new("staging"),
+        );
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn explicit_environment_policy_controls_deployment_approval() {
+        use crate::environment::{DeploymentPolicy, RequiredDeploymentApproval};
+        use crate::workflow::profile::{ApprovalMode, SignatureApprovalConfig, WorkflowProfile};
+
+        let profile_toml = r#"
+            environment = "production"
+            mode = "deploy"
+            generate = "run"
+            deploy = "run"
+            deploy_context = "cluster"
+            approval = "external"
+            apply = true
+        "#;
+        let mut profile: WorkflowProfile = toml::from_str(profile_toml).expect("profile");
+        profile.name = "deploy".to_string();
+        let runner = RunnerContext {
+            kind: RunnerKind::Local,
+            ci: false,
+            interactive: false,
+            ci_environment: None,
+        };
+        let args = crate::cli::WorkflowRunArgs {
+            profile: "deploy".to_string(),
+            only: None,
+            ignore: None,
+            non_interactive: true,
+            plan: false,
+            dry_run: false,
+            apply: true,
+        };
+
+        let environment = crate::environment::Environment::new("production");
+        assert!(
+            validate_workflow_safety(&profile.normalize(false), &runner, &args, &environment,)
+                .is_ok()
+        );
+
+        let mut signature_required = crate::environment::Environment::new("anything");
+        signature_required.deployment_policy = DeploymentPolicy {
+            required_approval: Some(RequiredDeploymentApproval::Signature),
+        };
+        assert!(validate_workflow_safety(
+            &profile.normalize(false),
+            &runner,
+            &args,
+            &signature_required,
+        )
+        .is_err());
+
+        profile.approval = ApprovalMode::Signature;
+        profile.signature = Some(SignatureApprovalConfig {
+            trusted_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+        });
+        assert!(validate_workflow_safety(
+            &profile.normalize(false),
+            &runner,
+            &args,
+            &signature_required,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -2145,6 +2806,9 @@ mod tests {
         report.tasks.failed = 1;
         report.tasks.items.push(WorkflowReportTaskItem {
             name: crate::workflow::task_id::service_push("web"),
+            kind: crate::workflow::plan::WorkflowTaskKind::ServicePush,
+            service: Some("web".to_string()),
+            phase: Some("push".to_string()),
             status: WorkflowReportTaskStatus::Failed,
             error: Some("registry rejected push".to_string()),
         });
@@ -2159,6 +2823,79 @@ mod tests {
         plan.items.clear();
         plan.mutates_registry = false;
         report.validate().unwrap();
+    }
+
+    #[test]
+    fn signed_deployment_evidence_validates_success_and_failure_contracts() {
+        let digest = "a".repeat(64);
+        let mut evidence = DeploymentAuditEvidence {
+            schema: "sailr.audit/v1".to_string(),
+            plan_hash: "b".repeat(64),
+            signer_key_fingerprint: format!("sha256:{}", "c".repeat(64)),
+            verification_status: crate::workflow::gate::DeploymentVerificationStatus::Verified,
+            verification_error: None,
+            target: DeploymentTargetEvidence {
+                context: "kind".to_string(),
+                namespace: "default".to_string(),
+            },
+            manifests: vec![crate::deployment::bundle::ManifestDigest {
+                relative_path: "config.yaml".to_string(),
+                document_index: 0,
+                sha256: digest.clone(),
+            }],
+            applied_resources: vec![AppliedResourceEvidence {
+                sequence: 0,
+                api_version: "v1".to_string(),
+                kind: "ConfigMap".to_string(),
+                namespace: Some("default".to_string()),
+                name: "config".to_string(),
+                source_path: "config.yaml".to_string(),
+                document_index: 0,
+                sha256: digest,
+                previous_existed: false,
+            }],
+            rollback: None,
+        };
+        let payload = crate::deployment::bundle::ApprovalPayload {
+            schema: evidence.schema.clone(),
+            profile: "signed".to_string(),
+            environment: "test".to_string(),
+            target: crate::deployment::bundle::DeploymentTarget {
+                context: evidence.target.context.clone(),
+                namespace: evidence.target.namespace.clone(),
+            },
+            manifests: evidence.manifests.clone(),
+        };
+        evidence.plan_hash = {
+            use sha2::Digest;
+            hex::encode(sha2::Sha256::digest(
+                serde_json::to_vec(&payload).expect("payload"),
+            ))
+        };
+        validate_deployment_audit_evidence(&evidence, true, "signed", "test")
+            .expect("valid signed success");
+
+        evidence.verification_status = crate::workflow::gate::DeploymentVerificationStatus::Failed;
+        assert!(validate_deployment_audit_evidence(&evidence, false, "signed", "test").is_err());
+        evidence.applied_resources.clear();
+        evidence.verification_error = Some("wrong signer".to_string());
+        validate_deployment_audit_evidence(&evidence, false, "signed", "test")
+            .expect("valid signature failure");
+
+        evidence.verification_status =
+            crate::workflow::gate::DeploymentVerificationStatus::Verified;
+        evidence.applied_resources.push(AppliedResourceEvidence {
+            sequence: 2,
+            api_version: "v1".to_string(),
+            kind: "ConfigMap".to_string(),
+            namespace: Some("default".to_string()),
+            name: "other".to_string(),
+            source_path: "config.yaml".to_string(),
+            document_index: 0,
+            sha256: "a".repeat(64),
+            previous_existed: false,
+        });
+        assert!(validate_deployment_audit_evidence(&evidence, false, "signed", "test").is_err());
     }
 
     #[test]
@@ -2282,6 +3019,12 @@ mod tests {
             push_mode: crate::workflow::profile::WorkflowStepMode::Run,
             generate_mode: crate::workflow::profile::WorkflowStepMode::Disabled,
             deploy_mode: crate::workflow::profile::WorkflowStepMode::Disabled,
+            deploy_context: None,
+            namespace: "default".to_string(),
+            required_deployment_approval: None,
+            signer_key_fingerprint: None,
+            force: false,
+            finalizers: Vec::new(),
             registry_host: "ghcr.io".to_string(),
             registry_namespace: "acme/platform".to_string(),
             registry_prefix: "ghcr.io/acme/platform".to_string(),

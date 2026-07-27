@@ -8,7 +8,7 @@ use crate::roomservice::{
 use async_trait::async_trait;
 use checksums::{hash_file, Algorithm::BLAKE2S};
 use ignore::{overrides::OverrideBuilder, WalkBuilder};
-use runkernel::{FailurePolicy, Pipeline, PipelineEvent, PipelineResult, Task, TaskStatus};
+use runkernel::{FailurePolicy, Pipeline, PipelineEvent, PipelineResult, TaskStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -155,19 +155,15 @@ impl BuildBackend for RunkernelBuildBackend {
         }
 
         let policy = self.options.policy.clone().unwrap_or_default();
-        if policy.max_parallelism.is_some() {
-            crate::LOGGER.warn(
-                "warning: [build].max_parallelism is not yet enforced by the runkernel backend",
-            );
-        }
-
-        let failure_policy = if policy.fail_fast.unwrap_or(false) {
-            FailurePolicy::FailFast
-        } else {
-            FailurePolicy::FinishRunning
-        };
-        let mut pipeline = Pipeline::new(RUNKERNEL_PIPELINE_NAME).failure_policy(failure_policy);
-        add_runkernel_tasks(&mut pipeline, &plan)?;
+        let mut pipeline =
+            Pipeline::new(RUNKERNEL_PIPELINE_NAME).failure_policy(FailurePolicy::FinishRunning);
+        crate::workflow::translator::add_translated_tasks(
+            &mut pipeline,
+            &plan,
+            true,
+            None,
+            policy.max_parallelism,
+        );
         attach_pipeline_logging(&mut pipeline);
 
         let result = pipeline
@@ -176,10 +172,24 @@ impl BuildBackend for RunkernelBuildBackend {
             .map_err(|e| format!("runkernel build pipeline execution failed: {:?}", e))?;
 
         print_pipeline_result(&plan, &result);
+        let finalizer_errors = run_standalone_service_finalizers(&plan).await;
         if !result.summary.success {
-            return Err(format!(
+            let mut error = format!(
                 "runkernel build failed: {} failed, {} skipped, {} cancelled",
                 result.summary.failed, result.summary.skipped, result.summary.cancelled
+            );
+            if !finalizer_errors.is_empty() {
+                error.push_str(&format!(
+                    "; service finalizers failed: {}",
+                    finalizer_errors.join("; ")
+                ));
+            }
+            return Err(error);
+        }
+        if !finalizer_errors.is_empty() {
+            return Err(format!(
+                "service finalizers failed: {}",
+                finalizer_errors.join("; ")
             ));
         }
 
@@ -198,7 +208,8 @@ pub struct SailrBuildPlan {
     pub before_all: Vec<String>,
     pub after_all: Vec<String>,
     pub force: bool,
-    cache_dir: PathBuf,
+    pub max_parallelism: Option<usize>,
+    pub(crate) cache_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -213,7 +224,7 @@ pub struct ServiceBuildPlan {
     pub dirty: bool,
     pub dirty_reasons: Vec<DirtyReason>,
     pub fingerprint: ServiceFingerprint,
-    pub phases: ServicePhases,
+    pub(crate) phases: ServicePhases,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,14 +267,14 @@ struct ServiceCacheRecord {
 
 #[derive(Debug, Clone, Default)]
 pub struct ServicePhases {
-    before_synchronously: Vec<String>,
-    before: Vec<String>,
-    run_parallel: Vec<String>,
-    run_synchronously: Vec<String>,
-    build: Vec<String>,
-    push: Vec<String>,
-    after: Vec<String>,
-    finally: Vec<String>,
+    pub(crate) before_synchronously: Vec<String>,
+    pub(crate) before: Vec<String>,
+    pub(crate) run_parallel: Vec<String>,
+    pub(crate) run_synchronously: Vec<String>,
+    pub(crate) build: Vec<String>,
+    pub(crate) push: Vec<String>,
+    pub(crate) after: Vec<String>,
+    pub(crate) finally: Vec<String>,
 }
 
 impl ServicePhases {
@@ -332,8 +343,12 @@ pub(crate) fn create_sailr_build_plan(
             .include
             .clone()
             .unwrap_or_else(|| vec!["./**/*.*".to_string()]);
-        let matched_input_files =
-            resolve_input_files(&build.path, &input_patterns, &dependency_paths)?;
+        let matched_input_files = resolve_input_files(
+            &build.path,
+            &input_patterns,
+            build.ignore_cache.as_deref().unwrap_or_default(),
+            &dependency_paths,
+        )?;
         let source_hash = hash_files(&matched_input_files);
         let normalized = normalize_build_config(env, service, &build)?;
         let dependency_hash = hash_text(
@@ -428,15 +443,9 @@ pub(crate) fn create_sailr_build_plan(
         before_all,
         after_all,
         force: options.force,
+        max_parallelism: policy.max_parallelism,
         cache_dir,
     })
-}
-
-pub(crate) fn add_runkernel_tasks(
-    pipeline: &mut Pipeline,
-    plan: &SailrBuildPlan,
-) -> Result<(), String> {
-    add_runkernel_tasks_inner(pipeline, plan, None)
 }
 
 pub(crate) fn add_runkernel_tasks_from_workflow_plan(
@@ -444,198 +453,27 @@ pub(crate) fn add_runkernel_tasks_from_workflow_plan(
     plan: &SailrBuildPlan,
     workflow_tasks: &[crate::workflow::plan::WorkflowTaskPlan],
 ) -> Result<(), String> {
-    add_runkernel_tasks_inner(pipeline, plan, Some(workflow_tasks))
-}
-
-fn add_runkernel_tasks_inner(
-    pipeline: &mut Pipeline,
-    plan: &SailrBuildPlan,
-    workflow_tasks: Option<&[crate::workflow::plan::WorkflowTaskPlan]>,
-) -> Result<(), String> {
-    // Standalone builds (including `sailr go`) own image publication. Workflow
-    // runs model publication as separate, reportable `service:*:push` tasks.
-    let execute_push = workflow_tasks.is_none();
-    let dirty_services = plan
-        .services
+    let planned = workflow_tasks
         .iter()
-        .filter(|service| service.dirty)
-        .map(|service| service.service.name.clone())
-        .collect::<BTreeSet<_>>();
-    let has_dirty_services = !dirty_services.is_empty();
-    let has_before_all = has_dirty_services && !plan.before_all.is_empty();
-
-    let planned_task =
-        |id: &str| workflow_tasks.and_then(|tasks| tasks.iter().find(|task| task.id == id));
-
-    if has_before_all
-        && workflow_tasks
-            .is_none_or(|_| planned_task(crate::workflow::task_id::BUILD_BEFORE_ALL).is_some())
-    {
-        let commands = plan.before_all.clone();
-        let dependencies = planned_task(crate::workflow::task_id::BUILD_BEFORE_ALL)
-            .map(|task| task.dependencies.clone())
-            .unwrap_or_default();
-        pipeline.add(
-            Task::new(crate::workflow::task_id::BUILD_BEFORE_ALL)
-                .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
-                .cache_disabled()
-                .exec_fn(move |_ctx| {
-                    let commands = commands.clone();
-                    async move {
-                        for command in commands {
-                            exec_cmd(".", &command, crate::workflow::task_id::BUILD_BEFORE_ALL)
-                                .await
-                                .map_err(anyhow::Error::msg)?;
-                        }
-                        Ok(())
-                    }
-                }),
-        );
-    }
-
-    for service_plan in &plan.services {
-        let task_id = crate::workflow::task_id::service_build(&service_plan.service.name);
-        if workflow_tasks.is_some() && planned_task(&task_id).is_none() {
-            continue;
-        }
-        let mut dependencies: Vec<String> = if let Some(planned) = planned_task(&task_id) {
-            planned.dependencies.clone()
-        } else {
-            service_plan
-                .dependencies
-                .iter()
-                .map(|d| crate::workflow::task_id::service_build(d))
-                .collect()
-        };
-        if workflow_tasks.is_none() && service_plan.dirty && has_before_all {
-            dependencies.push(crate::workflow::task_id::BUILD_BEFORE_ALL.to_string());
-        }
-        dependencies.sort();
-        dependencies.dedup();
-
-        let mut task = Task::new(task_id)
-            .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
-            .cache_disabled();
-
-        if service_plan.dirty {
-            let service_name = service_plan.service.name.clone();
-            let cwd = service_plan.cwd.clone();
-            let phases = service_plan.phases.clone();
-            task = task.exec_fn(move |_ctx| {
-                let service_name = service_name.clone();
-                let cwd = cwd.clone();
-                let phases = phases.clone();
-                async move { execute_service_build(service_name, cwd, phases, execute_push).await }
-            });
-        }
-
-        pipeline.add(task);
-    }
-
-    if has_dirty_services
-        && !plan.after_all.is_empty()
-        && workflow_tasks
-            .is_none_or(|_| planned_task(crate::workflow::task_id::BUILD_AFTER_ALL).is_some())
-    {
-        let commands = plan.after_all.clone();
-        let dependencies = planned_task(crate::workflow::task_id::BUILD_AFTER_ALL)
-            .map(|task| task.dependencies.clone())
-            .unwrap_or_else(|| {
-                dirty_services
-                    .iter()
-                    .map(|service| crate::workflow::task_id::service_build(service))
-                    .collect()
-            });
-        pipeline.add(
-            Task::new(crate::workflow::task_id::BUILD_AFTER_ALL)
-                .depends_on(&dependencies.iter().map(String::as_str).collect::<Vec<_>>())
-                .cache_disabled()
-                .exec_fn(move |_ctx| {
-                    let commands = commands.clone();
-                    async move {
-                        for command in commands {
-                            exec_cmd(".", &command, crate::workflow::task_id::BUILD_AFTER_ALL)
-                                .await
-                                .map_err(anyhow::Error::msg)?;
-                        }
-                        Ok(())
-                    }
-                }),
-        );
-    }
-
+        .map(|task| (task.id.clone(), task.dependencies.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let translated = crate::workflow::translator::translate_build_plan(plan, false);
+    let has_phase_plan = planned.keys().any(|id| {
+        translated
+            .iter()
+            .any(|task| task.id == *id && task.phase != "service_complete")
+    });
+    crate::workflow::translator::add_translated_tasks(
+        pipeline,
+        plan,
+        false,
+        has_phase_plan.then_some(&planned),
+        plan.max_parallelism,
+    );
     Ok(())
 }
 
-async fn execute_service_build(
-    service_name: String,
-    cwd: PathBuf,
-    phases: ServicePhases,
-    execute_push: bool,
-) -> anyhow::Result<()> {
-    let cwd = cwd.to_string_lossy().to_string();
-    let mut started = false;
-    let mut first_error = None;
-
-    for (phase_name, commands) in phases.printable() {
-        if commands.is_empty() || phase_name == "finally" || (phase_name == "push" && !execute_push)
-        {
-            continue;
-        }
-        started = true;
-        if crate::LOGGER.is_verbose() {
-            crate::LOGGER.info(&format!(
-                "Executing phase: {} -> {}",
-                service_name, phase_name
-            ));
-        }
-
-        if phase_name == "run_parallel" {
-            let results = futures::future::join_all(
-                commands
-                    .iter()
-                    .map(|command| exec_cmd(&cwd, command, &service_name)),
-            )
-            .await;
-            if let Some(error) = results.into_iter().find_map(Result::err) {
-                first_error = Some(error);
-                break;
-            }
-        } else {
-            for command in commands {
-                if let Err(error) = exec_cmd(&cwd, command, &service_name).await {
-                    first_error = Some(error);
-                    break;
-                }
-            }
-            if first_error.is_some() {
-                break;
-            }
-        }
-    }
-
-    if started && !phases.finally.is_empty() {
-        if crate::LOGGER.is_verbose() {
-            crate::LOGGER.info(&format!("Executing finalizer: {} -> finally", service_name));
-        }
-        for command in phases.finally {
-            if let Err(error) = exec_cmd(&cwd, &command, &service_name).await {
-                crate::LOGGER.warn(&format!(
-                    "finalizer command failed for service {}: {}",
-                    service_name, error
-                ));
-            }
-        }
-    }
-
-    if let Some(error) = first_error {
-        anyhow::bail!("Service build failed: {}", error);
-    }
-
-    Ok(())
-}
-
-async fn exec_cmd(cwd: &str, cmd: &str, name: &str) -> Result<(), String> {
+pub(crate) async fn exec_cmd(cwd: &str, cmd: &str, name: &str) -> Result<(), String> {
     let child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -681,6 +519,19 @@ async fn exec_cmd(cwd: &str, cmd: &str, name: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+async fn run_standalone_service_finalizers(plan: &SailrBuildPlan) -> Vec<String> {
+    let mut errors = Vec::new();
+    for service in plan.services.iter().rev().filter(|service| service.dirty) {
+        let cwd = service.cwd.to_string_lossy().to_string();
+        for command in &service.phases.finally {
+            if let Err(error) = exec_cmd(&cwd, command, &service.service.name).await {
+                errors.push(format!("{}: {error}", service.service.name));
+            }
+        }
+    }
+    errors
 }
 
 pub fn split_matches(val: Option<String>) -> Vec<String> {
@@ -1099,12 +950,17 @@ fn command_spec_to_shell(command: CommandSpec) -> String {
 fn resolve_input_files(
     path: &str,
     include: &[String],
+    ignore_cache: &[String],
     dependency_paths: &[String],
 ) -> Result<Vec<PathBuf>, String> {
-    let mut files = walk_file_paths(Path::new(path), Some(include))?;
+    let mut files = walk_file_paths(Path::new(path), Some(include), ignore_cache)?;
 
     for dependency_path in dependency_paths {
-        files.extend(walk_file_paths(Path::new(dependency_path), None)?);
+        files.extend(walk_file_paths(
+            Path::new(dependency_path),
+            None,
+            ignore_cache,
+        )?);
     }
 
     files.sort();
@@ -1112,27 +968,41 @@ fn resolve_input_files(
     Ok(files)
 }
 
-fn walk_file_paths(root: &Path, include: Option<&[String]>) -> Result<Vec<PathBuf>, String> {
+fn walk_file_paths(
+    root: &Path,
+    include: Option<&[String]>,
+    ignore_cache: &[String],
+) -> Result<Vec<PathBuf>, String> {
     if !root.exists() {
         return Err(format!("Build path does not exist: {}", root.display()));
     }
 
     let mut builder = WalkBuilder::new(root);
-    if let Some(include) = include {
-        if !include.is_empty() {
-            let mut overrides = OverrideBuilder::new(root);
+    if include.is_some_and(|patterns| !patterns.is_empty()) || !ignore_cache.is_empty() {
+        let mut overrides = OverrideBuilder::new(root);
+        if let Some(include) = include {
             for pattern in include {
                 let clean_pattern = pattern.trim_start_matches("./");
                 overrides.add(clean_pattern).map_err(|error| {
                     format!("Failed to parse include pattern '{}': {}", pattern, error)
                 })?;
             }
-            builder.overrides(
-                overrides
-                    .build()
-                    .map_err(|error| format!("Failed to build include overrides: {}", error))?,
-            );
         }
+        for pattern in ignore_cache {
+            let clean_pattern = pattern.trim_start_matches("./").trim_start_matches('!');
+            let exclusion = format!("!{clean_pattern}");
+            overrides.add(&exclusion).map_err(|error| {
+                format!(
+                    "Failed to parse ignore_cache pattern '{}': {}",
+                    pattern, error
+                )
+            })?;
+        }
+        builder.overrides(
+            overrides
+                .build()
+                .map_err(|error| format!("Failed to build cache input overrides: {}", error))?,
+        );
     }
 
     let mut files = Vec::new();
@@ -1189,13 +1059,26 @@ pub(crate) fn write_successful_service_caches(
     let completed_tasks = result
         .tasks
         .iter()
-        .filter(|task| matches!(task.status, TaskStatus::Completed))
+        .filter(|task| matches!(task.status, TaskStatus::Completed | TaskStatus::Cached))
         .map(|task| task.name.as_str())
         .collect::<HashSet<_>>();
 
     for service in plan.services.iter().filter(|service| service.dirty) {
-        let task_name = crate::workflow::task_id::service_build(&service.service.name);
-        if !completed_tasks.contains(task_name.as_str()) {
+        let standalone_terminal = crate::workflow::translator::terminal_task_for_service(
+            plan,
+            &service.service.name,
+            true,
+        );
+        let workflow_terminal = crate::workflow::translator::terminal_task_for_service(
+            plan,
+            &service.service.name,
+            false,
+        );
+        if !standalone_terminal
+            .iter()
+            .chain(workflow_terminal.iter())
+            .any(|task| completed_tasks.contains(task.as_str()))
+        {
             continue;
         }
 
@@ -1498,6 +1381,7 @@ mod tests {
         ServiceBuildConfig {
             path: path.to_string_lossy().to_string(),
             include: Some(vec!["./**/*.*".to_string()]),
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1761,6 +1645,26 @@ mod tests {
         assert!(plan.services[0].dirty_reasons.contains(&DirtyReason::Force));
     }
 
+    #[test]
+    fn ignore_cache_excludes_matching_files_from_runkernel_inputs() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let service_path = temp.path().join("api");
+        write_project(&service_path);
+        fs::create_dir_all(service_path.join("dist")).unwrap();
+        fs::write(service_path.join("dist/bundle.js"), "generated").unwrap();
+
+        let mut api = service("api", &service_path, "true".to_string());
+        api.build.as_mut().unwrap().ignore_cache = Some(vec!["dist/**".to_string()]);
+        let mut env = Environment::new("dev");
+        env.services = vec![api];
+
+        let plan = create_sailr_build_plan(&env, &options(temp.path().join(".sailr/cache/build")))
+            .unwrap();
+        let inputs = &plan.services[0].matched_input_files;
+        assert!(inputs.iter().any(|path| path.ends_with("src/index.js")));
+        assert!(!inputs.iter().any(|path| path.ends_with("dist/bundle.js")));
+    }
+
     #[tokio::test]
     async fn runkernel_dry_run_does_not_execute_commands() {
         let temp = TempDir::new().expect("tempdir should be created");
@@ -1860,6 +1764,9 @@ mod tests {
             id: task_id,
             label: "Build api".to_string(),
             kind: crate::workflow::plan::WorkflowTaskKind::ServiceBuild,
+            cache_policy: crate::workflow::plan::WorkflowTaskCachePolicy::Disabled,
+            service: Some("api".to_string()),
+            phase: Some("service_complete".to_string()),
             dependencies: Vec::new(),
             effects: crate::workflow::plan::WorkflowEffects {
                 mutates_docker: true,
@@ -2115,12 +2022,14 @@ mod tests {
             before_all: vec![],
             after_all: vec![],
             force: false,
+            max_parallelism: None,
             cache_dir: PathBuf::from(".sailr/cache/build"),
         };
 
         let dummy_build_config = crate::environment::ServiceBuildConfig {
             path: ".".to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,

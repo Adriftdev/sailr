@@ -60,6 +60,10 @@ pub struct WorkflowProfile {
     #[serde(default)]
     pub approval: ApprovalMode,
 
+    /// Trusted signer configuration for cryptographic deployment approval.
+    #[serde(default)]
+    pub signature: Option<SignatureApprovalConfig>,
+
     /// Whether to apply changes (mutate the cluster).
     #[serde(default)]
     pub apply: Option<bool>,
@@ -209,6 +213,7 @@ impl WorkflowProfile {
             deploy_context: self.deploy_context.clone(),
             namespace: self.namespace.clone(),
             approval,
+            signature: self.signature.clone(),
             apply,
             report: self.report,
         }
@@ -232,8 +237,14 @@ pub struct NormalizedWorkflowProfile {
     pub deploy_context: Option<String>,
     pub namespace: Option<String>,
     pub approval: ApprovalMode,
+    pub signature: Option<SignatureApprovalConfig>,
     pub apply: bool,
     pub report: ReportMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignatureApprovalConfig {
+    pub trusted_public_key: String,
 }
 
 fn default_engine() -> WorkflowEngine {
@@ -355,6 +366,8 @@ pub enum ApprovalMode {
     Prompt,
     /// CI provider or external system handles approval.
     External,
+    /// An Ed25519 signature over the immutable deployment plan is required.
+    Signature,
     /// Command must include `--approve` or `--apply`.
     RequireFlag,
 }
@@ -365,6 +378,7 @@ impl ApprovalMode {
             Self::None => "none",
             Self::Prompt => "prompt",
             Self::External => "external",
+            Self::Signature => "signature",
             Self::RequireFlag => "require-flag",
         }
     }
@@ -581,6 +595,7 @@ mod tests {
             ("none", ApprovalMode::None),
             ("prompt", ApprovalMode::Prompt),
             ("external", ApprovalMode::External),
+            ("signature", ApprovalMode::Signature),
             ("require-flag", ApprovalMode::RequireFlag),
         ] {
             let toml_str = format!(
@@ -592,6 +607,32 @@ mod tests {
             let profile: WorkflowProfile = toml::from_str(&toml_str).unwrap();
             assert_eq!(profile.approval, expected, "failed for input: {}", input);
         }
+    }
+
+    #[test]
+    fn signature_profile_parses_configured_trusted_signer() {
+        let profile: WorkflowProfile = toml::from_str(
+            r#"
+            environment = "production"
+            mode = "deploy"
+            generate = "run"
+            deploy = "run"
+            approval = "signature"
+            apply = true
+
+            [signature]
+            trusted_public_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            "#,
+        )
+        .expect("signature profile");
+        assert_eq!(profile.approval, ApprovalMode::Signature);
+        assert_eq!(
+            profile
+                .signature
+                .as_ref()
+                .map(|signature| signature.trusted_public_key.as_str()),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        );
     }
 
     #[test]
