@@ -421,6 +421,7 @@ impl Environment {
             let mapped_build = ServiceBuildConfig {
                 path,
                 include: Some(vec![include]),
+                ignore_cache: None,
                 relies_on: None,
                 before_synchronous: before_synchronous.map(CommandSpec::Single),
                 before: None,
@@ -706,7 +707,10 @@ impl Environment {
         Ok(migrated)
     }
 
-    pub fn migrate_file_to_v05(name: &String) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn migrate_file_to_v05(
+        name: &String,
+        engine: Option<BuildEngine>,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let filemanager = filesystem::FileSystemManager::new(
             Path::new("./k8s/environments")
                 .join(name)
@@ -716,7 +720,15 @@ impl Environment {
         );
 
         let contents = filemanager.read_file(&"config.toml".to_string(), None)?;
-        let migrated = Self::migrate_contents_to_v05(&contents)?;
+        let mut migrated = Self::migrate_contents_to_v05(&contents)?;
+        if let Some(engine) = engine {
+            let mut document = migrated.parse::<toml_edit::DocumentMut>()?;
+            document["build"]["engine"] = toml_edit::value(match engine {
+                BuildEngine::Roomservice => "roomservice",
+                BuildEngine::Runkernel => "runkernel",
+            });
+            migrated = document.to_string();
+        }
         filemanager.create_file(&"config.toml".to_string(), &migrated)?;
         Ok(migrated)
     }
@@ -992,6 +1004,7 @@ where
         Some(Value::String(path)) => Ok(Some(ServiceBuildConfig {
             path,
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1101,6 +1114,12 @@ pub struct ServiceBuildConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub include: Option<Vec<String>>,
+    #[serde(
+        default,
+        alias = "ignoreCache",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ignore_cache: Option<Vec<String>>,
     #[serde(default, alias = "depends_on", skip_serializing_if = "Option::is_none")]
     pub relies_on: Option<Vec<String>>,
     #[serde(
@@ -1312,6 +1331,7 @@ mod tests {
             Some(ServiceBuildConfig {
                 path: "./services/api".to_string(),
                 include: None,
+                ignore_cache: None,
                 relies_on: None,
                 before_synchronous: None,
                 before: None,

@@ -1,4 +1,4 @@
-use runkernel::{Pipeline, Task};
+use runkernel::{FailurePolicy, Pipeline, RollbackPolicy, Task};
 
 use crate::builder::{
     add_runkernel_tasks_from_workflow_plan, create_sailr_build_plan, BuildOptions, SailrBuildPlan,
@@ -213,89 +213,45 @@ impl WorkflowPlanner {
             crate::workflow::profile::WorkflowStepMode::Run => {
                 let plan = create_sailr_build_plan(&self.env, &self.options)?;
                 build_plan_opt = Some(plan.clone());
-
-                let dirty_services = plan
-                    .services
+                let translated = crate::workflow::translator::translate_build_plan(&plan, false);
+                let translated_ids = translated
                     .iter()
-                    .filter(|service| service.dirty)
-                    .map(|service| service.service.name.as_str())
+                    .map(|task| task.id.clone())
                     .collect::<std::collections::BTreeSet<_>>();
-                let has_before_all = !dirty_services.is_empty() && !plan.before_all.is_empty();
+                let depended_on = translated
+                    .iter()
+                    .flat_map(|task| task.dependencies.iter().cloned())
+                    .collect::<std::collections::BTreeSet<_>>();
 
-                if has_before_all {
-                    tasks.push(WorkflowTaskPlan {
-                        id: crate::workflow::task_id::BUILD_BEFORE_ALL.to_string(),
-                        label: "Before All Build Hooks".to_string(),
-                        kind: WorkflowTaskKind::ServiceBuild,
-                        dependencies: vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()],
-                        effects: WorkflowEffects {
-                            mutates_filesystem: true,
-                            ..Default::default()
-                        },
-                        description: "Runs before-all build hooks.".to_string(),
-                    });
-                }
-
-                let mut build_tasks = Vec::new();
-                for s in &plan.services {
-                    if s.dirty {
-                        let service_effects = WorkflowEffects {
-                            mutates_docker: true,
-                            ..Default::default()
-                        };
-                        let task_id = crate::workflow::task_id::service_build(&s.service.name);
-                        let mut dependencies = s
-                            .dependencies
-                            .iter()
-                            .filter(|dependency| dirty_services.contains(dependency.as_str()))
-                            .map(|dependency| crate::workflow::task_id::service_build(dependency))
-                            .collect::<Vec<_>>();
-                        if has_before_all {
-                            dependencies
-                                .push(crate::workflow::task_id::BUILD_BEFORE_ALL.to_string());
-                        }
-                        if dependencies.is_empty() {
-                            dependencies
-                                .push(crate::workflow::task_id::VALIDATE_CONFIG.to_string());
-                        }
-                        dependencies.sort();
-                        dependencies.dedup();
-
-                        tasks.push(WorkflowTaskPlan {
-                            id: task_id.clone(),
-                            label: format!("Build {}", s.service.name),
-                            kind: WorkflowTaskKind::ServiceBuild,
-                            dependencies,
-                            effects: service_effects,
-                            description: format!(
-                                "Builds the local Docker image for {}.",
-                                s.service.name
-                            ),
-                        });
-                        build_tasks.push(task_id);
+                for translated_task in &translated {
+                    let mut dependencies = translated_task.dependencies.clone();
+                    if dependencies.is_empty() {
+                        dependencies.push(crate::workflow::task_id::VALIDATE_CONFIG.to_string());
                     }
-                }
-
-                if build_tasks.is_empty() {
-                    build_tasks = vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()];
-                }
-
-                if !dirty_services.is_empty() && !plan.after_all.is_empty() {
                     tasks.push(WorkflowTaskPlan {
-                        id: crate::workflow::task_id::BUILD_AFTER_ALL.to_string(),
-                        label: "After All Build Hooks".to_string(),
+                        id: translated_task.id.clone(),
+                        label: translated_task.label.clone(),
                         kind: WorkflowTaskKind::ServiceBuild,
-                        dependencies: build_tasks.clone(),
+                        dependencies,
                         effects: WorkflowEffects {
-                            mutates_filesystem: true,
+                            mutates_filesystem: translated_task.service.is_none(),
+                            mutates_docker: translated_task.service.is_some(),
                             ..Default::default()
                         },
-                        description: "Runs after-all build hooks.".to_string(),
+                        description: format!(
+                            "Runs deterministic build phase '{}'.",
+                            translated_task.phase
+                        ),
                     });
-                    build_tasks = vec![crate::workflow::task_id::BUILD_AFTER_ALL.to_string()];
                 }
 
-                last_tasks = build_tasks;
+                last_tasks = translated_ids
+                    .difference(&depended_on)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if last_tasks.is_empty() {
+                    last_tasks = vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()];
+                }
             }
         }
 
@@ -358,8 +314,16 @@ impl WorkflowPlanner {
                     {
                         let mut dependencies =
                             vec![crate::workflow::task_id::PUSH_PLAN.to_string()];
-                        let build_task = crate::workflow::task_id::service_build(&item.service);
-                        if tasks.iter().any(|task| task.id == build_task) {
+                        let build_task = build_plan_opt.as_ref().and_then(|build_plan| {
+                            crate::workflow::translator::terminal_task_for_service(
+                                build_plan,
+                                &item.service,
+                                false,
+                            )
+                        });
+                        if let Some(build_task) =
+                            build_task.filter(|id| tasks.iter().any(|task| task.id == *id))
+                        {
                             dependencies.push(build_task);
                         }
                         dependencies.sort();
@@ -452,6 +416,20 @@ impl WorkflowPlanner {
                     last_tasks = vec![crate::workflow::task_id::APPROVAL.to_string()];
                 }
 
+                if self.profile.approval == crate::workflow::profile::ApprovalMode::Signature {
+                    tasks.push(WorkflowTaskPlan {
+                        id: crate::workflow::task_id::VERIFICATION_GATE.to_string(),
+                        label: "Cryptographic Verification Gate".to_string(),
+                        kind: WorkflowTaskKind::VerificationGate,
+                        dependencies: last_tasks.clone(),
+                        effects: WorkflowEffects::default(),
+                        description:
+                            "Verifies an Ed25519 signature over the immutable deployment plan."
+                                .to_string(),
+                    });
+                    last_tasks = vec![crate::workflow::task_id::VERIFICATION_GATE.to_string()];
+                }
+
                 if self.profile.apply {
                     tasks.push(WorkflowTaskPlan {
                         id: crate::workflow::task_id::DEPLOY.to_string(),
@@ -532,6 +510,7 @@ impl WorkflowPlanner {
             image_push_plan: image_push_plan_opt,
             finalizers,
             effects,
+            cache_predictions: std::collections::BTreeMap::new(),
         })
     }
 
@@ -599,6 +578,13 @@ impl WorkflowPlanner {
         accumulator: crate::workflow::image::WorkflowReportAccumulator,
     ) -> Result<(Pipeline, WorkflowBuildExecution), String> {
         let mut pipeline = Pipeline::new(format!("Workflow: {}", self.profile.name));
+        if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
+            && self.profile.apply
+        {
+            pipeline = pipeline
+                .failure_policy(FailurePolicy::FailFast)
+                .rollback_policy(RollbackPolicy::CompletedTasksReverseOrder);
+        }
         let mut build_execution = WorkflowBuildExecution::None;
 
         let validate_task = runtime_task(plan, crate::workflow::task_id::VALIDATE_CONFIG)?.exec_fn(
@@ -811,15 +797,31 @@ impl WorkflowPlanner {
             let mut task = runtime_task(plan, crate::workflow::task_id::GENERATE)?;
 
             let name = self.profile.environment.clone();
+            let environment_input =
+                format!("k8s/environments/{}/config.toml", self.profile.environment);
+            task = task
+                .inputs(&["k8s/templates/**/*.yaml", environment_input.as_str()])
+                .cache_key("sailr-manifest-generator-v1");
             let only = self.options.only.clone();
             let ignore = self.options.ignore.clone();
             let env_clone = self.env.clone();
+            let profile_name = self.profile.name.clone();
+            let deploy_context = self.profile.deploy_context.clone().unwrap_or_default();
+            let namespace = self
+                .profile
+                .namespace
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            let produce_audit_artifact = self.profile.deploy.is_active();
 
-            task = task.exec_fn(move |_ctx| {
+            task = task.exec_fn(move |ctx| {
                 let name = name.clone();
                 let only = only.clone();
                 let ignore = ignore.clone();
                 let env_clone = env_clone.clone();
+                let profile_name = profile_name.clone();
+                let deploy_context = deploy_context.clone();
+                let namespace = namespace.clone();
                 async move {
                     crate::LOGGER.info("Generating Kubernetes manifests...");
 
@@ -831,6 +833,19 @@ impl WorkflowPlanner {
 
                     crate::generate(&name, &env_clone, services)
                         .map_err(|e| anyhow::anyhow!("Generate failed: {}", e))?;
+
+                    if produce_audit_artifact {
+                        let artifact = crate::workflow::gate::build_and_write_artifact(
+                            &profile_name,
+                            &name,
+                            &deploy_context,
+                            &namespace,
+                        )?;
+                        ctx.set_output(
+                            crate::workflow::gate::MANIFEST_HASH_OUTPUT,
+                            artifact.plan_hash,
+                        )?;
+                    }
 
                     Ok(())
                 }
@@ -916,6 +931,26 @@ impl WorkflowPlanner {
                 pipeline.add(task);
             }
 
+            if self.profile.approval == crate::workflow::profile::ApprovalMode::Signature {
+                let gate_plan = plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == crate::workflow::task_id::VERIFICATION_GATE)
+                    .ok_or_else(|| {
+                        "Signature approval selected but verification gate is missing".to_string()
+                    })?;
+                pipeline.add(crate::workflow::gate::build_verification_task(
+                    &gate_plan.dependencies,
+                    self.profile.name.clone(),
+                    self.profile.environment.clone(),
+                    self.profile.deploy_context.clone().unwrap_or_default(),
+                    self.profile
+                        .namespace
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                ));
+            }
+
             if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
                 && self.profile.apply
             {
@@ -923,27 +958,68 @@ impl WorkflowPlanner {
 
                 let context = self.profile.deploy_context.clone().unwrap_or_default();
                 let env_name = self.profile.environment.clone();
+                let profile_name = self.profile.name.clone();
+                let namespace = self
+                    .profile
+                    .namespace
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string());
+                let verify_immutable =
+                    self.profile.approval == crate::workflow::profile::ApprovalMode::Signature;
+                let journal = crate::deployment::new_deployment_journal();
+                let rollback_journal = journal.clone();
 
-                task = task.exec_fn(move |_ctx| {
+                task = task
+                    .exec_fn(move |ctx| {
                     let context = context.clone();
                     let env_name = env_name.clone();
+                    let profile_name = profile_name.clone();
+                    let namespace = namespace.clone();
+                    let journal = journal.clone();
 
                     async move {
+                        if verify_immutable {
+                            let expected: String = ctx.output_from(
+                                crate::workflow::task_id::GENERATE,
+                                crate::workflow::gate::MANIFEST_HASH_OUTPUT,
+                            )?;
+                            let current = crate::workflow::gate::build_artifact(
+                                &crate::workflow::gate::generated_manifest_root(&env_name),
+                                &profile_name,
+                                &env_name,
+                                &context,
+                                &namespace,
+                            )?;
+                            if current.plan_hash != expected {
+                                anyhow::bail!(
+                                    "AUDIT FAILURE: Deployment plan changed after signature verification"
+                                );
+                            }
+                        }
                         crate::LOGGER.info(&format!(
                             "Deploying environment '{}' to context '{}'...",
                             env_name, context
                         ));
-                        crate::deployment::deploy(
+                        crate::deployment::deploy_transactional(
                             context,
                             &env_name,
                             crate::cli::DeploymentStrategy::Rolling,
+                            journal,
                         )
                         .await
                         .map_err(|e| anyhow::anyhow!("Deploy failed: {}", e))?;
 
                         Ok(())
                     }
-                });
+                })
+                    .rollback(move |_ctx| {
+                        let rollback_journal = rollback_journal.clone();
+                        async move {
+                            crate::deployment::rollback_transaction(&rollback_journal)
+                                .await
+                                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                        }
+                    });
 
                 pipeline.add(task);
             }
@@ -1034,6 +1110,7 @@ mod tests {
         svc.build = Some(crate::environment::ServiceBuildConfig {
             path: temp_dir.path().to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1073,6 +1150,7 @@ mod tests {
         svc.build = Some(crate::environment::ServiceBuildConfig {
             path: _temp_dir.path().to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1112,6 +1190,7 @@ mod tests {
         svc.build = Some(crate::environment::ServiceBuildConfig {
             path: _temp_dir.path().to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1156,6 +1235,40 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(task_names, expected);
+    }
+
+    #[test]
+    fn signature_deploy_inserts_uncached_gate_before_deploy() {
+        let env = Environment::new("local");
+        let mut profile = dummy_profile(WorkflowStepMode::Run, WorkflowStepMode::Disabled);
+        profile.approval = ApprovalMode::Signature;
+        profile.apply = true;
+        profile.deploy_context = Some("minikube".to_string());
+        let planner =
+            WorkflowPlanner::new(profile, Arc::new(env), dummy_options(false), dummy_runner());
+        let plan = planner.plan().unwrap();
+        let deploy = plan
+            .tasks
+            .iter()
+            .find(|task| task.id == crate::workflow::task_id::DEPLOY)
+            .unwrap();
+        assert_eq!(
+            deploy.dependencies,
+            vec![crate::workflow::task_id::VERIFICATION_GATE]
+        );
+
+        let (pipeline, _) = planner
+            .build_pipeline_from_plan(&plan, Default::default())
+            .unwrap();
+        let gate = pipeline
+            .task(crate::workflow::task_id::VERIFICATION_GATE)
+            .unwrap();
+        assert!(!gate.cacheable());
+        assert_eq!(pipeline.failure_policy, FailurePolicy::FailFast);
+        assert_eq!(
+            pipeline.rollback_policy,
+            RollbackPolicy::CompletedTasksReverseOrder
+        );
     }
 }
 
@@ -1265,6 +1378,7 @@ mod tests_addendum {
         service.build = Some(crate::environment::ServiceBuildConfig {
             path: temp.path().to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1386,6 +1500,7 @@ mod tests_addendum {
         service.build = Some(crate::environment::ServiceBuildConfig {
             path: service_path.to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,

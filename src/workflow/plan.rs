@@ -2,6 +2,7 @@ use crate::builder::SailrBuildPlan;
 use crate::workflow::profile::NormalizedWorkflowProfile;
 use crate::workflow::runner::RunnerContext;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct WorkflowPlan {
@@ -13,6 +14,7 @@ pub struct WorkflowPlan {
     pub image_push_plan: Option<crate::workflow::image::ImagePushPlanReport>,
     pub finalizers: Vec<WorkflowFinalizerPlan>,
     pub effects: WorkflowEffects,
+    pub cache_predictions: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -69,6 +71,7 @@ pub enum WorkflowTaskKind {
     Deploy,
     Verify,
     Approval,
+    VerificationGate,
 }
 
 #[derive(Debug, Clone)]

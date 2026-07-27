@@ -355,6 +355,8 @@ pub enum ApprovalMode {
     Prompt,
     /// CI provider or external system handles approval.
     External,
+    /// An Ed25519 signature over the immutable deployment plan is required.
+    Signature,
     /// Command must include `--approve` or `--apply`.
     RequireFlag,
 }
@@ -365,6 +367,7 @@ impl ApprovalMode {
             Self::None => "none",
             Self::Prompt => "prompt",
             Self::External => "external",
+            Self::Signature => "signature",
             Self::RequireFlag => "require-flag",
         }
     }
@@ -581,6 +584,7 @@ mod tests {
             ("none", ApprovalMode::None),
             ("prompt", ApprovalMode::Prompt),
             ("external", ApprovalMode::External),
+            ("signature", ApprovalMode::Signature),
             ("require-flag", ApprovalMode::RequireFlag),
         ] {
             let toml_str = format!(

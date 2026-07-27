@@ -37,6 +37,7 @@ Roomservice remains the default build backend. Use runkernel when you want to tr
 sailr build --name dev --engine runkernel --plan
 sailr build --name dev --engine runkernel --explain
 sailr build --name dev --engine runkernel
+sailr migrate --name dev --engine runkernel
 ```
 
 You can also opt in through config:
@@ -57,6 +58,10 @@ Or remove `[build].engine = "runkernel"` from `config.toml`; the default backend
 
 ## Known limitations
 
-- `[build].max_parallelism` is accepted but not enforced by the runkernel backend yet.
-- runkernel currently uses service-level tasks, not phase-level graph nodes.
-- `sailr workflow graph` and `sailr workflow explain` are planned for a later release.
+- Roomservice remains the default unless `--engine runkernel` or `[build].engine = "runkernel"` is selected.
+- Deployment hooks can have external side effects and are not automatically reversible.
+- runkernel cache metadata is stored under `.runkernel/cache`; Sailr build outcome records remain under `.sailr/cache/build`.
+
+The runkernel translator exposes command phases as deterministic graph nodes such as
+`service:api:run_parallel:0` and retains `service:api:build` as the service completion node.
+`max_parallelism` is enforced across command phase nodes.

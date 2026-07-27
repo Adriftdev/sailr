@@ -601,12 +601,19 @@ fn build_workflow_report(
     let task_items = result
         .tasks
         .iter()
+        .filter(|task| !is_internal_build_phase_task(&task.name))
         .map(|task| WorkflowReportTaskItem {
             name: task.name.clone(),
             status: WorkflowReportTaskStatus::from(&task.status),
             error: task.error.clone(),
         })
         .collect::<Vec<_>>();
+    let count_status = |status: WorkflowReportTaskStatus| {
+        task_items
+            .iter()
+            .filter(|task| task.status == status)
+            .count()
+    };
 
     let published_artifacts = report_data.published_artifacts.clone();
     for artifact in &published_artifacts {
@@ -627,12 +634,12 @@ fn build_workflow_report(
         success: final_success,
         effects: plan.effects.clone(),
         tasks: WorkflowReportTasks {
-            completed: result.summary.completed,
-            failed: result.summary.failed,
-            skipped: result.summary.skipped,
-            cancelled: result.summary.cancelled,
-            cached: result.summary.cached,
-            rolled_back: result.summary.rolled_back,
+            completed: count_status(WorkflowReportTaskStatus::Completed),
+            failed: count_status(WorkflowReportTaskStatus::Failed),
+            skipped: count_status(WorkflowReportTaskStatus::Skipped),
+            cancelled: count_status(WorkflowReportTaskStatus::Cancelled),
+            cached: count_status(WorkflowReportTaskStatus::Cached),
+            rolled_back: count_status(WorkflowReportTaskStatus::RolledBack),
             rollback_failed: result.summary.rollback_failed,
             items: task_items,
         },
@@ -660,6 +667,24 @@ fn build_workflow_report(
 
     report.validate().map_err(|error| error.to_string())?;
     Ok(report)
+}
+
+fn is_internal_build_phase_task(name: &str) -> bool {
+    let parts = name.split(':').collect::<Vec<_>>();
+    parts.len() == 4
+        && parts[0] == "service"
+        && parts[3].parse::<usize>().is_ok()
+        && matches!(
+            parts[2],
+            "before_synchronous"
+                | "before"
+                | "run_parallel"
+                | "run_synchronous"
+                | "build"
+                | "push"
+                | "after"
+                | "finally"
+        )
 }
 
 fn write_workflow_report_document(
@@ -830,17 +855,29 @@ pub fn validate_workflow_safety(
             return Err("deploy=run requires an explicit real deploy_context".to_string());
         }
 
-        if profile.environment == "production" {
-            return Err("production deploy is not enabled in this stage".to_string());
+        if profile.environment == "production"
+            && profile.approval != crate::workflow::profile::ApprovalMode::Signature
+        {
+            return Err("production deploy requires approval=signature".to_string());
+        }
+
+        if profile.approval == crate::workflow::profile::ApprovalMode::Signature
+            && !profile.generate.is_active()
+        {
+            return Err("approval=signature requires generate to be enabled".to_string());
         }
 
         if runner.ci {
-            if profile.approval != crate::workflow::profile::ApprovalMode::External {
+            if !matches!(
+                profile.approval,
+                crate::workflow::profile::ApprovalMode::External
+                    | crate::workflow::profile::ApprovalMode::Signature
+            ) {
                 let msg = match runner.kind {
                     RunnerKind::CircleCi => "CI deploy requires approval=external.\n\nDetected CircleCI.\nAdd approval = \"external\" to [workflow.ci-build-push] and gate the mutating CircleCI job behind:\n\n  approve_image_push:\n    type: approval",
                     RunnerKind::GitHubActions => "CI deploy requires approval=external.\n\nDetected GitHub Actions.\nAdd approval = \"external\" to [workflow.ci-build-push] and run the job behind a protected GitHub Environment.",
                     RunnerKind::Travis => "CI deploy requires approval=external.\n\nDetected Travis.\nAdd approval = \"external\" to [workflow.ci-build-push] and guard the mutating job with branch and environment variable conditions.",
-                    _ => "CI deploy requires approval=external",
+                    _ => "CI deploy requires approval=external or approval=signature",
                 };
                 return Err(msg.to_string());
             }
@@ -1027,7 +1064,6 @@ impl WorkflowRunner {
             runner_ctx.clone(),
         );
         let plan = planner.plan()?;
-
         let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
         let (mut pipeline, build_execution) =
             planner.build_pipeline_from_plan(&plan, accumulator.clone())?;
@@ -1227,7 +1263,29 @@ impl WorkflowRunner {
             options,
             runner_ctx.clone(),
         );
-        let plan = planner.plan()?;
+        let mut plan = planner.plan()?;
+        let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
+        let (pipeline, _) = planner.build_pipeline_from_plan(&plan, accumulator)?;
+        pipeline
+            .graph()
+            .map_err(|error| format!("Invalid workflow graph: {error}"))?;
+        let cache_manager = runkernel::cache::CacheManager::for_pipeline(pipeline.name());
+        for task in pipeline.tasks() {
+            let status = match cache_manager
+                .compute_hash(pipeline.name(), task)
+                .map_err(|error| format!("Failed to predict task cache: {error}"))?
+            {
+                runkernel::cache::CacheEligibility::Disabled(_) => "RUN",
+                runkernel::cache::CacheEligibility::Enabled { hash, .. } => {
+                    match cache_manager.lookup(&task.name, &hash) {
+                        runkernel::cache::CacheLookup::Hit { .. } => "CACHE",
+                        runkernel::cache::CacheLookup::Miss { .. } => "RUN",
+                    }
+                }
+            };
+            plan.cache_predictions
+                .insert(task.name.clone(), status.to_string());
+        }
 
         match args.format {
             crate::cli::WorkflowOutputFormat::Text => {
@@ -1237,7 +1295,10 @@ impl WorkflowRunner {
                 );
             }
             crate::cli::WorkflowOutputFormat::Json => {
-                return Err("JSON plan format not yet implemented".to_string());
+                println!(
+                    "{}",
+                    crate::workflow::render::render_workflow_plan_json(&plan)?
+                );
             }
         }
 

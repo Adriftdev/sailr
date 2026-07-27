@@ -40,6 +40,8 @@ Initializes a new Sailr environment, creating its directory structure (e.g., `./
     sailr init --name staging --registry quay.io/my-company --provider Aws --region us-east-1
     ```
 *   **Note on Default Service:** The `sailr init` command also creates a default "sample-app" service. This includes generating basic Kubernetes manifest templates (Deployment, Service, ConfigMap) in `k8s/templates/sample-app/` and adding a corresponding service entry to the new environment's `config.toml`. This makes the newly initialized environment immediately runnable and provides a quick way to demonstrate Sailr's capabilities.
+*   Use `sailr init --name dev --engine runkernel` to opt a new environment into the deterministic build backend. Omitting `--engine` preserves the Roomservice default.
+*   Use `sailr migrate --name dev --engine runkernel` to migrate to schema 0.5.0 and opt in atomically. A migration without `--engine` does not change backend selection.
 
 ---
 

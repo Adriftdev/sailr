@@ -45,6 +45,7 @@ async fn main() -> Result<(), CliError> {
                 arg.name.clone(),
                 arg.config_template_path,
                 arg.default_registry.clone(),
+                arg.engine,
             );
 
             // Handle infrastructure setup
@@ -703,7 +704,7 @@ async fn main() -> Result<(), CliError> {
 }
 
 fn handle_migrate(arg: sailr::cli::MigrateArgs) -> Result<(), CliError> {
-    match Environment::migrate_file_to_v05(&arg.name) {
+    match Environment::migrate_file_to_v05(&arg.name, arg.engine) {
         Ok(_) => {
             sailr::LOGGER.info(&format!(
                 "Successfully migrated environment '{}' to schema 0.5.0",

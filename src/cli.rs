@@ -293,6 +293,9 @@ pub struct InitArgs {
         value_enum
     )]
     pub env_type: Option<EnvType>,
+
+    #[arg(long, value_enum, help = "Build engine to configure")]
+    pub engine: Option<BuildEngine>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -686,12 +689,42 @@ mod tests {
 
     #[test]
     fn test_migrate_args_parse() {
-        let cli = Cli::try_parse_from(["sailr", "migrate", "--name", "edge"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "sailr",
+            "migrate",
+            "--name",
+            "edge",
+            "--engine",
+            "runkernel",
+        ])
+        .unwrap();
         match cli.commands {
             Commands::Migrate(args) => {
                 assert_eq!(args.name, "edge");
+                assert_eq!(args.engine, Some(BuildEngine::Runkernel));
             }
             _ => panic!("Expected Migrate command"),
+        }
+    }
+
+    #[test]
+    fn test_init_args_parse_engine() {
+        let cli = Cli::try_parse_from([
+            "sailr",
+            "init",
+            "--name",
+            "edge",
+            "--engine",
+            "runkernel",
+            "--no-sample",
+        ])
+        .unwrap();
+        match cli.commands {
+            Commands::Init(args) => {
+                assert_eq!(args.name, "edge");
+                assert_eq!(args.engine, Some(BuildEngine::Runkernel));
+            }
+            _ => panic!("Expected Init command"),
         }
     }
 
@@ -731,6 +764,9 @@ mod tests {
 pub struct MigrateArgs {
     #[arg(short, long)]
     pub name: String,
+
+    #[arg(long, value_enum, help = "Build engine to configure after migration")]
+    pub engine: Option<BuildEngine>,
 }
 
 #[derive(Debug, Args, Clone)]

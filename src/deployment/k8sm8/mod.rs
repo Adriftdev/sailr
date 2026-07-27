@@ -213,7 +213,7 @@ pub fn diff_resources(current: &Value, new: &Value) -> Option<String> {
     Some(res)
 }
 
-fn dynamic_api(
+pub(crate) fn dynamic_api(
     ar: ApiResource,
     caps: ApiCapabilities,
     client: Client,

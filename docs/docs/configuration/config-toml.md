@@ -118,7 +118,7 @@ after_all = "echo finished build"
 *   **Optional**
 *   Accepted by Sailr build policy.
 *   Roomservice uses this where supported.
-*   The runkernel backend currently accepts this setting but does not enforce it yet; Sailr emits a warning when `max_parallelism` is set with `engine = "runkernel"`.
+*   The runkernel translator enforces this limit across phase tasks with a shared concurrency semaphore.
 
 ### `before_all` and `after_all` (string or array of strings)
 *   **Optional**
@@ -183,6 +183,13 @@ Sailr integrates a build system to build your service's container images. Roomse
 *   A shell command or list of shell commands to run synchronously during the build phase for this service. These commands are executed within the `build` context directory.
 *   These commands run sequentially for this service.
 *   Example: `run_synchronous = "./scripts/prepare_data.sh"`
+
+#### `ignore_cache` (array of strings)
+*   **Optional**
+*   Excludes matching paths, relative to the service build path, from runkernel cache inputs.
+*   `ignoreCache` is accepted as a compatibility alias.
+*   Exclusions are resolved by Sailr before exact input paths are passed to runkernel.
+*   Example: `ignore_cache = ["dist/**", "*.log"]`
 
 #### `before` (string or array of strings)
 *   **Optional**

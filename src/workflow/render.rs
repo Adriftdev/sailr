@@ -23,7 +23,12 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
     out.push_str("\nTasks:\n");
 
     for task in &plan.tasks {
-        out.push_str(&format!(" - [{}] {}\n", task.id, task.label));
+        let status = plan
+            .cache_predictions
+            .get(&task.id)
+            .map(String::as_str)
+            .unwrap_or("RUN");
+        out.push_str(&format!(" - [{status}] [{}] {}\n", task.id, task.label));
         out.push_str(&format!("   Kind: {:?}\n", task.kind));
         if !task.dependencies.is_empty() {
             out.push_str(&format!(
@@ -33,6 +38,24 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
         }
         out.push_str(&format!("   Description: {}\n", task.description));
         out.push('\n');
+    }
+
+    if let Some(build_plan) = &plan.build_plan {
+        let clean = build_plan
+            .services
+            .iter()
+            .filter(|service| !service.dirty)
+            .collect::<Vec<_>>();
+        if !clean.is_empty() {
+            out.push_str("Skipped Build Services:\n");
+            for service in clean {
+                out.push_str(&format!(
+                    " - [SKIP] service:{}:build (clean)\n",
+                    service.service.name
+                ));
+            }
+            out.push('\n');
+        }
     }
 
     if !plan.finalizers.is_empty() {
@@ -57,6 +80,13 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
         ));
         out.push_str(&format!("  environment: {}\n\n", plan.profile.environment));
     }
+    if plan.profile.approval == crate::workflow::profile::ApprovalMode::Signature {
+        out.push_str("Approval:\n");
+        out.push_str("  mode: signature\n");
+        out.push_str("  algorithm: Ed25519\n");
+        out.push_str("  signature env: DEPLOY_APPROVAL_SIG\n");
+        out.push_str("  public key env: DEPLOY_APPROVAL_PUBKEY\n\n");
+    }
 
     out.push_str("Overall Effects:\n");
     out.push_str(&format!(
@@ -79,6 +109,46 @@ pub fn render_workflow_plan_text(plan: &WorkflowPlan) -> String {
     out.push_str(&format!(" - Prompts User: {}\n", plan.effects.prompts_user));
 
     out
+}
+
+pub fn render_workflow_plan_json(plan: &WorkflowPlan) -> Result<String, String> {
+    let tasks = plan
+        .tasks
+        .iter()
+        .map(|task| {
+            serde_json::json!({
+                "id": task.id,
+                "label": task.label,
+                "kind": format!("{:?}", task.kind),
+                "dependencies": task.dependencies,
+                "cache_status": plan.cache_predictions.get(&task.id).map(String::as_str).unwrap_or("RUN"),
+                "effects": task.effects,
+                "description": task.description,
+            })
+        })
+        .collect::<Vec<_>>();
+    let skipped_services = plan
+        .build_plan
+        .as_ref()
+        .map(|build| {
+            build
+                .services
+                .iter()
+                .filter(|service| !service.dirty)
+                .map(|service| service.service.name.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "profile": plan.profile.name,
+        "environment": plan.profile.environment,
+        "mode": plan.profile.mode.as_str(),
+        "engine": plan.profile.engine.to_string(),
+        "tasks": tasks,
+        "skipped_services": skipped_services,
+        "effects": plan.effects,
+    }))
+    .map_err(|error| format!("Failed to serialize workflow plan: {error}"))
 }
 
 pub fn render_workflow_graph_text(plan: &WorkflowPlan) -> String {
@@ -198,6 +268,11 @@ pub fn render_workflow_explain_text(plan: &WorkflowPlan, task_id: &str) -> Resul
             ));
             out.push_str(&format!("  environment: {}\n", plan.profile.environment));
         }
+        if plan.profile.approval == crate::workflow::profile::ApprovalMode::Signature {
+            out.push_str("\nApproval:\n");
+            out.push_str("  mode: signature\n");
+            out.push_str("  algorithm: Ed25519\n");
+        }
 
         if let Some(ctx) = &plan.profile.deploy_context {
             out.push_str("\nContext:\n");
@@ -312,16 +387,31 @@ mod tests {
                 mutates_docker: true,
                 ..Default::default()
             },
+            cache_predictions: std::collections::BTreeMap::new(),
         }
     }
 
     #[test]
     fn test_render_plan_text() {
-        let plan = dummy_plan();
+        let mut plan = dummy_plan();
+        plan.cache_predictions.insert(
+            crate::workflow::task_id::VALIDATE_CONFIG.to_string(),
+            "CACHE".to_string(),
+        );
         let text = render_workflow_plan_text(&plan);
         assert!(text.contains("Sailr Workflow Plan: test"));
         assert!(text.contains("Mutates Docker: true"));
         assert!(text.contains(&crate::workflow::task_id::service_build("api")));
+        assert!(text.contains("[CACHE] [workflow:validate-config]"));
+    }
+
+    #[test]
+    fn workflow_plan_json_is_machine_readable() {
+        let plan = dummy_plan();
+        let rendered = render_workflow_plan_json(&plan).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["profile"], "test");
+        assert_eq!(value["tasks"][0]["cache_status"], "RUN");
     }
 
     #[test]
