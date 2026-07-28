@@ -62,6 +62,9 @@ pub enum Commands {
     /// Manage workflow profiles
     #[command(subcommand)]
     Workflow(WorkflowCommands),
+    /// Delivery flow management and validation
+    #[command(subcommand)]
+    Flow(FlowCommands),
 }
 
 #[derive(Debug, Subcommand)]
@@ -82,6 +85,26 @@ pub enum WorkflowCommands {
     Explain(WorkflowExplainArgs),
     /// Inspect workflow diagnostic configuration
     Inspect(WorkflowInspectArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FlowCommands {
+    /// Inspect repository and output machine-readable JSON
+    Inspect,
+    /// Validate TOML/YAML syntax, duplicate workflow names, missing references, mutable image refs
+    Validate,
+    /// Generate or merge CI configuration
+    GenerateCi(FlowGenerateCiArgs),
+    /// Validate production invariants
+    CheckRelease,
+    /// Validate development invariants
+    CheckGitops,
+}
+
+#[derive(Debug, Args)]
+pub struct FlowGenerateCiArgs {
+    #[arg(long)]
+    pub mode: String,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]

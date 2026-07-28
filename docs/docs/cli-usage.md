@@ -127,6 +127,9 @@ Tears down the infrastructure for an environment.
 
 ### `sailr deploy`
 
+> [!NOTE]
+> `sailr deploy` uses legacy apply behaviour. Transactional deployment guarantees, bundle validation, and automated rollback apply exclusively to the newer `sailr workflow run` command.
+
 Deploys an existing, generated environment to a Kubernetes cluster. This command applies the manifests found in `./k8s/generated/<NAME>/`.
 
 *   **Usage:** `sailr deploy --name <NAME> --context <CONTEXT> [--strategy <STRATEGY>]`

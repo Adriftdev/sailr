@@ -1,0 +1,8 @@
+[workflow.dev-publish]
+environment = "development"
+mode = "build"
+interactive = false
+build = "run"
+push = "run"
+generate = "disabled"
+deploy = "disabled"

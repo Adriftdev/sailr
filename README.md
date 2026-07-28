@@ -72,6 +72,9 @@ sailr completions [bash|zsh]
 
 ### Deployment
 
+> [!NOTE]
+> `sailr deploy` uses legacy apply behaviour. Transactional deployment guarantees, bundle validation, and automated rollback apply exclusively to the newer `sailr workflow run` command.
+
 Deploys an existing environment named <environment_name> to a specified Kubernetes cluster context.
 
 ```bash 

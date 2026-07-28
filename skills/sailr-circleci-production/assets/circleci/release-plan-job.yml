@@ -1,0 +1,6 @@
+release-plan-job:
+  docker:
+    - image: __PLACEHOLDER_IMAGE__
+  steps:
+    - checkout
+    - run: sailr workflow plan __PLACEHOLDER_PLAN_PROFILE__

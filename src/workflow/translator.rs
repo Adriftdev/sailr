@@ -450,4 +450,73 @@ mod tests {
             .unwrap();
         assert_eq!(api_root.dependencies, vec!["service:base:build"]);
     }
+    
+    #[test]
+    fn clean_service_hooks_are_omitted() {
+        let mut plan = SailrBuildPlan {
+            services: vec![service_plan("api", None)],
+            before_all: Vec::new(),
+            after_all: Vec::new(),
+            force: false,
+            max_parallelism: None,
+            cache_dir: PathBuf::from("."),
+        };
+        plan.services[0].dirty = false;
+        
+        let tasks = translate_build_plan(&plan, false);
+        assert!(tasks.is_empty(), "clean service should produce no tasks");
+    }
+
+    #[test]
+    fn dirty_service_hooks_are_included() {
+        let plan = SailrBuildPlan {
+            services: vec![service_plan("api", None)],
+            before_all: Vec::new(),
+            after_all: Vec::new(),
+            force: false,
+            max_parallelism: None,
+            cache_dir: PathBuf::from("."),
+        };
+        
+        let tasks = translate_build_plan(&plan, false);
+        assert!(!tasks.is_empty(), "dirty service should produce tasks");
+        assert!(tasks.iter().any(|t| t.id == "service:api:run_parallel:0"));
+        assert!(tasks.iter().any(|t| t.id == "service:api:build:0"));
+    }
+
+    #[test]
+    fn global_hooks_omitted_if_all_services_clean() {
+        let mut plan = SailrBuildPlan {
+            services: vec![service_plan("api", None)],
+            before_all: vec!["echo before".to_string()],
+            after_all: vec!["echo after".to_string()],
+            force: false,
+            max_parallelism: None,
+            cache_dir: PathBuf::from("."),
+        };
+        plan.services[0].dirty = false;
+        
+        let tasks = translate_build_plan(&plan, false);
+        assert!(tasks.is_empty(), "clean service should produce no global hooks");
+    }
+
+    #[test]
+    fn global_hooks_included_if_any_service_dirty() {
+        let mut plan = SailrBuildPlan {
+            services: vec![service_plan("api", None), service_plan("worker", None)],
+            before_all: vec!["echo before".to_string()],
+            after_all: vec!["echo after".to_string()],
+            force: false,
+            max_parallelism: None,
+            cache_dir: PathBuf::from("."),
+        };
+        plan.services[0].dirty = false;
+        plan.services[1].dirty = true;
+        
+        let tasks = translate_build_plan(&plan, false);
+        assert!(tasks.iter().any(|t| t.id == crate::workflow::task_id::BUILD_BEFORE_ALL));
+        assert!(tasks.iter().any(|t| t.id == crate::workflow::task_id::BUILD_AFTER_ALL));
+        assert!(tasks.iter().any(|t| t.id == "service:worker:build:0"));
+        assert!(!tasks.iter().any(|t| t.id == "service:api:build:0"));
+    }
 }

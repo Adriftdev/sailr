@@ -75,14 +75,11 @@ jobs:
         run: |
           plan_hash="$(jq -r '.plan_hash' \
             .sailr/audit/kind-signed/deployment-plan.json)"
-          DEPLOY_APPROVAL_SIG="$(
-            printf '%s' "sailr-deployment-plan-v1:${plan_hash}" \
-              | openssl pkeyutl \
-                  -sign \
-                  -rawin \
-                  -inkey "${RUNNER_TEMP}/sailr-private.pem" \
-              | base64 --wrap=0
-          )"
+          printf '%s' "sailr-deployment-plan-v1:${plan_hash}" > "${RUNNER_TEMP}/sign-input.bin"
+          openssl pkeyutl -sign -rawin -inkey "${RUNNER_TEMP}/sailr-private.pem" -in "${RUNNER_TEMP}/sign-input.bin" -out "${RUNNER_TEMP}/sign-output.bin"
+          signature_size=$(wc -c < "${RUNNER_TEMP}/sign-output.bin")
+          test "${signature_size}" -eq 64
+          DEPLOY_APPROVAL_SIG="$(base64 --wrap=0 < "${RUNNER_TEMP}/sign-output.bin")"
           export DEPLOY_APPROVAL_SIG
           target/release/sailr workflow run kind-signed --non-interactive --apply
           test "$(kubectl --context kind-sailr get configmap sailr-approved \
@@ -113,14 +110,11 @@ jobs:
         run: |
           plan_hash="$(jq -r '.plan_hash' \
             .sailr/audit/kind-rollback/deployment-plan.json)"
-          DEPLOY_APPROVAL_SIG="$(
-            printf '%s' "sailr-deployment-plan-v1:${plan_hash}" \
-              | openssl pkeyutl \
-                  -sign \
-                  -rawin \
-                  -inkey "${RUNNER_TEMP}/sailr-private.pem" \
-              | base64 --wrap=0
-          )"
+          printf '%s' "sailr-deployment-plan-v1:${plan_hash}" > "${RUNNER_TEMP}/sign-input.bin"
+          openssl pkeyutl -sign -rawin -inkey "${RUNNER_TEMP}/sailr-private.pem" -in "${RUNNER_TEMP}/sign-input.bin" -out "${RUNNER_TEMP}/sign-output.bin"
+          signature_size=$(wc -c < "${RUNNER_TEMP}/sign-output.bin")
+          test "${signature_size}" -eq 64
+          DEPLOY_APPROVAL_SIG="$(base64 --wrap=0 < "${RUNNER_TEMP}/sign-output.bin")"
           export DEPLOY_APPROVAL_SIG
           set +e
           target/release/sailr workflow run kind-rollback --non-interactive --apply

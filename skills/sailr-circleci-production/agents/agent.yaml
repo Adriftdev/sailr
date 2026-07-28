@@ -1,0 +1,4 @@
+---
+name: sailr-circleci-production
+description: "Agent for implementing CircleCI production flows in Sailr."
+capabilities: []

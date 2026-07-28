@@ -1,0 +1,6 @@
+signed-deploy-job:
+  docker:
+    - image: __PLACEHOLDER_IMAGE__
+  steps:
+    - checkout
+    - run: sailr workflow run __PLACEHOLDER_DEPLOY_PROFILE__

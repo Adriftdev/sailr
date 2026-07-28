@@ -1,0 +1,9 @@
+[workflow.production-plan]
+environment = "production"
+mode = "deploy"
+interactive = false
+build = "disabled"
+generate = "run"
+deploy = "plan"
+approval = "none"
+apply = false

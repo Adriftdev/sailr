@@ -823,4 +823,75 @@ mod transactional_tests {
         assert_eq!(value["data"]["value"], "approved");
         assert_eq!(journal.lock().unwrap().entries[0].sha256, approved_digest);
     }
+
+    #[tokio::test]
+    async fn second_rollback_call_does_not_repeat_mutations() {
+        let backend = FakeDeploymentBackend {
+            fail_apply: Some("second".to_string()),
+            ..Default::default()
+        };
+        let journal = new_deployment_journal();
+        let _ = deploy_bundle(&deployment_bundle(&["first", "second"]), &backend, journal.clone()).await;
+        let operations_len_after_first_rollback = backend.operations.lock().unwrap().len();
+        
+        let result = rollback_transaction(&journal, &backend).await;
+        assert!(result.is_ok());
+        
+        let operations_len_after_second_rollback = backend.operations.lock().unwrap().len();
+        assert_eq!(operations_len_after_first_rollback, operations_len_after_second_rollback);
+    }
+
+    #[tokio::test]
+    async fn rollback_404_delete_is_treated_as_success() {
+        let backend = FakeDeploymentBackend::default();
+        let journal = new_deployment_journal();
+        {
+            let mut state = journal.lock().unwrap();
+            state.entries.push(AppliedMutation {
+                sequence: 0,
+                identity: bundle::ResourceIdentity {
+                    api_version: "v1".to_string(),
+                    kind: "ConfigMap".to_string(),
+                    namespace: Some("default".to_string()),
+                    name: "first".to_string(),
+                },
+                previous: None,
+                applied: object("first"),
+                source_path: "first.yaml".to_string(),
+                document_index: 0,
+                sha256: "hash".to_string(),
+            });
+        }
+        
+        let result = rollback_transaction(&journal, &backend).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn journal_excludes_failed_apply() {
+        let backend = FakeDeploymentBackend {
+            fail_apply: Some("second".to_string()),
+            ..Default::default()
+        };
+        let journal = new_deployment_journal();
+        let _ = deploy_bundle(&deployment_bundle(&["first", "second", "third"]), &backend, journal.clone()).await;
+        
+        let state = journal.lock().unwrap();
+        let applied_names: Vec<String> = state.entries.iter().map(|e| e.identity.name.clone()).collect();
+        assert_eq!(applied_names, vec!["first".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn journal_excludes_resources_after_failed_apply() {
+        let backend = FakeDeploymentBackend {
+            fail_apply: Some("second".to_string()),
+            ..Default::default()
+        };
+        let journal = new_deployment_journal();
+        let _ = deploy_bundle(&deployment_bundle(&["first", "second", "third"]), &backend, journal.clone()).await;
+        
+        let state = journal.lock().unwrap();
+        let applied_names: Vec<String> = state.entries.iter().map(|e| e.identity.name.clone()).collect();
+        assert!(!applied_names.contains(&"third".to_string()));
+    }
 }

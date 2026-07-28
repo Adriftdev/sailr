@@ -1,0 +1,19 @@
+workflows:
+  production-release:
+    triggers:
+      - schedule:
+          cron: "0 0 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - release-plan-job
+      - release-approval-job:
+          requires:
+            - release-plan-job
+      - signed-deploy-job:
+          requires:
+            - release-approval-job
+      - release-verification-job:
+          requires:
+            - signed-deploy-job

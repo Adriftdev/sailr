@@ -1,0 +1,6 @@
+release-verification-job:
+  docker:
+    - image: __PLACEHOLDER_IMAGE__
+  steps:
+    - checkout
+    - run: sailr deployment verify __PLACEHOLDER_ENV__

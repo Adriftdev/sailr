@@ -1,0 +1,2 @@
+release-approval-job:
+  type: approval

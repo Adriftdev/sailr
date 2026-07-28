@@ -2,7 +2,7 @@ use std::{io, process::exit};
 
 use sailr::{
     builder::{filter_services_exact, split_matches, Builder},
-    cli::{Cli, Commands, EnvType, InfraCommands, Provider, WorkflowCommands},
+    cli::{Cli, Commands, EnvType, FlowCommands, InfraCommands, Provider, WorkflowCommands},
     create_default_env_config,
     create_default_env_infra,
     environment::{Environment, Service},
@@ -691,6 +691,7 @@ async fn main() -> Result<(), CliError> {
         Commands::Bump(arg) => handle_bump(arg)?,
         Commands::Lint(arg) => handle_lint(arg)?,
         Commands::Workflow(cmd) => handle_workflow(cmd).await?,
+        Commands::Flow(cmd) => handle_flow(cmd).await?,
         Commands::Interactive(args) => {
             // Handle interactive commands
             sailr::interactive::main_menu(args)
@@ -790,6 +791,81 @@ fn handle_lint(arg: sailr::cli::LintArgs) -> Result<(), CliError> {
         sailr::LOGGER.info("Lint passed with no warnings. Environment config is healthy.");
     } else {
         sailr::LOGGER.warn(&format!("Lint finished with {} warnings.", warnings));
+    }
+    Ok(())
+}
+
+async fn handle_flow(cmd: FlowCommands) -> Result<(), CliError> {
+    use sailr::workflow::flow;
+
+    match cmd {
+        FlowCommands::Inspect => {
+            match flow::inspect() {
+                Ok(result) => {
+                    let json = serde_json::to_string_pretty(&result).map_err(|e| CliError::Other(e.to_string()))?;
+                    println!("{}", json);
+                }
+                Err(e) => {
+                    return Err(CliError::Other(e.to_string()));
+                }
+            }
+        }
+        FlowCommands::Validate => {
+            match flow::validate() {
+                Ok(result) => {
+                    let json = serde_json::to_string_pretty(&result).map_err(|e| CliError::Other(e.to_string()))?;
+                    println!("{}", json);
+                    if !result.is_valid {
+                        return Err(CliError::Other("Validation failed".to_string()));
+                    }
+                }
+                Err(e) => {
+                    return Err(CliError::Other(e.to_string()));
+                }
+            }
+        }
+        FlowCommands::GenerateCi(arg) => {
+            if arg.mode == "merge" {
+                match flow::generate_ci_merge() {
+                    Ok(_) => {
+                        sailr::LOGGER.info("Successfully merged CI configuration idempotently.");
+                    }
+                    Err(e) => {
+                        return Err(CliError::Other(e.to_string()));
+                    }
+                }
+            } else {
+                return Err(CliError::Other(format!("Unsupported generate-ci mode: {}", arg.mode)));
+            }
+        }
+        FlowCommands::CheckRelease => {
+            match flow::check_release() {
+                Ok(result) => {
+                    let json = serde_json::to_string_pretty(&result).map_err(|e| CliError::Other(e.to_string()))?;
+                    println!("{}", json);
+                    if !result.passed {
+                        return Err(CliError::Other("Production validation checks failed".to_string()));
+                    }
+                }
+                Err(e) => {
+                    return Err(CliError::Other(e.to_string()));
+                }
+            }
+        }
+        FlowCommands::CheckGitops => {
+            match flow::check_gitops() {
+                Ok(result) => {
+                    let json = serde_json::to_string_pretty(&result).map_err(|e| CliError::Other(e.to_string()))?;
+                    println!("{}", json);
+                    if !result.passed {
+                        return Err(CliError::Other("Development/GitOps validation checks failed".to_string()));
+                    }
+                }
+                Err(e) => {
+                    return Err(CliError::Other(e.to_string()));
+                }
+            }
+        }
     }
     Ok(())
 }

@@ -1,0 +1,14 @@
+workflows:
+  development-workflow:
+    jobs:
+      - pr-check-job:
+          filters:
+            branches:
+              ignore: develop
+      - development-publication-job:
+          filters:
+            branches:
+              only: develop
+      - gitops-writeback-job:
+          requires:
+            - development-publication-job

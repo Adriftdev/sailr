@@ -853,9 +853,31 @@ fn validate_deployment_audit_evidence(
                 "successful signed deployment must be verified".to_string(),
             ));
         }
-        if evidence.applied_resources.len() != evidence.manifests.len() {
+        let expected_manifest_set = evidence
+            .manifests
+            .iter()
+            .map(|manifest| {
+                (
+                    manifest.relative_path.as_str(),
+                    manifest.document_index,
+                    manifest.sha256.as_str(),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let applied_manifest_set = evidence
+            .applied_resources
+            .iter()
+            .map(|resource| {
+                (
+                    resource.source_path.as_str(),
+                    resource.document_index,
+                    resource.sha256.as_str(),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if expected_manifest_set != applied_manifest_set {
             return Err(WorkflowReportError::Validation(
-                "successful signed deployment must cover every bundle resource".to_string(),
+                "successful signed deployment must cover every bundle resource exactly".to_string(),
             ));
         }
     }

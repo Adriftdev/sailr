@@ -440,22 +440,24 @@ impl WorkflowPlanner {
                     .and_then(|hooks| hooks.pre_deploy.as_ref())
                     .is_some()
             });
-            tasks.push(WorkflowTaskPlan {
-                id: crate::workflow::task_id::PRE_DEPLOY_HOOKS.to_string(),
-                label: "Pre-deployment Hooks".to_string(),
-                kind: WorkflowTaskKind::PreDeployHooks,
-                cache_policy: WorkflowTaskCachePolicy::Disabled,
-                service: None,
-                phase: Some("pre_deploy".to_string()),
-                dependencies: last_tasks.clone(),
-                effects: WorkflowEffects {
-                    mutates_filesystem: has_pre_hooks,
-                    ..Default::default()
-                },
-                description: "Runs pre-deployment hooks before constructing the signed bundle."
-                    .to_string(),
-            });
-            last_tasks = vec![crate::workflow::task_id::PRE_DEPLOY_HOOKS.to_string()];
+            if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
+                tasks.push(WorkflowTaskPlan {
+                    id: crate::workflow::task_id::PRE_DEPLOY_HOOKS.to_string(),
+                    label: "Pre-deployment Hooks".to_string(),
+                    kind: WorkflowTaskKind::PreDeployHooks,
+                    cache_policy: WorkflowTaskCachePolicy::Disabled,
+                    service: None,
+                    phase: Some("pre_deploy".to_string()),
+                    dependencies: last_tasks.clone(),
+                    effects: WorkflowEffects {
+                        mutates_filesystem: has_pre_hooks,
+                        ..Default::default()
+                    },
+                    description: "Runs pre-deployment hooks before constructing the signed bundle."
+                        .to_string(),
+                });
+                last_tasks = vec![crate::workflow::task_id::PRE_DEPLOY_HOOKS.to_string()];
+            }
 
             tasks.push(WorkflowTaskPlan {
                 id: crate::workflow::task_id::DEPLOYMENT_BUNDLE.to_string(),
@@ -986,7 +988,7 @@ impl WorkflowPlanner {
             pipeline.add(task);
         }
 
-        if self.profile.deploy.is_active() {
+        if plan.tasks.iter().any(|task| task.id == crate::workflow::task_id::PRE_DEPLOY_HOOKS) {
             let env = self.env.clone();
             pipeline.add(
                 runtime_task(plan, crate::workflow::task_id::PRE_DEPLOY_HOOKS)?
@@ -1202,21 +1204,23 @@ impl WorkflowPlanner {
 
                 pipeline.add(task);
 
-                let env = self.env.clone();
-                pipeline.add(
-                    runtime_task(plan, crate::workflow::task_id::POST_DEPLOY_HOOKS)?
-                        .cache_disabled()
-                        .exec_fn(move |_ctx| {
-                            let env = env.clone();
-                            async move {
-                                crate::deployment::run_environment_hooks(
-                                    &env,
-                                    crate::deployment::DeploymentHookStage::Post,
-                                )
-                                .map_err(|error| anyhow::anyhow!(error.to_string()))
-                            }
-                        }),
-                );
+                if plan.tasks.iter().any(|task| task.id == crate::workflow::task_id::POST_DEPLOY_HOOKS) {
+                    let env = self.env.clone();
+                    pipeline.add(
+                        runtime_task(plan, crate::workflow::task_id::POST_DEPLOY_HOOKS)?
+                            .cache_disabled()
+                            .exec_fn(move |_ctx| {
+                                let env = env.clone();
+                                async move {
+                                    crate::deployment::run_environment_hooks(
+                                        &env,
+                                        crate::deployment::DeploymentHookStage::Post,
+                                    )
+                                    .map_err(|error| anyhow::anyhow!(error.to_string()))
+                                }
+                            }),
+                    );
+                }
             }
         }
 
