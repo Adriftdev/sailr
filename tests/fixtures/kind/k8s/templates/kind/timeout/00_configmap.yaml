@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sailr-timeout-marker
+  namespace: default
+data:
+  state: applied

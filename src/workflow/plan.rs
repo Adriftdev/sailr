@@ -95,6 +95,7 @@ pub enum WorkflowTaskKind {
     DeploymentBundle,
     DeploymentPlan,
     Deploy,
+    RolloutVerification,
     PostDeployHooks,
     Verify,
     Approval,

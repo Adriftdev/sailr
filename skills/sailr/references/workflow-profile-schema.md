@@ -36,6 +36,16 @@ report = "both"
 
 [workflow.production.signature]
 trusted_public_key = "<base64 raw 32-byte Ed25519 public key>"
+
+[workflow.production.verification]
+rollout_timeout_seconds = 300
+
+[workflow.production.rollback]
+timeout_seconds = 300
 ```
 
 Sailr renders only the key's `sha256:<hex>` fingerprint. The first run writes `.sailr/audit/<profile>/deployment-plan.json` and reports `awaiting_signature` without cluster mutation. Sign the exact ASCII message `sailr-deployment-plan-v1:<plan_hash>` outside Sailr, set only `DEPLOY_APPROVAL_SIG` to the base64 raw 64-byte signature, and retry. 
+
+Portable release profiles additionally require `push = "disabled"`, `interactive = false`,
+`apply = true`, and `approval = "external"` or `"signature"`. Use `workflow prepare`
+before approval and `workflow apply` afterward; apply never regenerates manifests.

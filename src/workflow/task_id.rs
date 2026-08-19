@@ -11,6 +11,7 @@ pub const DEPLOYMENT_PLAN: &str = "workflow:deployment-plan";
 pub const APPROVAL: &str = "workflow:approval";
 pub const VERIFICATION_GATE: &str = "workflow:verification-gate";
 pub const DEPLOY: &str = "workflow:deploy";
+pub const ROLLOUT_VERIFICATION: &str = "workflow:rollout-verification";
 pub const POST_DEPLOY_HOOKS: &str = "workflow:post-deploy-hooks";
 pub const REPORT_ARTIFACTS: &str = "workflow:image-report";
 pub const WRITE_REPORT_FINALIZER: &str = "finalizer:write-workflow-report";

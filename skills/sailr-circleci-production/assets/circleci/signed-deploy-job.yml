@@ -3,4 +3,6 @@ signed-deploy-job:
     - image: __PLACEHOLDER_IMAGE__
   steps:
     - checkout
-    - run: sailr workflow run __PLACEHOLDER_DEPLOY_PROFILE__
+    - attach_workspace:
+        at: .
+    - run: sailr workflow apply __PLACEHOLDER_DEPLOY_PROFILE__ --bundle artifacts/prepared-release/deployment.bundle --non-interactive --apply --release-id "$CIRCLE_WORKFLOW_ID"

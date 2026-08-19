@@ -18,4 +18,4 @@ after_all = "echo 'Builds completed'"
 
 Global hooks and aggregates are never cached, and global hooks are suppressed when no selected service is dirty. Service `finally` commands run exactly once after active siblings settle, in stable reverse dependency order.
 
-Cache files for runkernel are stored in `.sailr/cache/build`.
+Sailr build outcome records are stored in `.sailr/cache/build`, and runkernel task-cache metadata is stored in `.sailr/cache/runkernel`. Sailr does not create a top-level `.runkernel` directory.

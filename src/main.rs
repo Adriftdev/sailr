@@ -692,6 +692,32 @@ async fn main() -> Result<(), CliError> {
         Commands::Lint(arg) => handle_lint(arg)?,
         Commands::Workflow(cmd) => handle_workflow(cmd).await?,
         Commands::Flow(cmd) => handle_flow(cmd).await?,
+        Commands::Publication(cmd) => match cmd {
+            sailr::cli::PublicationCommands::Validate(args) => {
+                sailr::workflow::publication::validate_to_stdout(&args.report)
+                    .map_err(CliError::Other)?;
+            }
+        },
+        Commands::Promote(cmd) => match cmd {
+            sailr::cli::PromoteCommands::Plan(args) => {
+                let plan =
+                    sailr::workflow::promotion::create(&args.from_report, &args.target_environment)
+                        .map_err(CliError::Other)?;
+                sailr::workflow::promotion::write(&args.out, &plan).map_err(CliError::Other)?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&plan)
+                        .map_err(|error| CliError::Other(error.to_string()))?
+                );
+            }
+        },
+        Commands::Capabilities(_) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&sailr::workflow::capabilities::current())
+                    .map_err(|error| CliError::Other(error.to_string()))?
+            );
+        }
         Commands::Interactive(args) => {
             // Handle interactive commands
             sailr::interactive::main_menu(args)
@@ -799,79 +825,84 @@ async fn handle_flow(cmd: FlowCommands) -> Result<(), CliError> {
     use sailr::workflow::flow;
 
     match cmd {
-        FlowCommands::Inspect => {
-            match flow::inspect() {
-                Ok(result) => {
-                    let json = serde_json::to_string_pretty(&result).map_err(|e| CliError::Other(e.to_string()))?;
-                    println!("{}", json);
-                }
-                Err(e) => {
-                    return Err(CliError::Other(e.to_string()));
+        FlowCommands::Inspect => match flow::inspect() {
+            Ok(result) => {
+                let json = serde_json::to_string_pretty(&result)
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+                println!("{}", json);
+            }
+            Err(e) => {
+                return Err(CliError::Other(e.to_string()));
+            }
+        },
+        FlowCommands::Validate => match flow::validate() {
+            Ok(result) => {
+                let json = serde_json::to_string_pretty(&result)
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+                println!("{}", json);
+                if !result.is_valid {
+                    return Err(CliError::Other("Validation failed".to_string()));
                 }
             }
-        }
-        FlowCommands::Validate => {
-            match flow::validate() {
-                Ok(result) => {
-                    let json = serde_json::to_string_pretty(&result).map_err(|e| CliError::Other(e.to_string()))?;
-                    println!("{}", json);
-                    if !result.is_valid {
-                        return Err(CliError::Other("Validation failed".to_string()));
-                    }
-                }
-                Err(e) => {
-                    return Err(CliError::Other(e.to_string()));
-                }
+            Err(e) => {
+                return Err(CliError::Other(e.to_string()));
             }
-        }
+        },
         FlowCommands::GenerateCi(arg) => {
-            if arg.mode == "merge" {
-                match flow::generate_ci_merge() {
-                    Ok(_) => {
-                        sailr::LOGGER.info("Successfully merged CI configuration idempotently.");
-                    }
-                    Err(e) => {
-                        return Err(CliError::Other(e.to_string()));
-                    }
-                }
-            } else {
-                return Err(CliError::Other(format!("Unsupported generate-ci mode: {}", arg.mode)));
+            let result = flow::generate_ci(arg.flow.as_deref(), arg.mode, arg.output.as_deref())
+                .map_err(|error| CliError::Other(error.to_string()))?;
+            if matches!(
+                arg.mode,
+                sailr::cli::FlowGenerationMode::Create | sailr::cli::FlowGenerationMode::Merge
+            ) {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result)
+                        .map_err(|error| CliError::Other(error.to_string()))?
+                );
             }
         }
-        FlowCommands::CheckRelease => {
-            match flow::check_release() {
-                Ok(result) => {
-                    let json = serde_json::to_string_pretty(&result).map_err(|e| CliError::Other(e.to_string()))?;
-                    println!("{}", json);
-                    if !result.passed {
-                        return Err(CliError::Other("Production validation checks failed".to_string()));
-                    }
-                }
-                Err(e) => {
-                    return Err(CliError::Other(e.to_string()));
+        FlowCommands::CheckRelease => match flow::check_release() {
+            Ok(result) => {
+                let json = serde_json::to_string_pretty(&result)
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+                println!("{}", json);
+                if !result.passed {
+                    return Err(CliError::Other(
+                        "Production validation checks failed".to_string(),
+                    ));
                 }
             }
-        }
-        FlowCommands::CheckGitops => {
-            match flow::check_gitops() {
-                Ok(result) => {
-                    let json = serde_json::to_string_pretty(&result).map_err(|e| CliError::Other(e.to_string()))?;
-                    println!("{}", json);
-                    if !result.passed {
-                        return Err(CliError::Other("Development/GitOps validation checks failed".to_string()));
-                    }
-                }
-                Err(e) => {
-                    return Err(CliError::Other(e.to_string()));
+            Err(e) => {
+                return Err(CliError::Other(e.to_string()));
+            }
+        },
+        FlowCommands::CheckGitops => match flow::check_gitops() {
+            Ok(result) => {
+                let json = serde_json::to_string_pretty(&result)
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+                println!("{}", json);
+                if !result.passed {
+                    return Err(CliError::Other(
+                        "Development/GitOps validation checks failed".to_string(),
+                    ));
                 }
             }
-        }
+            Err(e) => {
+                return Err(CliError::Other(e.to_string()));
+            }
+        },
     }
     Ok(())
 }
 
 async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
     use sailr::workflow::config::WorkflowConfig;
+
+    if let WorkflowCommands::Init(args) = cmd {
+        sailr::workflow::init::run(args).map_err(CliError::Other)?;
+        return Ok(());
+    }
 
     if let WorkflowCommands::Run(args) = cmd {
         sailr::workflow::runner::WorkflowRunner::run(args)
@@ -908,9 +939,24 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
         return Ok(());
     }
 
+    if let WorkflowCommands::Prepare(args) = cmd {
+        sailr::workflow::release::prepare(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
+    if let WorkflowCommands::Apply(args) = cmd {
+        sailr::workflow::release::apply(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
     let config = WorkflowConfig::load()?;
 
     match cmd {
+        WorkflowCommands::Init(_) => unreachable!(),
         WorkflowCommands::List => {
             let profiles = config.list_profiles();
             if profiles.is_empty() {
@@ -962,7 +1008,9 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
         | WorkflowCommands::Plan(_)
         | WorkflowCommands::Graph(_)
         | WorkflowCommands::Explain(_)
-        | WorkflowCommands::Inspect(_) => unreachable!(),
+        | WorkflowCommands::Inspect(_)
+        | WorkflowCommands::Prepare(_)
+        | WorkflowCommands::Apply(_) => unreachable!(),
     }
 
     Ok(())

@@ -7,6 +7,11 @@ description: "Review Sailr delivery flows for security, reliability, and correct
 
 This skill audits delivery flows against Sailr invariants.
 
+Query `sailr capabilities --format json` first and review the repository against the installed
+contract rather than documentation guesses.
+Refuse unsupported features, never request or store credentials/private keys, and stop before
+any production apply.
+
 ## 1. Trigger
 Activate this skill when the user asks to:
 - "Review this delivery flow"
@@ -26,6 +31,8 @@ A full review covers:
 - Production deployments require explicit approval gates.
 - Direct push requires credential isolation.
 - GitOps write-backs must not trigger infinite loops.
+- Direct production flows must use publication validation, full digest promotion, portable prepare/apply, rollout verification, and release locking.
+- Do not infer production from names; use declared flow stages and environment policy.
 
 ## 4. Output Contract
 Produce a structured report categorizing findings by severity (Blocker, High, Medium, Low, Advisory).

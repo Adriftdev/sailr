@@ -3,4 +3,6 @@ release-plan-job:
     - image: __PLACEHOLDER_IMAGE__
   steps:
     - checkout
-    - run: sailr workflow plan __PLACEHOLDER_PLAN_PROFILE__
+    - run: sailr publication validate artifacts/publication-report.json
+    - run: sailr promote plan --from-report artifacts/publication-report.json --to __PLACEHOLDER_ENVIRONMENT__ --out artifacts/promotion-plan.json
+    - run: sailr workflow prepare __PLACEHOLDER_PLAN_PROFILE__ --promotion-plan artifacts/promotion-plan.json --out artifacts/prepared-release

@@ -102,7 +102,7 @@ impl Builder {
 #[async_trait]
 impl BuildBackend for RoomserviceBuildBackend {
     async fn build(&mut self, env: &Environment) -> Result<BuildRunResult, String> {
-        let selected_services = select_services(env, &self.options.only, &self.options.ignore)?;
+        let sailr_plan = create_sailr_build_plan(env, &self.options)?;
         let buildable_names = buildable_service_names(env);
         let mut roomservice = RoomserviceBuilder::new(
             "./".to_string(),
@@ -111,8 +111,13 @@ impl BuildBackend for RoomserviceBuildBackend {
             map_policy(self.options.policy.clone()),
         );
 
-        for service in selected_services {
-            let room = build_room(env, service, &buildable_names, &self.options.cache_dir)?;
+        for service_plan in &sailr_plan.services {
+            let room = build_room(
+                env,
+                &service_plan.service,
+                &buildable_names,
+                &self.options.cache_dir,
+            )?;
             roomservice.add_room(room).map_err(|e| e.to_string())?;
         }
 
@@ -155,8 +160,8 @@ impl BuildBackend for RunkernelBuildBackend {
         }
 
         let policy = self.options.policy.clone().unwrap_or_default();
-        let mut pipeline =
-            Pipeline::new(RUNKERNEL_PIPELINE_NAME).failure_policy(FailurePolicy::FinishRunning);
+        let mut pipeline = crate::new_runkernel_pipeline(RUNKERNEL_PIPELINE_NAME)
+            .failure_policy(FailurePolicy::FinishRunning);
 
         crate::workflow::translator::add_translated_tasks(
             &mut pipeline,
@@ -366,6 +371,7 @@ pub(crate) fn create_sailr_build_plan(
             &serde_json::to_string(&(
                 &service.name,
                 &service.version,
+                service.has_explicit_version(),
                 &env.registry,
                 &env.platform,
                 &build,
@@ -424,8 +430,17 @@ pub(crate) fn create_sailr_build_plan(
         dirty_state.insert(service.name.clone(), dirty);
         fingerprints.insert(service.name.clone(), fingerprint.clone());
 
+        let mut resolved_service = service.clone();
+        if !resolved_service.has_explicit_version() {
+            let immutable_version =
+                crate::workflow::image::derive_image_tag(&fingerprint.full_hash)
+                    .map_err(|error| error.to_string())?;
+            resolved_service.set_resolved_immutable_version(immutable_version);
+        }
+        let resolved_phases = normalize_build_config(env, &resolved_service, &build)?.phases;
+
         plans.push(ServiceBuildPlan {
-            service: service.clone(),
+            service: resolved_service,
             build: build.clone(),
             cwd: PathBuf::from(&build.path),
             dependencies,
@@ -435,7 +450,7 @@ pub(crate) fn create_sailr_build_plan(
             dirty,
             dirty_reasons,
             fingerprint,
-            phases: normalized.phases,
+            phases: resolved_phases,
         });
     }
 
@@ -447,6 +462,54 @@ pub(crate) fn create_sailr_build_plan(
         max_parallelism: policy.max_parallelism,
         cache_dir,
     })
+}
+
+pub(crate) fn generation_image_overrides(
+    env: &Environment,
+    services: &[&Service],
+) -> Result<BTreeMap<String, String>, String> {
+    let omitted_buildable = services
+        .iter()
+        .filter(|service| service.build.is_some() && !service.has_explicit_version())
+        .map(|service| service.name.clone())
+        .collect::<Vec<_>>();
+    if omitted_buildable.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let plan = create_sailr_build_plan(
+        env,
+        &BuildOptions {
+            cache_dir: ".sailr/cache/build".to_string(),
+            force: false,
+            only: omitted_buildable,
+            ignore: Vec::new(),
+            plan: true,
+            dry_run: false,
+            explain: false,
+            dump_scope: false,
+            policy: env.build.clone(),
+        },
+    )?;
+    let selected = services
+        .iter()
+        .map(|service| service.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let registry = env
+        .registry
+        .resolve()
+        .map_err(|error| format!("Invalid registry configuration: {error}"))?;
+
+    plan.services
+        .iter()
+        .filter(|service| selected.contains(service.service.name.as_str()))
+        .map(|service| {
+            registry
+                .tagged_ref(&service.service.name, &service.service.version)
+                .map(|image| (service.service.name.clone(), image))
+                .map_err(|error| format!("Failed to resolve image reference: {error}"))
+        })
+        .collect()
 }
 
 pub(crate) fn add_runkernel_tasks_from_workflow_plan(
@@ -1607,6 +1670,59 @@ mod tests {
         assert!(commands.contains("registry.local/api:1.2.3"));
         assert!(!commands.contains("{{"));
         assert!(!commands.contains("}}"));
+    }
+
+    #[test]
+    fn build_plan_uses_explicit_version_or_derives_immutable_version() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let explicit_path = temp.path().join("explicit");
+        let immutable_path = temp.path().join("immutable");
+        write_project(&explicit_path);
+        write_project(&immutable_path);
+
+        let explicit = service("explicit", &explicit_path, "true".to_string());
+        let mut omitted: Service = toml::from_str("name = \"immutable\"").unwrap();
+        omitted.build = Some(build_config(&immutable_path, "{{image_ref}}".to_string()));
+
+        let mut env = Environment::new("dev");
+        env.registry = crate::environment::RegistryConfig::Simple("registry.local".to_string());
+        env.services = vec![explicit, omitted];
+        let plan = create_sailr_build_plan(&env, &options(temp.path().join(".sailr/cache/build")))
+            .expect("build plan should resolve versions");
+
+        let explicit = plan
+            .services
+            .iter()
+            .find(|service| service.service.name == "explicit")
+            .unwrap();
+        assert_eq!(explicit.service.version, "1.2.3");
+
+        let immutable = plan
+            .services
+            .iter()
+            .find(|service| service.service.name == "immutable")
+            .unwrap();
+        assert_ne!(immutable.service.version, "latest");
+        assert_eq!(immutable.service.version.len(), 7);
+        assert!(immutable
+            .phases
+            .commands_for_hash()
+            .join("\n")
+            .contains(&format!(
+                "registry.local/immutable:{}",
+                immutable.service.version
+            )));
+
+        let overrides = generation_image_overrides(&env, &env.list_services())
+            .expect("legacy generation should resolve omitted versions");
+        assert_eq!(
+            overrides.get("immutable"),
+            Some(&format!(
+                "registry.local/immutable:{}",
+                immutable.service.version
+            ))
+        );
+        assert!(!overrides.contains_key("explicit"));
     }
 
     #[test]

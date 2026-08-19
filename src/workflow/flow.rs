@@ -1,10 +1,90 @@
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
-use serde::Serialize;
 use crate::environment::Environment;
 use crate::workflow::config::WorkflowConfig;
 use crate::workflow::profile::WorkflowStepMode;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowProvider {
+    Circleci,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowTriggerKind {
+    Schedule,
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FlowTrigger {
+    pub kind: FlowTriggerKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+    #[serde(default = "default_branch")]
+    pub branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+fn default_branch() -> String {
+    "main".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CandidateAdapter {
+    pub fetch_script: String,
+    pub report_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SigningAdapter {
+    pub script: String,
+    pub signature_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowStageAction {
+    Prepare,
+    Sign,
+    Apply,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowStageApproval {
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryFlowStage {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<FlowStageAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<FlowStageApproval>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryFlowProfile {
+    #[serde(skip)]
+    pub name: String,
+    pub provider: FlowProvider,
+    pub environment: String,
+    pub concurrency_key: String,
+    pub trigger: FlowTrigger,
+    pub candidate: CandidateAdapter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing: Option<SigningAdapter>,
+    #[serde(default, rename = "stage")]
+    pub stages: Vec<DeliveryFlowStage>,
+}
 
 #[derive(Serialize)]
 pub struct InspectResult {
@@ -14,6 +94,7 @@ pub struct InspectResult {
     pub ci_providers: Vec<String>,
     pub gitops_present: bool,
     pub gitops_tool: Option<String>,
+    pub delivery_flows: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -62,7 +143,13 @@ pub fn inspect() -> Result<InspectResult, Box<dyn std::error::Error>> {
                     } else {
                         Vec::new()
                     };
-                    environments.insert(name, EnvironmentInfo { config_exists, services });
+                    environments.insert(
+                        name,
+                        EnvironmentInfo {
+                            config_exists,
+                            services,
+                        },
+                    );
                 }
             }
         }
@@ -93,6 +180,17 @@ pub fn inspect() -> Result<InspectResult, Box<dyn std::error::Error>> {
         ci_providers,
         gitops_present,
         gitops_tool,
+        delivery_flows: if workflow_config_exists {
+            WorkflowConfig::load()
+                .map(|config| {
+                    let mut names = config.flow.keys().cloned().collect::<Vec<_>>();
+                    names.sort();
+                    names
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -104,13 +202,18 @@ pub fn validate() -> Result<ValidationResult, Box<dyn std::error::Error>> {
     if workflow_config_exists {
         match WorkflowConfig::load() {
             Ok(config) => {
-                for (name, profile) in config.workflow {
+                for (name, profile) in &config.workflow {
                     let env_dir = Path::new("k8s/environments").join(&profile.environment);
                     if !env_dir.exists() {
                         errors.push(format!(
                             "Workflow profile '{}' references non-existent environment '{}'",
                             name, profile.environment
                         ));
+                    }
+                }
+                for (name, flow) in &config.flow {
+                    if let Err(error) = validate_delivery_flow(name, flow, &config) {
+                        errors.push(error);
                     }
                 }
             }
@@ -132,13 +235,15 @@ pub fn validate() -> Result<ValidationResult, Box<dyn std::error::Error>> {
                     match Environment::load_from_file(&name) {
                         Ok(env) => {
                             for service in env.services {
-                                if service.version == "latest" {
+                                if service.has_explicit_version() && service.version == "latest" {
                                     errors.push(format!(
                                         "Environment '{}' service '{}' uses mutable tag 'latest'",
                                         name, service.name
                                     ));
                                 }
-                                if service.version.trim().is_empty() {
+                                if service.has_explicit_version()
+                                    && service.version.trim().is_empty()
+                                {
                                     errors.push(format!(
                                         "Environment '{}' service '{}' has an empty version",
                                         name, service.name
@@ -163,7 +268,11 @@ pub fn validate() -> Result<ValidationResult, Box<dyn std::error::Error>> {
         if dir_path.exists() && dir_path.is_dir() {
             for entry in walkdir::WalkDir::new(dir_path).into_iter().flatten() {
                 if entry.file_type().is_file() {
-                    let ext = entry.path().extension().and_then(|s| s.to_str()).unwrap_or("");
+                    let ext = entry
+                        .path()
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
                     if ext == "yaml" || ext == "yml" {
                         if let Ok(contents) = fs::read_to_string(entry.path()) {
                             if let Err(e) = serde_yaml::from_str::<serde_json::Value>(&contents) {
@@ -188,125 +297,567 @@ pub fn validate() -> Result<ValidationResult, Box<dyn std::error::Error>> {
     Ok(ValidationResult { is_valid, errors })
 }
 
-pub fn generate_ci_merge() -> Result<(), Box<dyn std::error::Error>> {
-    let path = Path::new(".circleci/config.yml");
-    let mut config_value: serde_yaml::Value = if path.exists() {
-        let content = fs::read_to_string(path)?;
-        serde_yaml::from_str(&content).unwrap_or_else(|_| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
-    } else {
-        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+pub fn validate_delivery_flow(
+    name: &str,
+    flow: &DeliveryFlowProfile,
+    config: &WorkflowConfig,
+) -> Result<(), String> {
+    if name.trim().is_empty() || flow.environment.trim().is_empty() {
+        return Err("flow name and environment cannot be blank".to_string());
+    }
+    validate_command_token(name, "environment", &flow.environment)?;
+    if flow.concurrency_key.is_empty()
+        || flow.concurrency_key.len() > 512
+        || !flow.concurrency_key.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-' | b'_' | b'/')
+        })
+    {
+        return Err(format!("flow '{name}' has an invalid concurrency_key"));
+    }
+    validate_command_token(name, "trigger branch", &flow.trigger.branch)?;
+    match flow.trigger.kind {
+        FlowTriggerKind::Schedule => {
+            if flow
+                .trigger
+                .cron
+                .as_deref()
+                .is_none_or(|cron| cron.split_whitespace().count() != 5)
+                || flow
+                    .trigger
+                    .name
+                    .as_deref()
+                    .is_none_or(|schedule_name| schedule_name.trim().is_empty())
+                || flow
+                    .trigger
+                    .name
+                    .as_deref()
+                    .is_some_and(|schedule_name| schedule_name.contains(['\r', '\n']))
+                || flow.trigger.cron.as_deref().is_some_and(|cron| {
+                    !cron.bytes().all(|byte| {
+                        byte.is_ascii_digit() || matches!(byte, b' ' | b'*' | b',' | b'-' | b'/')
+                    })
+                })
+            {
+                return Err(format!(
+                    "flow '{name}' schedule trigger requires a name and five-field cron"
+                ));
+            }
+        }
+        FlowTriggerKind::Manual if flow.trigger.cron.is_some() => {
+            return Err(format!(
+                "flow '{name}' manual trigger cannot declare a cron"
+            ));
+        }
+        FlowTriggerKind::Manual => {}
+    }
+    validate_adapter_path(name, "candidate fetch script", &flow.candidate.fetch_script)?;
+    validate_relative_path(name, "candidate report path", &flow.candidate.report_path)?;
+    if let Some(signing) = &flow.signing {
+        validate_adapter_path(name, "signing script", &signing.script)?;
+        validate_relative_path(name, "signature path", &signing.signature_path)?;
+    }
+
+    let mut shape = Vec::new();
+    let mut stage_names = std::collections::BTreeSet::new();
+    let mut release_profile: Option<&str> = None;
+    for stage in &flow.stages {
+        if stage.name.trim().is_empty() {
+            return Err(format!("flow '{name}' contains a blank stage name"));
+        }
+        if !stage_names.insert(stage.name.as_str()) {
+            return Err(format!(
+                "flow '{name}' contains duplicate stage name '{}'",
+                stage.name
+            ));
+        }
+        match (&stage.action, &stage.approval) {
+            (Some(action), None) => {
+                shape.push(match action {
+                    FlowStageAction::Prepare => "prepare",
+                    FlowStageAction::Sign => "sign",
+                    FlowStageAction::Apply => "apply",
+                });
+                if matches!(action, FlowStageAction::Prepare | FlowStageAction::Apply) {
+                    let profile_name = stage.profile.as_deref().ok_or_else(|| {
+                        format!("flow '{name}' stage '{}' requires profile", stage.name)
+                    })?;
+                    validate_command_token(name, "profile", profile_name)?;
+                    let profile = config.workflow.get(profile_name).ok_or_else(|| {
+                        format!("flow '{name}' references unknown profile '{profile_name}'")
+                    })?;
+                    if profile.environment != flow.environment {
+                        return Err(format!(
+                            "flow '{name}' profile '{profile_name}' targets '{}' instead of '{}'",
+                            profile.environment, flow.environment
+                        ));
+                    }
+                    if crate::workflow::release::validate_release_profile(profile).is_err() {
+                        return Err(format!(
+                            "flow '{name}' profile '{profile_name}' is not a portable release profile"
+                        ));
+                    }
+                    if let Some(existing) = release_profile {
+                        if existing != profile_name {
+                            return Err(format!(
+                                "flow '{name}' prepare and apply stages must use the same profile"
+                            ));
+                        }
+                    } else {
+                        release_profile = Some(profile_name);
+                    }
+                }
+            }
+            (None, Some(FlowStageApproval::Manual)) => shape.push("approval"),
+            _ => {
+                return Err(format!(
+                    "flow '{name}' stage '{}' must define exactly one action or approval",
+                    stage.name
+                ))
+            }
+        }
+    }
+    let valid_shape = shape == ["prepare", "approval", "apply"]
+        || shape == ["prepare", "approval", "sign", "apply"];
+    if !valid_shape {
+        return Err(format!(
+            "flow '{name}' stages must be prepare -> manual approval -> [sign] -> apply"
+        ));
+    }
+    let profile_name =
+        release_profile.ok_or_else(|| format!("flow '{name}' has no release profile"))?;
+    let profile = config
+        .workflow
+        .get(profile_name)
+        .ok_or_else(|| format!("flow '{name}' references unknown profile '{profile_name}'"))?;
+    crate::workflow::release::validate_release_profile(profile)
+        .map_err(|error| format!("flow '{name}' profile '{profile_name}': {error}"))?;
+    let environment = Environment::load_from_file(&flow.environment)
+        .map_err(|error| format!("flow '{name}' cannot load environment policy: {error}"))?;
+    let normalized = profile.normalize(true);
+    crate::workflow::release::validate_approval_policy(&normalized, &environment)
+        .map_err(|error| format!("flow '{name}': {error}"))?;
+    crate::workflow::release::validate_service_image_templates(&environment)
+        .map_err(|error| format!("flow '{name}': {error}"))?;
+    if environment.services.iter().any(|service| {
+        service
+            .hooks
+            .as_ref()
+            .and_then(|hooks| hooks.pre_deploy.as_ref())
+            .is_some()
+    }) {
+        return Err(format!(
+            "flow '{name}' portable preparation rejects pre-deployment hooks"
+        ));
+    }
+    let lock = environment
+        .deployment_policy
+        .release_lock
+        .clone()
+        .unwrap_or_default();
+    if lock.lease_duration_seconds == 0
+        || lock.lease_duration_seconds > i32::MAX as u32
+        || lock.renew_interval_seconds == 0
+        || lock.renew_interval_seconds >= u64::from(lock.lease_duration_seconds)
+    {
+        return Err(format!("flow '{name}' has an invalid release lock policy"));
+    }
+    let needs_signature =
+        profile.approval == Some(crate::workflow::profile::ApprovalMode::Signature);
+    if needs_signature != shape.contains(&"sign") || needs_signature != flow.signing.is_some() {
+        return Err(format!(
+            "flow '{name}' signing stage/adapter must exactly match approval=signature"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_adapter_path(flow: &str, label: &str, value: &str) -> Result<(), String> {
+    validate_relative_path(flow, label, value)?;
+    let path = Path::new(value);
+    if !path.is_file() {
+        return Err(format!("flow '{flow}' {label} '{}' is not a file", value));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(path)
+            .map_err(|error| error.to_string())?
+            .permissions()
+            .mode()
+            & 0o111
+            == 0
+        {
+            return Err(format!(
+                "flow '{flow}' {label} '{}' is not executable",
+                value
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_relative_path(flow: &str, label: &str, value: &str) -> Result<(), String> {
+    let path = Path::new(value);
+    if value.trim().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'))
+    {
+        return Err(format!(
+            "flow '{flow}' {label} must be a safe repository-relative path"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_command_token(flow: &str, label: &str, value: &str) -> Result<(), String> {
+    if value.starts_with('-')
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'))
+    {
+        return Err(format!(
+            "flow '{flow}' {label} must be safe for generated command arguments"
+        ));
+    }
+    Ok(())
+}
+
+pub fn generate_ci(
+    requested_flow: Option<&str>,
+    mode: crate::cli::FlowGenerationMode,
+    output: Option<&Path>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let config = WorkflowConfig::load()?;
+    let flow_name = match requested_flow {
+        Some(name) => name.to_string(),
+        None if config.flow.len() == 1 => config.flow.keys().next().cloned().unwrap_or_default(),
+        None => return Err("flow name is required unless exactly one flow is configured".into()),
     };
+    let flow = config
+        .flow
+        .get(&flow_name)
+        .ok_or_else(|| format!("delivery flow '{flow_name}' not found"))?;
+    validate_delivery_flow(&flow_name, flow, &config)?;
+    let fragment = circleci_fragment(&flow_name, flow)?;
+    let full = format!("version: 2.1\n{}", fragment);
+    validate_circleci_root(&full)?;
+    let target = output.unwrap_or_else(|| Path::new(".circleci/config.yml"));
 
-    let mapping = config_value.as_mapping_mut().ok_or("Invalid CircleCI config root")?;
-
-    // 1. Version
-    if !mapping.contains_key("version") {
-        mapping.insert(serde_yaml::Value::String("version".to_string()), serde_yaml::Value::String("2.1".to_string()));
+    match mode {
+        crate::cli::FlowGenerationMode::Print => print!("{full}"),
+        crate::cli::FlowGenerationMode::Fragment => print!("{fragment}"),
+        crate::cli::FlowGenerationMode::Create => {
+            if target.exists() {
+                return Err(
+                    format!("refusing to overwrite existing '{}'", target.display()).into(),
+                );
+            }
+            atomic_write(target, full.as_bytes())?;
+        }
+        crate::cli::FlowGenerationMode::Merge => merge_circleci(target, &fragment)?,
     }
+    Ok(serde_json::json!({
+        "schema_version": "sailr.flow-generation/v1",
+        "flow": flow_name,
+        "provider": "circleci",
+        "mode": format!("{:?}", mode).to_lowercase(),
+        "output": if matches!(mode, crate::cli::FlowGenerationMode::Create | crate::cli::FlowGenerationMode::Merge) {
+            Some(target.to_string_lossy().to_string())
+        } else { None },
+        "schedule_setup": {
+            "trigger_kind": flow.trigger.kind,
+            "name": flow.trigger.name.as_deref().unwrap_or(&flow.name),
+            "cron": flow.trigger.cron,
+            "branch": flow.trigger.branch,
+            "pipeline_parameter": managed_name(&flow_name, "enabled"),
+            "pipeline_parameter_value": true,
+        }
+    }))
+}
 
-    // 2. Jobs
-    let jobs_key = serde_yaml::Value::String("jobs".to_string());
-    if !mapping.contains_key(&jobs_key) {
-        mapping.insert(jobs_key.clone(), serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+fn managed_name(flow: &str, suffix: &str) -> String {
+    let base = flow
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("sailr_{base}_{suffix}")
+}
+
+fn circleci_fragment(
+    name: &str,
+    flow: &DeliveryFlowProfile,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let prepare = flow
+        .stages
+        .iter()
+        .find(|stage| stage.action == Some(FlowStageAction::Prepare))
+        .and_then(|stage| stage.profile.as_deref())
+        .ok_or("prepare stage is missing")?;
+    let apply = flow
+        .stages
+        .iter()
+        .find(|stage| stage.action == Some(FlowStageAction::Apply))
+        .and_then(|stage| stage.profile.as_deref())
+        .ok_or("apply stage is missing")?;
+    let plan_job = managed_name(name, "prepare");
+    let approve_job = managed_name(name, "approve");
+    let sign_job = managed_name(name, "sign");
+    let apply_job = managed_name(name, "apply");
+    let workflow = managed_name(name, "workflow");
+    let enabled_parameter = managed_name(name, "enabled");
+    let release_dir = format!(".sailr/releases/{}", managed_name(name, "artifacts"));
+    let promotion_path = format!("{release_dir}/promotion-plan.json");
+    let bundle_path = format!("{release_dir}/prepared/deployment.bundle");
+    let install = "curl -sSL https://sailr.dev/install.sh | bash";
+    let mut jobs = format!(
+        r#"jobs:
+  {plan_job}:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: Install Sailr
+          command: {install}
+      - run:
+          name: Retrieve release candidate
+          command: {fetch} --output {report}
+      - run:
+          name: Validate and prepare release
+          command: |
+            sailr publication validate {report}
+            sailr promote plan --from-report {report} --to {environment} --out {promotion_path}
+            sailr workflow prepare {prepare} --promotion-plan {promotion_path} --out {release_dir}/prepared
+      - persist_to_workspace:
+          root: .
+          paths:
+            - {release_dir}
+      - store_artifacts:
+          path: {release_dir}/prepared
+"#,
+        fetch = flow.candidate.fetch_script,
+        report = flow.candidate.report_path,
+        environment = flow.environment,
+    );
+    if let Some(signing) = &flow.signing {
+        jobs.push_str(&format!(
+            r#"  {sign_job}:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Sign approved release
+          command: |
+            PLAN_HASH=$(sed -n 's/.*\"plan_hash\": \"\([^\"]*\)\".*/\1/p' {release_dir}/prepared/deployment-plan.json)
+            {script} --message sailr-deployment-plan-v1:$PLAN_HASH --output {signature}
+      - persist_to_workspace:
+          root: .
+          paths:
+            - {signature}
+"#,
+            script = signing.script,
+            signature = signing.signature_path,
+        ));
     }
-    let jobs_map = mapping.get_mut(&jobs_key).unwrap().as_mapping_mut().ok_or("CircleCI jobs must be a mapping")?;
+    let signature_prefix = flow.signing.as_ref().map_or(String::new(), |signing| {
+        format!(
+            "DEPLOY_APPROVAL_SIG=$(tr -d '\\n' < {}) ",
+            signing.signature_path
+        )
+    });
+    jobs.push_str(&format!(
+        r#"  {apply_job}:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install Sailr
+          command: {install}
+      - run:
+          name: Apply prepared release
+          command: {signature_prefix}sailr workflow apply {apply} --bundle {bundle_path} --non-interactive --apply --release-id "$CIRCLE_WORKFLOW_ID"
+      - store_artifacts:
+          path: .sailr/reports
+          when: always
+      - store_artifacts:
+          path: {release_dir}
+          when: always
+"#,
+    ));
+    let sign_workflow = if flow.signing.is_some() {
+        format!(
+            "      - {sign_job}:\n          requires:\n            - {approve_job}\n      - {apply_job}:\n          serial-group: << pipeline.project.slug >>/{key}\n          requires:\n            - {sign_job}\n",
+            key = flow.concurrency_key
+        )
+    } else {
+        format!(
+            "      - {apply_job}:\n          serial-group: << pipeline.project.slug >>/{key}\n          requires:\n            - {approve_job}\n",
+            key = flow.concurrency_key
+        )
+    };
+    let trigger_metadata = match flow.trigger.kind {
+        FlowTriggerKind::Schedule => format!(
+            "# Sailr schedule setup: name={} cron={} branch={} parameter={}\n",
+            flow.trigger.name.as_deref().unwrap_or(name),
+            flow.trigger.cron.as_deref().unwrap_or_default(),
+            flow.trigger.branch,
+            enabled_parameter
+        ),
+        FlowTriggerKind::Manual => format!(
+            "# Sailr manual trigger: branch={} parameter={}\n",
+            flow.trigger.branch, enabled_parameter
+        ),
+    };
+    let fragment = format!(
+        r#"{trigger_metadata}parameters:
+  {enabled_parameter}:
+    type: boolean
+    default: false
+{jobs}workflows:
+  {workflow}:
+    when: pipeline.parameters.{enabled_parameter}
+    jobs:
+      - {plan_job}
+      - {approve_job}:
+          type: approval
+          requires:
+            - {plan_job}
+{sign_workflow}"#
+    );
+    let _: serde_yaml::Value = serde_yaml::from_str(&fragment)?;
+    Ok(fragment)
+}
 
-    let job_name = "sailr-workflow";
-    let has_job = jobs_map.contains_key(job_name);
-    if !has_job {
-        let job_yaml = r#"
-docker:
-  - image: cimg/base:current
-steps:
-  - checkout
-  - run:
-      name: Install Sailr
-      command: curl -sSL https://sailr.dev/install.sh | bash
-  - run:
-      name: Run Workflow
-      command: sailr workflow run ci
-"#;
-        let job_val: serde_yaml::Value = serde_yaml::from_str(job_yaml)?;
-        jobs_map.insert(serde_yaml::Value::String(job_name.to_string()), job_val);
+fn merge_circleci(path: &Path, fragment: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if !path.exists() {
+        let full = format!("version: 2.1\n{fragment}");
+        validate_circleci_root(&full)?;
+        return atomic_write(path, full.as_bytes());
     }
-
-    // 3. Workflows
-    let wf_key = serde_yaml::Value::String("workflows".to_string());
-    if !mapping.contains_key(&wf_key) {
-        mapping.insert(wf_key.clone(), serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    let existing = fs::read_to_string(path)?;
+    if existing.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("setup:")
+            || trimmed.starts_with("<<:")
+            || trimmed.contains(" &")
+            || trimmed.starts_with('*')
+    }) {
+        return Err(
+            "CircleCI merge refuses dynamic configuration, aliases, anchors, or merge keys".into(),
+        );
     }
-    let wf_map = mapping.get_mut(&wf_key).unwrap().as_mapping_mut().ok_or("CircleCI workflows must be a mapping")?;
-
-    let pipeline_name = "sailr-pipeline";
-    if !wf_map.contains_key(pipeline_name) {
-        let wf_yaml = r#"
-jobs:
-  - sailr-workflow
-"#;
-        let wf_val: serde_yaml::Value = serde_yaml::from_str(wf_yaml)?;
-        wf_map.insert(serde_yaml::Value::String(pipeline_name.to_string()), wf_val);
+    let mut root: serde_yaml::Value = serde_yaml::from_str(&existing)?;
+    validate_circleci_root_value(&root)?;
+    let generated: serde_yaml::Value = serde_yaml::from_str(fragment)?;
+    let root_map = root
+        .as_mapping_mut()
+        .ok_or("CircleCI root must be a mapping")?;
+    let generated_map = generated
+        .as_mapping()
+        .ok_or("generated fragment must be a mapping")?;
+    for section in ["jobs", "workflows", "parameters"] {
+        let key = serde_yaml::Value::String(section.to_string());
+        let Some(additions) = generated_map.get(&key) else {
+            continue;
+        };
+        let additions = additions
+            .as_mapping()
+            .ok_or("generated section must be a mapping")?;
+        if !root_map.contains_key(&key) {
+            root_map.insert(key.clone(), serde_yaml::Value::Mapping(Default::default()));
+        }
+        let destination = root_map
+            .get_mut(&key)
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .ok_or_else(|| format!("CircleCI {section} must be a mapping"))?;
+        for (managed_key, managed_value) in additions {
+            if let Some(existing_value) = destination.get(managed_key) {
+                if existing_value != managed_value {
+                    return Err(format!(
+                        "CircleCI {section} contains a conflicting Sailr-managed name"
+                    )
+                    .into());
+                }
+            } else {
+                destination.insert(managed_key.clone(), managed_value.clone());
+            }
+        }
     }
+    let output = serde_yaml::to_string(&root)?;
+    let reparsed: serde_yaml::Value = serde_yaml::from_str(&output)?;
+    if reparsed != root {
+        return Err("CircleCI merge round-trip validation failed".into());
+    }
+    validate_circleci_root_value(&reparsed)?;
+    atomic_write(path, output.as_bytes())
+}
 
+fn validate_circleci_root(contents: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let value: serde_yaml::Value = serde_yaml::from_str(contents)?;
+    validate_circleci_root_value(&value)
+}
+
+fn validate_circleci_root_value(
+    value: &serde_yaml::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = value
+        .as_mapping()
+        .ok_or("CircleCI root must be a mapping")?;
+    let version = root
+        .get(serde_yaml::Value::String("version".to_string()))
+        .and_then(serde_yaml::Value::as_f64)
+        .ok_or("CircleCI config must declare numeric version 2.1")?;
+    if (version - 2.1).abs() > f64::EPSILON {
+        return Err("CircleCI config version must be 2.1".into());
+    }
+    for required in ["jobs", "workflows"] {
+        if !root
+            .get(serde_yaml::Value::String(required.to_string()))
+            .is_some_and(serde_yaml::Value::is_mapping)
+        {
+            return Err(format!("CircleCI {required} must be a mapping").into());
+        }
+    }
+    Ok(())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let output = serde_yaml::to_string(&config_value)?;
-    fs::write(path, output)?;
+    let temporary = path.with_extension("yml.tmp");
+    fs::write(&temporary, bytes)?;
+    fs::rename(temporary, path)?;
     Ok(())
 }
 
 pub fn check_release() -> Result<CheckResult, Box<dyn std::error::Error>> {
     let mut findings = Vec::new();
 
-    if let Ok(config) = WorkflowConfig::load() {
-        for (name, profile) in config.workflow {
-            let is_prod = profile.environment.to_lowercase().contains("prod") || 
-                           profile.name.to_lowercase().contains("prod") ||
-                           profile.name.to_lowercase().contains("release");
-
-            if is_prod {
-                if profile.build.as_ref().map(|s| s == &WorkflowStepMode::Run).unwrap_or(false) ||
-                   profile.push.as_ref().map(|s| s == &WorkflowStepMode::Run).unwrap_or(false) {
-                    findings.push(format!(
-                        "Production profile '{}' has active build/push steps; production should deploy pre-built immutable artifacts.",
-                        name
-                    ));
-                }
-
-                if profile.deploy.as_ref().map(|s| s == &WorkflowStepMode::Run).unwrap_or(false) {
-                    if profile.approval == crate::workflow::profile::ApprovalMode::None {
-                        findings.push(format!(
-                            "Production deploy profile '{}' has approval set to 'none'. Production requires explicit approval (external or signature).",
-                            name
-                        ));
-                    }
-                }
-            }
-        }
+    let config = WorkflowConfig::load()?;
+    if config.flow.is_empty() {
+        findings.push("No declarative delivery flows are configured".to_string());
     }
-
-    let environments_dir = Path::new("k8s/environments");
-    if environments_dir.exists() && environments_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(environments_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    let env_name = entry.file_name().to_string_lossy().into_owned();
-                    let is_prod = env_name.to_lowercase().contains("prod");
-                    if is_prod {
-                        if let Ok(env) = Environment::load_from_file(&env_name) {
-                            for service in env.services {
-                                let is_digest = service.version.starts_with("sha256:") || service.version.contains("@sha256:");
-                                if !is_digest {
-                                    findings.push(format!(
-                                        "Production environment '{}' service '{}' does not use an immutable image digest (tag: '{}').",
-                                        env_name, service.name, service.version
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    for (name, flow) in &config.flow {
+        if let Err(error) = validate_delivery_flow(name, flow, &config) {
+            findings.push(error);
         }
     }
 
@@ -319,14 +870,20 @@ pub fn check_gitops() -> Result<CheckResult, Box<dyn std::error::Error>> {
 
     if let Ok(config) = WorkflowConfig::load() {
         for (name, profile) in config.workflow {
-            let is_gitops = name.to_lowercase().contains("gitops") || profile.environment.to_lowercase().contains("gitops");
-            if is_gitops {
-                if profile.deploy.as_ref().map(|s| s == &WorkflowStepMode::Run).unwrap_or(false) && profile.apply.unwrap_or(false) {
-                    findings.push(format!(
+            let is_gitops = name.to_lowercase().contains("gitops")
+                || profile.environment.to_lowercase().contains("gitops");
+            if is_gitops
+                && profile
+                    .deploy
+                    .as_ref()
+                    .map(|s| s == &WorkflowStepMode::Run)
+                    .unwrap_or(false)
+                && profile.apply.unwrap_or(false)
+            {
+                findings.push(format!(
                         "GitOps profile '{}' has active cluster deploy (apply=true). GitOps must deploy via desired-state write-back, not direct cluster mutation.",
                         name
                     ));
-                }
             }
         }
     }
@@ -341,22 +898,70 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_inspect_and_validate_with_temp_files() {
-        let dir = tempdir().unwrap();
-        let old_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+    fn circleci_release_fragment_has_approval_workspace_and_serialization() {
+        let flow = DeliveryFlowProfile {
+            name: "release".to_string(),
+            provider: FlowProvider::Circleci,
+            environment: "prod".to_string(),
+            concurrency_key: "prod-release".to_string(),
+            trigger: FlowTrigger {
+                kind: FlowTriggerKind::Schedule,
+                cron: Some("0 6 * * 2".to_string()),
+                branch: "main".to_string(),
+                name: Some("production-release".to_string()),
+            },
+            candidate: CandidateAdapter {
+                fetch_script: "scripts/fetch-candidate".to_string(),
+                report_path: "artifacts/publication-report.json".to_string(),
+            },
+            signing: None,
+            stages: vec![
+                DeliveryFlowStage {
+                    name: "plan".to_string(),
+                    profile: Some("release".to_string()),
+                    action: Some(FlowStageAction::Prepare),
+                    approval: None,
+                },
+                DeliveryFlowStage {
+                    name: "approve".to_string(),
+                    profile: None,
+                    action: None,
+                    approval: Some(FlowStageApproval::Manual),
+                },
+                DeliveryFlowStage {
+                    name: "deploy".to_string(),
+                    profile: Some("release".to_string()),
+                    action: Some(FlowStageAction::Apply),
+                    approval: None,
+                },
+            ],
+        };
+        let yaml = circleci_fragment("release", &flow).expect("fragment");
+        assert!(yaml.contains("type: approval"));
+        assert!(yaml.contains("persist_to_workspace"));
+        assert!(yaml.contains("attach_workspace"));
+        assert!(yaml.contains("serial-group: << pipeline.project.slug >>/prod-release"));
+        assert!(yaml.contains("sailr workflow prepare release"));
+        assert!(yaml.contains("sailr workflow apply release"));
+        assert!(yaml.contains("pipeline.parameters.sailr_release_enabled"));
 
-        // 1. Initially both should fail or report false/missing
-        let insp = inspect().unwrap();
-        assert!(!insp.workflow_config_exists);
-        assert!(insp.workflow_profiles.is_empty());
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.yml");
+        std::fs::write(
+            &config_path,
+            "version: 2.1\njobs:\n  unrelated:\n    docker:\n      - image: cimg/base:current\n    steps:\n      - run: echo ok\nworkflows:\n  unrelated:\n    jobs:\n      - unrelated\n",
+        )
+        .expect("existing config");
+        merge_circleci(&config_path, &yaml).expect("first merge");
+        let first = std::fs::read(&config_path).expect("merged config");
+        merge_circleci(&config_path, &yaml).expect("idempotent merge");
+        assert_eq!(first, std::fs::read(&config_path).expect("merged config"));
 
-        let val = validate().unwrap();
-        assert!(!val.is_valid);
-        assert!(val.errors.iter().any(|e| e.contains("sailr.workflow.toml does not exist")));
-
-        // Restore cwd
-        std::env::set_current_dir(old_cwd).unwrap();
+        std::fs::write(
+            &config_path,
+            "version: 2.1\njobs:\n  sailr_release_prepare:\n    docker: []\n    steps: []\nworkflows: {}\n",
+        )
+        .expect("conflicting config");
+        assert!(merge_circleci(&config_path, &yaml).is_err());
     }
 }
-

@@ -134,6 +134,162 @@ jobs:
           test "$(jq -r '.artifacts.deployment.rollback.succeeded' \
             .sailr/reports/kind-rollback/latest.json)" = "true"
 
+      - name: Create immutable portable release candidate
+        run: |
+          docker pull nginx:1.27-alpine
+          kind load docker-image nginx:1.27-alpine --name sailr
+          repo_digest="$(docker image inspect \
+            --format '{{index .RepoDigests 0}}' nginx:1.27-alpine)"
+          digest="${repo_digest#*@}"
+          image_ref="docker.io/library/nginx@${digest}"
+          revision="$(git rev-parse HEAD)"
+          mkdir -p .sailr/kind-portable
+          jq \
+            --arg digest "${digest}" \
+            --arg image_ref "${image_ref}" \
+            --arg revision "${revision}" \
+            '
+              .profile = "kind-publication"
+              | .environment = "kind-source"
+              | .plans.image_push.environment = "kind-source"
+              | (.plans.image_push.items[]
+                  | .service = "nginx"
+                  | .registry = "docker.io"
+                  | .repository = "library/nginx"
+                  | .target_image_ref = "docker.io/library/nginx:kind"
+                  | .local_image_ref = "docker.io/library/nginx:kind"
+                  | .tag = "kind"
+                  | .provenance.build_fingerprint = "kind-nginx"
+                  | .provenance.source_revision = $revision)
+              | (.artifacts.published_images[]
+                  | .service = "nginx"
+                  | .environment = "kind-source"
+                  | .registry = "docker.io"
+                  | .repository = "library/nginx"
+                  | .tag = "kind"
+                  | .digest = $digest
+                  | .image_ref = $image_ref
+                  | .provenance.build_fingerprint = "kind-nginx"
+                  | .provenance.source_revision = $revision)
+            ' \
+            tests/fixtures/reports/image-publication-success.json \
+            > .sailr/kind-portable/publication-report.json
+          target/release/sailr publication validate \
+            .sailr/kind-portable/publication-report.json
+
+      - name: Promote, prepare, sign, and apply without source manifests
+        run: |
+          target/release/sailr promote plan \
+            --from-report .sailr/kind-portable/publication-report.json \
+            --to kind-portable \
+            --out .sailr/kind-portable/promotion-plan.json
+          target/release/sailr workflow prepare kind-portable \
+            --promotion-plan .sailr/kind-portable/promotion-plan.json \
+            --out .sailr/kind-portable/prepared
+          plan_hash="$(jq -r '.plan_hash' \
+            .sailr/kind-portable/prepared/deployment-plan.json)"
+          printf '%s' "sailr-deployment-plan-v1:${plan_hash}" \
+            > "${RUNNER_TEMP}/portable-sign-input.bin"
+          openssl pkeyutl -sign -rawin \
+            -inkey "${RUNNER_TEMP}/sailr-private.pem" \
+            -in "${RUNNER_TEMP}/portable-sign-input.bin" \
+            -out "${RUNNER_TEMP}/portable-signature.bin"
+          DEPLOY_APPROVAL_SIG="$(base64 --wrap=0 \
+            < "${RUNNER_TEMP}/portable-signature.bin")"
+          export DEPLOY_APPROVAL_SIG
+          rm -rf k8s/templates/kind/portable k8s/generated/kind-portable
+          target/release/sailr workflow apply kind-portable \
+            --bundle .sailr/kind-portable/prepared/deployment.bundle \
+            --non-interactive \
+            --apply \
+            --release-id kind-portable-source-free
+          kubectl --context kind-sailr rollout status \
+            deployment/sailr-portable \
+            --timeout=60s
+          test "$(jq -r '.artifacts.release.outcome' \
+            .sailr/reports/kind-portable/latest.json)" = "success"
+
+      - name: Reject concurrent release before mutation
+        run: |
+          plan_hash="$(jq -r '.plan_hash' \
+            .sailr/kind-portable/prepared/deployment-plan.json)"
+          printf '%s' "sailr-deployment-plan-v1:${plan_hash}" \
+            > "${RUNNER_TEMP}/contention-sign-input.bin"
+          openssl pkeyutl -sign -rawin \
+            -inkey "${RUNNER_TEMP}/sailr-private.pem" \
+            -in "${RUNNER_TEMP}/contention-sign-input.bin" \
+            -out "${RUNNER_TEMP}/contention-signature.bin"
+          DEPLOY_APPROVAL_SIG="$(base64 --wrap=0 \
+            < "${RUNNER_TEMP}/contention-signature.bin")"
+          export DEPLOY_APPROVAL_SIG
+          target/release/sailr workflow apply kind-portable \
+            --bundle .sailr/kind-portable/prepared/deployment.bundle \
+            --non-interactive \
+            --apply \
+            --release-id kind-contention-a \
+            > "${RUNNER_TEMP}/contention-a.log" 2>&1 &
+          first_pid=$!
+          for attempt in $(seq 1 30); do
+            if kubectl --context kind-sailr get lease \
+              --all-namespaces \
+              --output json \
+              | jq -e '.items[] | select(.spec.holderIdentity == "kind-contention-a")' \
+                > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          kubectl --context kind-sailr get lease \
+            --all-namespaces \
+            --output json \
+            | jq -e '.items[] | select(.spec.holderIdentity == "kind-contention-a")'
+          set +e
+          target/release/sailr workflow apply kind-portable \
+            --bundle .sailr/kind-portable/prepared/deployment.bundle \
+            --non-interactive \
+            --apply \
+            --release-id kind-contention-b
+          contention_status=$?
+          set -e
+          test "${contention_status}" -ne 0
+          wait "${first_pid}"
+
+      - name: Roll back a portable rollout timeout
+        run: |
+          target/release/sailr promote plan \
+            --from-report .sailr/kind-portable/publication-report.json \
+            --to kind-timeout \
+            --out .sailr/kind-portable/timeout-promotion-plan.json
+          target/release/sailr workflow prepare kind-timeout \
+            --promotion-plan .sailr/kind-portable/timeout-promotion-plan.json \
+            --out .sailr/kind-portable/timeout-prepared
+          plan_hash="$(jq -r '.plan_hash' \
+            .sailr/kind-portable/timeout-prepared/deployment-plan.json)"
+          printf '%s' "sailr-deployment-plan-v1:${plan_hash}" \
+            > "${RUNNER_TEMP}/timeout-sign-input.bin"
+          openssl pkeyutl -sign -rawin \
+            -inkey "${RUNNER_TEMP}/sailr-private.pem" \
+            -in "${RUNNER_TEMP}/timeout-sign-input.bin" \
+            -out "${RUNNER_TEMP}/timeout-signature.bin"
+          DEPLOY_APPROVAL_SIG="$(base64 --wrap=0 \
+            < "${RUNNER_TEMP}/timeout-signature.bin")"
+          export DEPLOY_APPROVAL_SIG
+          set +e
+          target/release/sailr workflow apply kind-timeout \
+            --bundle .sailr/kind-portable/timeout-prepared/deployment.bundle \
+            --non-interactive \
+            --apply \
+            --release-id kind-timeout-rollback
+          timeout_status=$?
+          set -e
+          test "${timeout_status}" -ne 0
+          ! kubectl --context kind-sailr get configmap sailr-timeout-marker
+          ! kubectl --context kind-sailr get deployment sailr-timeout
+          test "$(jq -r '.artifacts.release.outcome' \
+            .sailr/reports/kind-timeout/latest.json)" = "verification_failed"
+          test "$(jq -r '.artifacts.release.rollback_outcome' \
+            .sailr/reports/kind-timeout/latest.json)" = "rollback_succeeded"
+
       - name: Capture cluster diagnostics
         if: always()
         run: |

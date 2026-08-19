@@ -7,6 +7,11 @@ description: "Design end-to-end delivery flows for Sailr repositories. Analyses 
 
 This skill designs end-to-end delivery flows mapping source code to running environments.
 
+Run `sailr capabilities --format json` before proposing commands. Only include release schemas,
+providers, and flow-generation modes advertised by the installed binary.
+Refuse unsupported features, never write credentials or signing keys, and stop before any
+production apply.
+
 ## 1. Trigger
 Activate this skill when the user asks to:
 - "Set up CI/CD for this repository"
@@ -24,6 +29,7 @@ Before designing a flow, inspect the repository (see `references/repository-disc
 - If the environment extends a production profile or uses signed deployments, recommend **CircleCI Production Flow**.
 - If the environment is for development/preview and the team prefers GitOps, recommend **GitOps Development Flow**.
 - Never mix direct push and GitOps in the same environment.
+- Never infer security policy from an environment or profile name; inspect explicit flow and deployment policy.
 
 ## 4. Output Contract
 The skill must produce a `DeliveryFlowPlan` outlining the environments, CI providers, and deployment models chosen. See `references/output-contract.md`.

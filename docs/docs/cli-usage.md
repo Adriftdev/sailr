@@ -233,6 +233,35 @@ A comprehensive command that performs a sequence of actions:
 
 Runs deterministic workflow profiles from `sailr.workflow.toml`.
 
+* `sailr workflow init <PROFILE> --environment <ENV> [--preset
+  build|deploy|portable-release]` validates an existing environment and safely
+  adds a profile to `sailr.workflow.toml`. It refuses profile collisions and
+  does not contact Docker, Git, registries, or Kubernetes. Use `--print` to
+  preview the complete resulting configuration without writing it, and
+  `--config <FILE>` to target another workflow file. Portable releases require
+  `--context`; signature approval additionally requires a file containing only
+  the base64-encoded trusted public key:
+
+  ```bash
+  sailr workflow init release-production \
+    --environment production \
+    --preset portable-release \
+    --context production-cluster \
+    --namespace production \
+    --approval external
+  ```
+
+  Initialization validates the profile and environment policy but does not
+  require every service to own an image-bearing workload. Exact promoted-image
+  binding is checked during `workflow prepare`. Templates may write variables
+  as either `{{service_image}}` or `{{ service_image }}`.
+
+  Only services with a `build` configuration participate in publication and
+  promotion image binding. External dependencies without a build step keep
+  vendor-owned references in their templates, for example
+  `image: emqx/nanomq:{{service_version}}`. Sailr emits a non-fatal warning when
+  an external service's workload image omits `{{service_version}}`.
+
 * `sailr workflow plan <PROFILE> [--format text|json]` builds and validates the
   actual runkernel graph and predicts cache eligibility. Text output uses
   `[CACHE]`, `[RUN]`, and `[SKIP]`.
@@ -242,8 +271,21 @@ Runs deterministic workflow profiles from `sailr.workflow.toml`.
   phase, effects, dependencies, and cache policy.
 * `sailr workflow inspect <PROFILE>` shows the deployment target, explicit
   environment policy, forced cache bypass, signer fingerprint, and finalizers.
-* `sailr workflow run <PROFILE> --non-interactive --apply` executes a mutating
-  profile after its configured safety checks.
+* `sailr workflow run <PROFILE> --non-interactive --apply [--release-id <ID>]`
+  executes a mutating profile with release locking, rollout verification, and
+  transactional rollback after its configured safety checks.
+* `sailr publication validate <REPORT>` validates a successful immutable-image
+  publication and prints structured JSON.
+* `sailr promote plan --from-report <REPORT> --to <ENV> --out <FILE>` creates a
+  deterministic, complete digest promotion plan without external service access.
+* `sailr workflow prepare <PROFILE> --promotion-plan <FILE> --out <DIR>` writes
+  an immutable deployment bundle, offline diff, plan, and preparation evidence.
+* `sailr workflow apply <PROFILE> --bundle <FILE> --non-interactive --apply`
+  revalidates and applies only the canonical bytes stored in the bundle.
+* `sailr flow generate-ci [FLOW] --mode print|fragment|create|merge` generates a
+  capability-aware CircleCI release workflow. Schedule setup remains external.
+* `sailr capabilities --format json` reports supported schemas and release
+  features for automation and agent tooling.
 
 Signature profiles configure a trusted Ed25519 public key under
 `[workflow.<profile>.signature]`. The first unsigned run writes
@@ -252,6 +294,24 @@ before cluster mutation. Sign
 `sailr-deployment-plan-v1:<plan_hash>` externally and retry with only the
 base64 raw signature in `DEPLOY_APPROVAL_SIG`. See the
 [deterministic deployment audit gate](workflow-audit-gate.md).
+
+Portable preparation rejects pre-deployment hooks and binds post-deployment
+hooks into the immutable bundle. Keep database migrations in explicit,
+separately approved CI stages.
+
+For an in-process workflow with `build = "run"`, `push = "run"`, and
+`generate = "run"`, `{{service_image}}` resolves to the exact target image
+chosen by the push plan. An explicitly configured `[[service]].version` is used
+unchanged by build, push, `{{service_version}}`, and `{{service_image}}`. When a
+build-backed service omits `version`, Sailr derives an immutable seven-character
+tag from its build fingerprint and uses that same tag in legacy `build`,
+`generate`, and `go` as well as runkernel workflows. The derived value is never
+written back to TOML.
+
+`workflow.<profile>.namespace` is the generation default for services that do
+not declare `[[service]].namespace`; an explicit service namespace still wins.
+Sailr does not implicitly create namespaces, so any explicit non-default
+namespace must already exist or be included as a `Namespace` manifest.
 
 ---
 

@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sailr-portable
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sailr-portable
+  template:
+    metadata:
+      labels:
+        app: sailr-portable
+    spec:
+      containers:
+        - name: nginx
+          image: "{{service_image}}"
+          imagePullPolicy: IfNotPresent

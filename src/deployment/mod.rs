@@ -1,5 +1,7 @@
 pub mod bundle;
 pub mod k8sm8;
+pub mod lease;
+pub mod rollout;
 use crate::deployment::k8sm8::deployments::delete_deployment;
 use crate::deployment::k8sm8::multidoc_deserialize;
 use crate::environment::{CommandSpec, Environment, Service};
@@ -204,6 +206,17 @@ pub async fn deploy_bundle(
     backend: &dyn DeploymentBackend,
     journal: SharedDeploymentJournal,
 ) -> Result<(), DeployError> {
+    match apply_bundle(deployment_bundle, backend, journal.clone()).await {
+        Ok(()) => Ok(()),
+        Err(error) => fail_with_rollback(error, backend, &journal).await,
+    }
+}
+
+pub async fn apply_bundle(
+    deployment_bundle: &bundle::DeploymentBundle,
+    backend: &dyn DeploymentBackend,
+    journal: SharedDeploymentJournal,
+) -> Result<(), DeployError> {
     {
         let mut state = journal.lock().map_err(|_| {
             DeployError::EnvironmentDeploymentFailed(
@@ -216,15 +229,11 @@ pub async fn deploy_bundle(
     for resource in &deployment_bundle.resources {
         let previous = match backend.get(&resource.identity).await {
             Ok(previous) => previous,
-            Err(error) => {
-                return fail_with_rollback(error, backend, &journal).await;
-            }
+            Err(error) => return Err(error),
         };
         let applied = match backend.apply(resource).await {
             Ok(applied) => applied,
-            Err(error) => {
-                return fail_with_rollback(error, backend, &journal).await;
-            }
+            Err(error) => return Err(error),
         };
         let mut state = journal.lock().map_err(|_| {
             DeployError::EnvironmentDeploymentFailed(
@@ -308,6 +317,24 @@ pub async fn rollback_transaction(
             "Rollback failed for: {}",
             errors.join("; ")
         )))
+    }
+}
+
+pub async fn rollback_transaction_with_timeout(
+    journal: &SharedDeploymentJournal,
+    backend: &dyn DeploymentBackend,
+    timeout: std::time::Duration,
+) -> Result<(), DeployError> {
+    match tokio::time::timeout(timeout, rollback_transaction(journal, backend)).await {
+        Ok(result) => result,
+        Err(_) => {
+            let message = format!("rollback timed out after {} seconds", timeout.as_secs());
+            if let Ok(mut state) = journal.lock() {
+                state.rollback_attempted = true;
+                state.rollback_errors.push(message.clone());
+            }
+            Err(DeployError::EnvironmentDeploymentFailed(message))
+        }
     }
 }
 
@@ -831,14 +858,22 @@ mod transactional_tests {
             ..Default::default()
         };
         let journal = new_deployment_journal();
-        let _ = deploy_bundle(&deployment_bundle(&["first", "second"]), &backend, journal.clone()).await;
+        let _ = deploy_bundle(
+            &deployment_bundle(&["first", "second"]),
+            &backend,
+            journal.clone(),
+        )
+        .await;
         let operations_len_after_first_rollback = backend.operations.lock().unwrap().len();
-        
+
         let result = rollback_transaction(&journal, &backend).await;
         assert!(result.is_ok());
-        
+
         let operations_len_after_second_rollback = backend.operations.lock().unwrap().len();
-        assert_eq!(operations_len_after_first_rollback, operations_len_after_second_rollback);
+        assert_eq!(
+            operations_len_after_first_rollback,
+            operations_len_after_second_rollback
+        );
     }
 
     #[tokio::test]
@@ -862,7 +897,7 @@ mod transactional_tests {
                 sha256: "hash".to_string(),
             });
         }
-        
+
         let result = rollback_transaction(&journal, &backend).await;
         assert!(result.is_ok());
     }
@@ -874,10 +909,19 @@ mod transactional_tests {
             ..Default::default()
         };
         let journal = new_deployment_journal();
-        let _ = deploy_bundle(&deployment_bundle(&["first", "second", "third"]), &backend, journal.clone()).await;
-        
+        let _ = deploy_bundle(
+            &deployment_bundle(&["first", "second", "third"]),
+            &backend,
+            journal.clone(),
+        )
+        .await;
+
         let state = journal.lock().unwrap();
-        let applied_names: Vec<String> = state.entries.iter().map(|e| e.identity.name.clone()).collect();
+        let applied_names: Vec<String> = state
+            .entries
+            .iter()
+            .map(|e| e.identity.name.clone())
+            .collect();
         assert_eq!(applied_names, vec!["first".to_string()]);
     }
 
@@ -888,10 +932,19 @@ mod transactional_tests {
             ..Default::default()
         };
         let journal = new_deployment_journal();
-        let _ = deploy_bundle(&deployment_bundle(&["first", "second", "third"]), &backend, journal.clone()).await;
-        
+        let _ = deploy_bundle(
+            &deployment_bundle(&["first", "second", "third"]),
+            &backend,
+            journal.clone(),
+        )
+        .await;
+
         let state = journal.lock().unwrap();
-        let applied_names: Vec<String> = state.entries.iter().map(|e| e.identity.name.clone()).collect();
+        let applied_names: Vec<String> = state
+            .entries
+            .iter()
+            .map(|e| e.identity.name.clone())
+            .collect();
         assert!(!applied_names.contains(&"third".to_string()));
     }
 }

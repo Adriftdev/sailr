@@ -1,149 +1,116 @@
 ---
-title: Deterministic deployment audit gate
+title: Immutable release approval and rollback
 ---
 
-# Deterministic deployment audit gate
+# Immutable release approval and rollback
 
-Sailr can require an Ed25519 signature over the exact generated manifests and deployment target
-before it mutates a Kubernetes cluster. This is an opt-in, push-based gate; Sailr does not run a
-background reconciler.
+Sailr supports two deployment contracts. Existing `workflow run` profiles keep the in-process
+transactional deployment gate. Portable releases add an offline prepare phase and apply only the
+canonical bytes stored in a `sailr.deployment-bundle/v1` file. Legacy `deploy` and `go` behavior is
+unchanged.
 
-## Enable signature approval
+## Portable release profile
 
 ```toml
 [workflow.production]
 environment = "production"
 mode = "deploy"
-<<<<<<< HEAD
+engine = "runkernel"
+interactive = false
 build = "disabled"
-=======
->>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
+push = "disabled"
 generate = "run"
 deploy = "run"
 deploy_context = "production-cluster"
 namespace = "app"
 approval = "signature"
 apply = true
-report = "both"
-<<<<<<< HEAD
 
 [workflow.production.signature]
 trusted_public_key = "<base64-encoded raw 32-byte Ed25519 public key>"
+
+[workflow.production.verification]
+rollout_timeout_seconds = 300
+
+[workflow.production.rollback]
+timeout_seconds = 300
 ```
 
-The trusted key is configuration, not runtime input. Sailr validates it during
-planning and displays only its `sha256:<hex>` fingerprint. Put the matching
-root environment policy in `k8s/environments/production/config.toml`:
+The trusted public key is repository policy. Sailr never reads a replacement key from the
+runtime environment and reports only its `sha256:<hex>` fingerprint. The private key must remain
+outside Sailr.
+
+The target environment may strengthen approval and configure release locking:
 
 ```toml
 [deployment_policy]
 required_approval = "signature"
+
+[deployment_policy.release_lock]
+lease_duration_seconds = 60
+renew_interval_seconds = 20
+# lease_name = "optional-fixed-name"
+# lease_namespace = "optional-lock-namespace"
 ```
 
-Policy is explicit: environment names have no security meaning. The other
-policy levels are `none` and `external`. The runner still requires the normal
-`--apply` acknowledgement:
-=======
-```
+Environment names carry no implicit security meaning.
 
-The runner still requires the normal `--apply` acknowledgement:
->>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
+## Publication, promotion, and preparation
+
+Every image-bearing workload for a build-backed service must use `{{service_image}}`. Normal
+generation resolves it to the tagged service image. Portable preparation replaces it in memory
+with the reviewed digest reference and verifies that every promoted image is present in the exact
+bundled workload payload. Services without a `build` configuration are external dependencies and
+retain explicit vendor image repositories with `{{service_version}}` in their templates.
+Omitting `{{service_version}}` for an external workload emits a warning but does not fail
+initialization or preparation.
 
 ```bash
-sailr workflow run production --non-interactive --apply
+sailr publication validate artifacts/publication-report.json
+sailr promote plan \
+  --from-report artifacts/publication-report.json \
+  --to production \
+  --out artifacts/promotion-plan.json
+sailr workflow prepare production \
+  --promotion-plan artifacts/promotion-plan.json \
+  --out artifacts/prepared-release
 ```
 
-The first unsigned run generates manifests, writes
-`.sailr/audit/production/deployment-plan.json`, and stops at
-`workflow:verification-gate`. The error displays the plan hash without mutating the cluster.
+Preparation is offline with respect to Docker, registries, Git, hooks, and Kubernetes. It creates
+`deployment.bundle`, `deployment-plan.json`, `deployment.diff`, and
+`preparation-evidence.json` in a new output directory. It rejects pre-deployment hooks. Exact
+post-deployment hook commands are included in the bundle; database migrations should remain
+separate CI stages.
 
-## Signing contract
+## Signing and applying
 
-<<<<<<< HEAD
-The immutable bundle task reads all generated YAML once. It sorts paths,
-preserves document order within each file, validates Kubernetes type/name
-metadata and effective namespaces, rejects empty bundles and duplicate resource
-identities, then retains canonical JSON bytes for every resource. Planning,
-verification, application, rollback, and reporting share that in-memory bundle;
-they do not reopen the YAML source files.
-
-The audit artifact contains `payload` and `plan_hash`. The canonical payload
-contains:
-
-- schema identifier `sailr.audit/v1`;
-- workflow profile and environment;
-- target Kubernetes context and namespace;
-- ordered `{relative_path, document_index, sha256}` records, where each digest
-  covers the canonical JSON bytes that Sailr will apply.
-=======
-The audit payload contains:
-
-- schema identifier `sailr.audit/v1`;
-- workflow profile and environment;
-- Kubernetes context and namespace;
-- sorted manifest paths and SHA-256 digests.
->>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
-
-Sailr computes the SHA-256 digest of the canonical JSON payload. Sign the UTF-8 bytes of:
+Sign the UTF-8 bytes below with the configured Ed25519 private key:
 
 ```text
 sailr-deployment-plan-v1:<64-character-plan-hash>
 ```
 
-<<<<<<< HEAD
-Provide only the base64-encoded raw 64-byte Ed25519 signature when retrying:
+Then provide only the base64-encoded raw 64-byte signature:
 
 ```bash
-=======
-Provide the base64-encoded raw Ed25519 values when retrying:
-
-```bash
-export DEPLOY_APPROVAL_PUBKEY="<base64 32-byte public key>"
->>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
-export DEPLOY_APPROVAL_SIG="<base64 64-byte signature>"
-sailr workflow run production --non-interactive --apply
+export DEPLOY_APPROVAL_SIG="<base64 signature>"
+sailr workflow apply production \
+  --bundle artifacts/prepared-release/deployment.bundle \
+  --non-interactive \
+  --apply \
+  --release-id "$CI_RELEASE_ID"
 ```
 
-The private key remains outside Sailr. On retry, deterministic build and generation tasks may
-<<<<<<< HEAD
-return `[CACHE]`; the bundle and verification gate are never cached. Sailr constructs a fresh
-bundle on every run, so changing a manifest, profile, environment, context, or namespace changes
-the plan hash and invalidates the signature. A missing signature is reported as
-`awaiting_signature`; malformed or incorrect signatures are `failed`; a valid signature is
-recorded as `verified` before any cluster mutation.
+Apply revalidates the bundle, current profile, environment approval policy, target, service
+coverage, target registry/repository policy, and signer fingerprint before Kubernetes access. It
+never opens templates or regenerates manifests.
 
-Text plans use stable `[CACHE]`, `[RUN]`, and `[SKIP]` markers. Use
-`sailr workflow plan production --format json` for machine-readable tasks,
-phase IDs, effects, cache policy, target, signer fingerprint, and finalizers.
+After approval, Sailr acquires a namespaced Kubernetes Lease. The default name is derived from
+the environment, context, and namespace. The Lease is renewed through apply, rollout checks,
+post-deployment hooks, and rollback; loss of ownership stops forward mutation. Process death is
+recovered through Lease expiry without changing application resources.
 
-## Rollback behavior
-
-Sailr starts with an empty mutation journal. For each ordered bundle resource it reads the prior
-object, applies the canonical bundle bytes, and journals the mutation only after a successful
-apply. On the first apply failure it stops forward application and unwinds successful entries in
-reverse order: updated objects are restored and newly created objects are deleted. A delete that
-returns 404 is already restored. All rollback errors are retained and make the workflow fail.
-
-A successfully completed deployment retains its journal so a later post-deployment task failure
-can trigger the same idempotent reverse-order restoration. Runkernel waits for already-running
-siblings to settle before Sailr runs service `finally` cleanup, in reverse service dependency
-order. Cleanup runs exactly once even after failure; build cache records are written only after
-the pipeline and cleanup both succeed; report persistence runs last.
-
-Rollback covers Kubernetes objects managed by the generated manifests. Pre- and post-deployment
-hooks may affect external systems and are observable but not automatically reversible.
-=======
-return `[CACHE]`; the verification gate itself is never cached. Sailr recomputes the artifact at
-the gate, so changing a manifest, context, or namespace invalidates the signature.
-
-## Rollback behavior
-
-Before applying a workflow deployment, Sailr snapshots every managed target object. A partial
-failure restores prior objects and deletes newly created objects in reverse order. A successfully
-completed deployment also retains this journal for runkernel reverse-order rollback if a later
-workflow task fails.
-
-Rollback covers Kubernetes objects managed by the generated manifests. Pre- and post-deployment
-hooks may affect external systems and are not automatically reversible. Rollback failures are
-included in the workflow result and cause the run to fail.
->>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
+Deployments, StatefulSets, and DaemonSets are polled for typed readiness every two seconds. Apply,
+rollout, or post-hook failure triggers reverse-journal rollback within the configured timeout.
+The resulting `sailr.workflow-report/v1` records approval, bundle and provenance digests, lock,
+rollout, deployment, and rollback evidence.

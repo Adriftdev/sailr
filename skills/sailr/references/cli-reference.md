@@ -24,6 +24,14 @@
 * **List workflow profiles**: `sailr workflow list`
 * **Show profile configuration**: `sailr workflow show <PROFILE>`
 * **Plan a workflow run**: `sailr workflow plan <PROFILE> [--format text|json]`
-* **Run a workflow profile**: `sailr workflow run <PROFILE> [--dry-run] [--apply]`
+* **Run a workflow profile**: `sailr workflow run <PROFILE> [--dry-run] [--apply] [--release-id <ID>]`
+* **Prepare an immutable release**: `sailr workflow prepare <PROFILE> --promotion-plan <FILE> --out <DIR>`
+* **Apply a prepared release**: `sailr workflow apply <PROFILE> --bundle <FILE> --non-interactive --apply [--release-id <ID>]`
 * **Export workflow dependency graph**: `sailr workflow graph <PROFILE> --format mermaid`
 * **Generate CI configuration**: `sailr workflow generate-ci <PROFILE> --provider github`
+
+## Release Contracts
+* **Validate publication evidence**: `sailr publication validate <REPORT>`
+* **Plan digest promotion**: `sailr promote plan --from-report <REPORT> --to <ENV> --out <FILE>`
+* **Inspect capabilities**: `sailr capabilities --format json`
+* **Generate a delivery flow**: `sailr flow generate-ci [FLOW] --mode print|fragment|create|merge [--output <FILE>]`

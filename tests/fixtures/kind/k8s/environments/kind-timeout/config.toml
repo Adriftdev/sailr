@@ -1,0 +1,19 @@
+schema_version = "0.5.0"
+name = "kind-timeout"
+log_level = "info"
+domain = "kind.test"
+default_replicas = 1
+
+[registry]
+host = "docker.io"
+namespace = "library"
+
+[deployment_policy]
+required_approval = "signature"
+
+[[service]]
+name = "nginx"
+version = "ignored-by-promotion"
+path = "kind/timeout"
+namespace = "default"
+build = "."

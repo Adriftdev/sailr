@@ -74,7 +74,7 @@ Or remove `[build].engine = "runkernel"` from `config.toml`; the default backend
 =======
 >>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
 - Deployment hooks can have external side effects and are not automatically reversible.
-- runkernel cache metadata is stored under `.runkernel/cache`; Sailr build outcome records remain under `.sailr/cache/build`.
+- Sailr-scoped runkernel cache metadata is stored under `.sailr/cache/runkernel`; Sailr build outcome records remain under `.sailr/cache/build`. Sailr does not create a top-level `.runkernel` directory.
 
 The runkernel translator exposes command phases as deterministic graph nodes such as
 `service:api:run_parallel:0` and retains `service:api:build` as the service completion node.

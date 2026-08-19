@@ -65,10 +65,20 @@ pub enum Commands {
     /// Delivery flow management and validation
     #[command(subcommand)]
     Flow(FlowCommands),
+    /// Validate immutable publication reports
+    #[command(subcommand)]
+    Publication(PublicationCommands),
+    /// Plan immutable artifact promotion
+    #[command(subcommand)]
+    Promote(PromoteCommands),
+    /// Show machine-readable Sailr feature support
+    Capabilities(CapabilitiesArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub enum WorkflowCommands {
+    /// Create a workflow profile from an existing environment
+    Init(WorkflowInitArgs),
     /// List available workflow profiles
     List,
     /// Show details of a workflow profile
@@ -85,6 +95,99 @@ pub enum WorkflowCommands {
     Explain(WorkflowExplainArgs),
     /// Inspect workflow diagnostic configuration
     Inspect(WorkflowInspectArgs),
+    /// Prepare and serialize an immutable deployment bundle
+    Prepare(WorkflowPrepareArgs),
+    /// Apply a previously prepared immutable deployment bundle
+    Apply(WorkflowApplyArgs),
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum WorkflowInitPreset {
+    Build,
+    Deploy,
+    PortableRelease,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum WorkflowInitApproval {
+    External,
+    Signature,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowInitArgs {
+    /// Name of the workflow profile to create
+    pub profile: String,
+
+    /// Existing Sailr environment to use
+    #[arg(long)]
+    pub environment: String,
+
+    /// Safe workflow profile preset
+    #[arg(long, value_enum, default_value = "deploy")]
+    pub preset: WorkflowInitPreset,
+
+    /// Kubernetes context for deploy profiles
+    #[arg(long)]
+    pub context: Option<String>,
+
+    /// Kubernetes namespace override
+    #[arg(long)]
+    pub namespace: Option<String>,
+
+    /// Portable-release approval mechanism
+    #[arg(long, value_enum)]
+    pub approval: Option<WorkflowInitApproval>,
+
+    /// File containing a base64-encoded raw Ed25519 public key
+    #[arg(long = "trusted-public-key-file")]
+    pub trusted_public_key_file: Option<std::path::PathBuf>,
+
+    /// Print the complete resulting configuration without writing it
+    #[arg(long)]
+    pub print: bool,
+
+    /// Workflow configuration to create or update
+    #[arg(long, default_value = "sailr.workflow.toml")]
+    pub config: std::path::PathBuf,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PublicationCommands {
+    /// Validate a workflow publication report
+    Validate(PublicationValidateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PublicationValidateArgs {
+    pub report: std::path::PathBuf,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PromoteCommands {
+    /// Create a deterministic promotion plan
+    Plan(PromotePlanArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PromotePlanArgs {
+    #[arg(long = "from-report")]
+    pub from_report: std::path::PathBuf,
+    #[arg(long = "to")]
+    pub target_environment: String,
+    #[arg(long)]
+    pub out: std::path::PathBuf,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum CapabilitiesFormat {
+    Json,
+}
+
+#[derive(Debug, Args)]
+pub struct CapabilitiesArgs {
+    #[arg(long, default_value = "json", value_enum)]
+    pub format: CapabilitiesFormat,
 }
 
 #[derive(Debug, Subcommand)]
@@ -103,8 +206,20 @@ pub enum FlowCommands {
 
 #[derive(Debug, Args)]
 pub struct FlowGenerateCiArgs {
+    /// Named flow; may be omitted when exactly one flow exists
+    pub flow: Option<String>,
+    #[arg(long, value_enum)]
+    pub mode: FlowGenerationMode,
     #[arg(long)]
-    pub mode: String,
+    pub output: Option<std::path::PathBuf>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum FlowGenerationMode {
+    Print,
+    Fragment,
+    Create,
+    Merge,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -186,6 +301,31 @@ pub struct WorkflowRunArgs {
 
     #[arg(long)]
     pub apply: bool,
+
+    #[arg(long = "release-id")]
+    pub release_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowPrepareArgs {
+    pub profile: String,
+    #[arg(long = "promotion-plan")]
+    pub promotion_plan: std::path::PathBuf,
+    #[arg(long)]
+    pub out: std::path::PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkflowApplyArgs {
+    pub profile: String,
+    #[arg(long)]
+    pub bundle: std::path::PathBuf,
+    #[arg(long)]
+    pub non_interactive: bool,
+    #[arg(long)]
+    pub apply: bool,
+    #[arg(long = "release-id")]
+    pub release_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -779,6 +919,40 @@ mod tests {
                 assert_eq!(args.engine, Some(BuildEngine::Runkernel));
             }
             _ => panic!("Expected Build command"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_init_args_parse_portable_release() {
+        let cli = Cli::try_parse_from([
+            "sailr",
+            "workflow",
+            "init",
+            "release-production",
+            "--environment",
+            "production",
+            "--preset",
+            "portable-release",
+            "--context",
+            "production-cluster",
+            "--namespace",
+            "production",
+            "--approval",
+            "external",
+            "--print",
+        ])
+        .expect("workflow init arguments");
+        match cli.commands {
+            Commands::Workflow(WorkflowCommands::Init(args)) => {
+                assert_eq!(args.profile, "release-production");
+                assert_eq!(args.environment, "production");
+                assert_eq!(args.preset, WorkflowInitPreset::PortableRelease);
+                assert_eq!(args.context.as_deref(), Some("production-cluster"));
+                assert_eq!(args.namespace.as_deref(), Some("production"));
+                assert_eq!(args.approval, Some(WorkflowInitApproval::External));
+                assert!(args.print);
+            }
+            _ => panic!("Expected workflow init command"),
         }
     }
 }

@@ -13,6 +13,8 @@ use crate::workflow::runner::RunnerContext;
 
 use super::profile::NormalizedWorkflowProfile;
 
+use sha2::Digest;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub enum WorkflowBuildExecution {
@@ -37,12 +39,32 @@ fn runtime_task(plan: &WorkflowPlan, id: &str) -> Result<Task, String> {
         .depends_on(&dependencies))
 }
 
+fn generation_image_overrides(
+    plan: &WorkflowPlan,
+    push_mode: crate::workflow::profile::WorkflowStepMode,
+) -> BTreeMap<String, String> {
+    if push_mode != crate::workflow::profile::WorkflowStepMode::Run {
+        return BTreeMap::new();
+    }
+    plan.image_push_plan
+        .as_ref()
+        .map(|push_plan| {
+            push_plan
+                .items
+                .iter()
+                .map(|item| (item.service.clone(), item.target_image_ref.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub struct WorkflowPlanner {
     pub profile: NormalizedWorkflowProfile,
     pub env: Arc<Environment>,
     pub options: BuildOptions,
     pub runner: RunnerContext,
     source_revision_resolver: Arc<dyn SourceRevisionResolver>,
+    release_id: Option<String>,
 }
 
 pub trait SourceRevisionResolver: Send + Sync {
@@ -152,6 +174,7 @@ impl WorkflowPlanner {
             options,
             runner,
             source_revision_resolver: Arc::new(SystemSourceRevisionResolver),
+            release_id: None,
         }
     }
 
@@ -168,7 +191,13 @@ impl WorkflowPlanner {
             options,
             runner,
             source_revision_resolver,
+            release_id: None,
         }
+    }
+
+    pub fn with_release_id(mut self, release_id: Option<String>) -> Self {
+        self.release_id = release_id;
+        self
     }
 
     pub fn plan(&self) -> Result<WorkflowPlan, String> {
@@ -551,6 +580,20 @@ impl WorkflowPlanner {
                     });
                     last_tasks = vec![crate::workflow::task_id::DEPLOY.to_string()];
 
+                    tasks.push(WorkflowTaskPlan {
+                        id: crate::workflow::task_id::ROLLOUT_VERIFICATION.to_string(),
+                        label: "Rollout Verification".to_string(),
+                        kind: WorkflowTaskKind::RolloutVerification,
+                        cache_policy: WorkflowTaskCachePolicy::Disabled,
+                        service: None,
+                        phase: Some("rollout_verification".to_string()),
+                        dependencies: last_tasks.clone(),
+                        effects: WorkflowEffects::default(),
+                        description: "Waits for bundled Kubernetes workloads to become ready."
+                            .to_string(),
+                    });
+                    last_tasks = vec![crate::workflow::task_id::ROLLOUT_VERIFICATION.to_string()];
+
                     let has_post_hooks = self.env.services.iter().any(|service| {
                         service
                             .hooks
@@ -696,8 +739,7 @@ impl WorkflowPlanner {
                 .repository_for(&service_plan.service.name)
                 .map_err(|e| format!("Invalid repository: {}", e))?;
 
-            let tag = crate::workflow::image::derive_image_tag(&service_plan.fingerprint.full_hash)
-                .map_err(|error| error.to_string())?;
+            let tag = service_plan.service.version.clone();
 
             let target_image_ref = resolved_registry
                 .tagged_ref(&service_plan.service.name, &tag)
@@ -736,7 +778,8 @@ impl WorkflowPlanner {
         plan: &WorkflowPlan,
         accumulator: crate::workflow::image::WorkflowReportAccumulator,
     ) -> Result<(Pipeline, WorkflowBuildExecution), String> {
-        let mut pipeline = Pipeline::new(format!("Workflow: {}", self.profile.name));
+        let mut pipeline =
+            crate::new_runkernel_pipeline(format!("Workflow: {}", self.profile.name));
         if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
             && self.profile.apply
         {
@@ -958,9 +1001,21 @@ impl WorkflowPlanner {
             let name = self.profile.environment.clone();
             let environment_input =
                 format!("k8s/environments/{}/config.toml", self.profile.environment);
+            let image_overrides = generation_image_overrides(plan, self.profile.push);
+            let generation_context = crate::GenerationContext {
+                service_images: image_overrides,
+                deployment_date: None,
+                default_namespace: self.profile.namespace.clone(),
+            };
+            let context_bytes = serde_json::to_vec(&generation_context)
+                .map_err(|error| format!("failed to hash generation context: {error}"))?;
+            let generation_cache_key = format!(
+                "sailr-manifest-generator-v2-{}",
+                hex::encode(sha2::Sha256::digest(context_bytes))
+            );
             task = task
                 .inputs(&["k8s/templates/**/*.yaml", environment_input.as_str()])
-                .cache_key("sailr-manifest-generator-v1");
+                .cache_key(&generation_cache_key);
             let only = self.options.only.clone();
             let ignore = self.options.ignore.clone();
             let env_clone = self.env.clone();
@@ -969,6 +1024,7 @@ impl WorkflowPlanner {
                 let only = only.clone();
                 let ignore = ignore.clone();
                 let env_clone = env_clone.clone();
+                let generation_context = generation_context.clone();
                 async move {
                     crate::LOGGER.info("Generating Kubernetes manifests...");
 
@@ -978,7 +1034,7 @@ impl WorkflowPlanner {
                         &ignore,
                     );
 
-                    crate::generate(&name, &env_clone, services)
+                    crate::generate_with_context(&name, &env_clone, services, &generation_context)
                         .map_err(|e| anyhow::anyhow!("Generate failed: {}", e))?;
 
                     Ok(())
@@ -988,7 +1044,11 @@ impl WorkflowPlanner {
             pipeline.add(task);
         }
 
-        if plan.tasks.iter().any(|task| task.id == crate::workflow::task_id::PRE_DEPLOY_HOOKS) {
+        if plan
+            .tasks
+            .iter()
+            .any(|task| task.id == crate::workflow::task_id::PRE_DEPLOY_HOOKS)
+        {
             let env = self.env.clone();
             pipeline.add(
                 runtime_task(plan, crate::workflow::task_id::PRE_DEPLOY_HOOKS)?
@@ -1154,6 +1214,29 @@ impl WorkflowPlanner {
                     None::<Arc<crate::deployment::KubernetesDeploymentBackend>>,
                 ));
                 let rollback_backend_state = backend_state.clone();
+                let lease_state = Arc::new(tokio::sync::Mutex::new(
+                    None::<crate::deployment::lease::ReleaseLease>,
+                ));
+                let rollback_lease_state = lease_state.clone();
+                let rollout_backend_state = backend_state.clone();
+                let rollout_lease_state = lease_state.clone();
+                let post_lease_state = lease_state.clone();
+                let has_post_deploy_hooks = plan
+                    .tasks
+                    .iter()
+                    .any(|task| task.id == crate::workflow::task_id::POST_DEPLOY_HOOKS);
+                let release_after_rollout = !has_post_deploy_hooks;
+                let environment_name = self.profile.environment.clone();
+                let release_id = self.release_id.clone();
+                let lock_policy = self
+                    .env
+                    .deployment_policy
+                    .release_lock
+                    .clone()
+                    .unwrap_or_default();
+                let rollback_timeout =
+                    std::time::Duration::from_secs(self.profile.rollback.timeout_seconds);
+                let deploy_rollback_timeout = rollback_timeout;
 
                 task = task
                     .exec_fn(move |_ctx| {
@@ -1161,6 +1244,10 @@ impl WorkflowPlanner {
                         let deployment_state = deployment_state.clone();
                         let journal = journal.clone();
                         let backend_state = backend_state.clone();
+                        let lease_state = lease_state.clone();
+                        let environment_name = environment_name.clone();
+                        let release_id = release_id.clone();
+                        let lock_policy = lock_policy.clone();
 
                         async move {
                             let bundle = deployment_state.bundle()?;
@@ -1169,16 +1256,55 @@ impl WorkflowPlanner {
                                 bundle.plan_hash, context
                             ));
                             let backend = Arc::new(
-                                crate::deployment::KubernetesDeploymentBackend::new(context)
-                                    .await
-                                    .map_err(|error| {
-                                        anyhow::anyhow!("Deploy backend failed: {error}")
-                                    })?,
+                                crate::deployment::KubernetesDeploymentBackend::new(
+                                    context.clone(),
+                                )
+                                .await
+                                .map_err(|error| {
+                                    anyhow::anyhow!("Deploy backend failed: {error}")
+                                })?,
                             );
                             *backend_state.lock().await = Some(backend.clone());
-                            crate::deployment::deploy_bundle(&bundle, backend.as_ref(), journal)
+                            let client = crate::deployment::k8sm8::create_client(context)
                                 .await
-                                .map_err(|error| anyhow::anyhow!("Deploy failed: {error}"))?;
+                                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                            let release_id = release_id
+                                .or_else(ci_release_id)
+                                .unwrap_or_else(|| local_release_id(&bundle.plan_hash));
+                            crate::workflow::release::validate_release_id(&release_id)
+                                .map_err(anyhow::Error::msg)?;
+                            let lease = crate::deployment::lease::ReleaseLease::acquire(
+                                client,
+                                &environment_name,
+                                &bundle.target,
+                                &release_id,
+                                &lock_policy,
+                            )
+                            .await
+                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                            let checked = crate::deployment::lease::LeaseCheckedBackend {
+                                inner: backend.as_ref(),
+                                lease: &lease,
+                            };
+                            if let Err(error) =
+                                crate::deployment::apply_bundle(&bundle, &checked, journal.clone())
+                                    .await
+                            {
+                                let rollback =
+                                    crate::deployment::rollback_transaction_with_timeout(
+                                        &journal,
+                                        &checked,
+                                        deploy_rollback_timeout,
+                                    )
+                                    .await;
+                                let release = lease.release().await;
+                                return Err(anyhow::anyhow!(
+                                    "Deploy failed: {error}; rollback: {}; lock release: {}",
+                                    terminal_result(&rollback),
+                                    terminal_result(&release)
+                                ));
+                            }
+                            *lease_state.lock().await = Some(lease);
 
                             Ok(())
                         }
@@ -1186,6 +1312,7 @@ impl WorkflowPlanner {
                     .rollback(move |_ctx| {
                         let rollback_journal = rollback_journal.clone();
                         let rollback_backend_state = rollback_backend_state.clone();
+                        let rollback_lease_state = rollback_lease_state.clone();
                         async move {
                             let backend =
                                 rollback_backend_state.lock().await.clone().ok_or_else(|| {
@@ -1193,30 +1320,123 @@ impl WorkflowPlanner {
                                         "Deployment backend is unavailable for rollback"
                                     )
                                 })?;
-                            crate::deployment::rollback_transaction(
+                            let lease =
+                                rollback_lease_state.lock().await.take().ok_or_else(|| {
+                                    anyhow::anyhow!("Release lock is unavailable for rollback")
+                                })?;
+                            let checked = crate::deployment::lease::LeaseCheckedBackend {
+                                inner: backend.as_ref(),
+                                lease: &lease,
+                            };
+                            let rollback = crate::deployment::rollback_transaction_with_timeout(
                                 &rollback_journal,
-                                backend.as_ref(),
+                                &checked,
+                                rollback_timeout,
                             )
-                            .await
-                            .map_err(|error| anyhow::anyhow!(error.to_string()))
+                            .await;
+                            let release = lease.release().await;
+                            if rollback.is_err() || release.is_err() {
+                                return Err(anyhow::anyhow!(
+                                    "rollback: {}; lock release: {}",
+                                    terminal_result(&rollback),
+                                    terminal_result(&release)
+                                ));
+                            }
+                            Ok(())
                         }
                     });
 
                 pipeline.add(task);
 
-                if plan.tasks.iter().any(|task| task.id == crate::workflow::task_id::POST_DEPLOY_HOOKS) {
+                let rollout_state = plan.deployment_state.clone();
+                let rollout_timeout = std::time::Duration::from_secs(
+                    self.profile.verification.rollout_timeout_seconds,
+                );
+                pipeline.add(
+                    runtime_task(plan, crate::workflow::task_id::ROLLOUT_VERIFICATION)?
+                        .cache_disabled()
+                        .exec_fn(move |_ctx| {
+                            let rollout_backend_state = rollout_backend_state.clone();
+                            let rollout_lease_state = rollout_lease_state.clone();
+                            let rollout_state = rollout_state.clone();
+                            async move {
+                                let backend =
+                                    rollout_backend_state.lock().await.clone().ok_or_else(
+                                        || anyhow::anyhow!("Deployment backend is unavailable"),
+                                    )?;
+                                {
+                                    let lease_guard = rollout_lease_state.lock().await;
+                                    let lease = lease_guard.as_ref().ok_or_else(|| {
+                                        anyhow::anyhow!("Release lock is unavailable")
+                                    })?;
+                                    let checked = crate::deployment::lease::LeaseCheckedBackend {
+                                        inner: backend.as_ref(),
+                                        lease,
+                                    };
+                                    crate::deployment::rollout::verify_bundle_rollout(
+                                        &rollout_state.bundle()?,
+                                        &checked,
+                                        rollout_timeout,
+                                    )
+                                    .await
+                                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                }
+                                if release_after_rollout {
+                                    let lease =
+                                        rollout_lease_state.lock().await.take().ok_or_else(
+                                            || anyhow::anyhow!("Release lock is unavailable"),
+                                        )?;
+                                    lease
+                                        .ensure_held()
+                                        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                    lease
+                                        .release()
+                                        .await
+                                        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                }
+                                Ok(())
+                            }
+                        }),
+                );
+
+                if has_post_deploy_hooks {
                     let env = self.env.clone();
                     pipeline.add(
                         runtime_task(plan, crate::workflow::task_id::POST_DEPLOY_HOOKS)?
                             .cache_disabled()
                             .exec_fn(move |_ctx| {
                                 let env = env.clone();
+                                let post_lease_state = post_lease_state.clone();
                                 async move {
+                                    {
+                                        let guard = post_lease_state.lock().await;
+                                        guard
+                                            .as_ref()
+                                            .ok_or_else(|| {
+                                                anyhow::anyhow!("Release lock is unavailable")
+                                            })?
+                                            .ensure_held()
+                                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                    }
                                     crate::deployment::run_environment_hooks(
                                         &env,
                                         crate::deployment::DeploymentHookStage::Post,
                                     )
-                                    .map_err(|error| anyhow::anyhow!(error.to_string()))
+                                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                    let lease =
+                                        post_lease_state.lock().await.take().ok_or_else(|| {
+                                            anyhow::anyhow!("Release lock is unavailable")
+                                        })?;
+                                    let ownership = lease.ensure_held();
+                                    let release = lease.release().await;
+                                    if ownership.is_err() || release.is_err() {
+                                        return Err(anyhow::anyhow!(
+                                            "release ownership: {}; lock release: {}",
+                                            terminal_result(&ownership),
+                                            terminal_result(&release)
+                                        ));
+                                    }
+                                    Ok(())
                                 }
                             }),
                     );
@@ -1225,6 +1445,29 @@ impl WorkflowPlanner {
         }
 
         Ok((pipeline, build_execution))
+    }
+}
+
+fn ci_release_id() -> Option<String> {
+    ["CIRCLE_WORKFLOW_ID", "GITHUB_RUN_ID", "TRAVIS_BUILD_ID"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok())
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn local_release_id(plan_hash: &str) -> String {
+    format!(
+        "{}-{}-{}",
+        &plan_hash[..12],
+        chrono::Utc::now().format("%Y%m%d%H%M%S"),
+        std::process::id()
+    )
+}
+
+fn terminal_result<T, E: std::fmt::Display>(result: &Result<T, E>) -> String {
+    match result {
+        Ok(_) => "succeeded".to_string(),
+        Err(error) => error.to_string(),
     }
 }
 
@@ -1258,6 +1501,8 @@ mod tests {
             signature: None,
             apply: false,
             report: ReportMode::Text,
+            verification: Default::default(),
+            rollback: Default::default(),
         }
     }
 
@@ -1434,6 +1679,7 @@ mod tests {
             crate::workflow::task_id::DEPLOYMENT_PLAN.to_string(),
             crate::workflow::task_id::APPROVAL.to_string(),
             crate::workflow::task_id::DEPLOY.to_string(),
+            crate::workflow::task_id::ROLLOUT_VERIFICATION.to_string(),
             crate::workflow::task_id::POST_DEPLOY_HOOKS.to_string(),
         ];
         expected.sort();
@@ -2010,6 +2256,17 @@ mod tests_addendum {
         assert!(plan.effects.mutates_registry);
         assert!(plan.effects.mutates_docker);
         assert!(plan.effects.mutates_filesystem);
+        let push_item = &plan.image_push_plan.as_ref().unwrap().items[0];
+        assert_eq!(
+            generation_image_overrides(&plan, crate::workflow::profile::WorkflowStepMode::Run,)
+                .get("api"),
+            Some(&push_item.target_image_ref)
+        );
+        assert!(generation_image_overrides(
+            &plan,
+            crate::workflow::profile::WorkflowStepMode::Plan
+        )
+        .is_empty());
 
         let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
         let (pipeline, _) = planner

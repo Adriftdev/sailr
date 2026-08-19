@@ -176,6 +176,13 @@ build_command = "docker buildx build -t {{ registry }}/{{ name }}:{{ version }} 
 push_command = "docker push {{ registry }}/{{ name }}:{{ version }}"
 ```
 
+An explicit service `version` is authoritative for local development and other
+mutable-tag workflows. If a build-backed service omits `version`, Sailr derives
+an immutable tag from the build fingerprint and uses it consistently for
+building, pushing, and `{{service_image}}` manifest generation. External
+services without a build step should continue to declare their vendor version
+and use it through `{{service_version}}`.
+
 Older configs may still use `service_whitelist`; migrate to schema `0.5.0` and `[[service]]` for new projects. See the [config.toml Guide](docs/docs/configuration/config-toml.md) and [Roomservice to runkernel migration guide](docs/docs/migration/roomservice-to-runkernel.md) for details.
 
 The Roomservice backend is based on roomservice-rust. Credit to [Curtis Wilkinson](https://github.com/curtiswilkinson/roomservice-rust) for the original Roomservice implementation.

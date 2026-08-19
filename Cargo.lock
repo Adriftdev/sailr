@@ -2212,9 +2212,9 @@ dependencies = [
 
 [[package]]
 name = "runkernel"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef5a28a191bdbda99042df1c5377796730d5b56b92d359ae023a1b63057868f1"
+checksum = "6ff3719e1595949b587ac50adcb7a2a7e7b88c41b240c96d13e767a8bfb6e7ce"
 dependencies = [
  "anyhow",
  "envy",

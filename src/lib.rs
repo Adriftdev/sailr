@@ -32,6 +32,11 @@ pub mod utils;
 pub mod workflow;
 
 pub static LOGGER: Lazy<ui::SailrUI> = Lazy::new(|| ui::SailrUI::new(false, false));
+pub const RUNKERNEL_CACHE_ROOT: &str = ".sailr/cache/runkernel";
+
+pub(crate) fn new_runkernel_pipeline(name: impl Into<String>) -> runkernel::Pipeline {
+    runkernel::Pipeline::new(name).cache_root(RUNKERNEL_CACHE_ROOT)
+}
 
 #[derive(Debug, Deserialize)]
 pub struct GlobalVars {
@@ -79,6 +84,67 @@ pub fn load_global_vars() -> Result<BTreeMap<String, String>, Box<dyn std::error
 }
 
 pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) -> anyhow::Result<()> {
+    generate_with_context(name, env, services, &GenerationContext::default())
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct GenerationContext {
+    pub service_images: std::collections::BTreeMap<String, String>,
+    pub deployment_date: Option<String>,
+    pub default_namespace: Option<String>,
+}
+
+pub fn generate_with_image_overrides(
+    name: &str,
+    env: &Environment,
+    services: Vec<&Service>,
+    image_overrides: &std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    generate_with_context(
+        name,
+        env,
+        services,
+        &GenerationContext {
+            service_images: image_overrides.clone(),
+            deployment_date: None,
+            default_namespace: None,
+        },
+    )
+}
+
+pub fn generate_with_context(
+    name: &str,
+    env: &Environment,
+    services: Vec<&Service>,
+    context: &GenerationContext,
+) -> anyhow::Result<()> {
+    let services_needing_images = services
+        .iter()
+        .copied()
+        .filter(|service| {
+            service.build.is_some()
+                && !service.has_explicit_version()
+                && !context.service_images.contains_key(&service.name)
+        })
+        .collect::<Vec<_>>();
+    let mut resolved_images = context.service_images.clone();
+    if !services_needing_images.is_empty() {
+        resolved_images.extend(
+            crate::builder::generation_image_overrides(env, &services_needing_images)
+                .map_err(anyhow::Error::msg)?,
+        );
+    }
+
+    for service in services
+        .iter()
+        .filter(|service| service.build.is_none() && !service.has_explicit_version())
+    {
+        LOGGER.warn(&format!(
+            "External service '{}' has no explicit version; {{service_version}} and {{service_image}} use the legacy 'latest' fallback",
+            service.name
+        ));
+    }
+
     let mut template_manager = TemplateManager::new();
     let (templates, config_maps) = template_manager
         .read_templates(Some(env))
@@ -88,7 +154,12 @@ pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) -> anyho
 
     for service in services {
         let variables = &env
-            .get_variables(service)
+            .get_variables_with_context_overrides(
+                service,
+                resolved_images.get(&service.name).map(String::as_str),
+                context.deployment_date.as_deref(),
+                context.default_namespace.as_deref(),
+            )
             .map_err(|e| anyhow::anyhow!("Registry config error: {}", e))?;
         for template in &templates {
             if template.name != service.name && template.name != service.get_path() {
@@ -230,5 +301,19 @@ pub fn create_default_env_infra(
 
     if let Some(config_template) = infra_template {
         Infra::use_template(&name, &config_template, &mut vars);
+    }
+}
+
+#[cfg(test)]
+mod runkernel_cache_contract_tests {
+    #[test]
+    fn sailr_pipelines_keep_runkernel_cache_under_sailr() {
+        let pipeline = super::new_runkernel_pipeline("cache-contract");
+        assert_eq!(
+            pipeline.cache_root,
+            std::path::PathBuf::from(super::RUNKERNEL_CACHE_ROOT)
+        );
+        assert!(super::RUNKERNEL_CACHE_ROOT.starts_with(".sailr/"));
+        assert!(!super::RUNKERNEL_CACHE_ROOT.starts_with(".runkernel/"));
     }
 }

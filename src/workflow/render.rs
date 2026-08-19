@@ -437,6 +437,8 @@ mod tests {
                 signature: None,
                 apply: false,
                 report: ReportMode::Text,
+                verification: Default::default(),
+                rollback: Default::default(),
             },
             runner: RunnerContext {
                 kind: RunnerKind::Local,

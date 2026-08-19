@@ -239,7 +239,7 @@ impl TemplateManager {
         let mut content = template.content.clone();
 
         for (key, value) in variables {
-            content = content.replace(&format!("{{{{{}}}}}", key), value);
+            content = crate::utils::replace_template_variable(&content, key, value);
         }
 
         if let Err(e) = self.validate_yaml(content.clone()) {

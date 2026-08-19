@@ -181,6 +181,14 @@ pub fn verify_signature(
     public_key_base64: &str,
     signature_base64: &str,
 ) -> anyhow::Result<()> {
+    verify_plan_hash_signature(&bundle.plan_hash, public_key_base64, signature_base64)
+}
+
+pub fn verify_plan_hash_signature(
+    plan_hash: &str,
+    public_key_base64: &str,
+    signature_base64: &str,
+) -> anyhow::Result<()> {
     let public_key = decode_trusted_public_key(public_key_base64)?;
 
     let signature = base64::engine::general_purpose::STANDARD
@@ -191,7 +199,7 @@ pub fn verify_signature(
     }
 
     UnparsedPublicKey::new(&ED25519, public_key)
-        .verify(signing_message(&bundle.plan_hash).as_bytes(), &signature)
+        .verify(signing_message(plan_hash).as_bytes(), &signature)
         .map_err(|_| {
             anyhow::anyhow!("AUDIT FAILURE: Signature does not match the immutable plan hash.")
         })

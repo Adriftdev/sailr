@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
       - name: hello-sailr
-        image: nginx:latest
+        image: {{service_image}}
         ports:
         - containerPort: 80
         env:

@@ -220,6 +220,8 @@ pub struct WorkflowReportArtifacts {
     pub published_images: Vec<crate::workflow::image::PublishedImageArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<DeploymentAuditEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<crate::workflow::release::ReleaseExecutionEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -654,6 +656,22 @@ impl WorkflowReport {
                 &self.environment,
             )?;
         }
+        if let Some(release) = &self.artifacts.release {
+            if release.schema_version != "sailr.release-report/v1"
+                || release.bundle_schema != crate::deployment::bundle::DEPLOYMENT_BUNDLE_SCHEMA
+                || release.profile != self.profile
+                || release.environment != self.environment
+                || release.plan_hash.len() != 64
+                || !release
+                    .plan_hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(WorkflowReportError::Validation(
+                    "invalid portable release evidence".to_string(),
+                ));
+            }
+        }
         let bundle_completed = self.tasks.items.iter().any(|item| {
             item.name == crate::workflow::task_id::DEPLOYMENT_BUNDLE
                 && matches!(
@@ -688,7 +706,9 @@ fn validate_deployment_audit_evidence(
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     };
-    if evidence.schema != crate::deployment::bundle::DEPLOYMENT_BUNDLE_SCHEMA {
+    if evidence.schema != crate::deployment::bundle::DEPLOYMENT_BUNDLE_SCHEMA
+        && evidence.schema != crate::deployment::bundle::LEGACY_DEPLOYMENT_AUDIT_SCHEMA
+    {
         return Err(WorkflowReportError::Validation(format!(
             "unsupported deployment evidence schema: {}",
             evidence.schema
@@ -969,6 +989,7 @@ fn build_workflow_report(
         artifacts: WorkflowReportArtifacts {
             published_images: published_artifacts,
             deployment: build_deployment_audit_evidence(plan)?,
+            release: None,
         },
     };
 
@@ -1515,7 +1536,8 @@ impl WorkflowRunner {
             std::sync::Arc::new(env),
             options,
             runner_ctx.clone(),
-        );
+        )
+        .with_release_id(args.release_id.clone());
         let plan = planner.plan()?;
         let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
         let (mut pipeline, build_execution) =
@@ -1738,7 +1760,10 @@ impl WorkflowRunner {
         pipeline
             .graph()
             .map_err(|error| format!("Invalid workflow graph: {error}"))?;
-        let cache_manager = runkernel::cache::CacheManager::for_pipeline(pipeline.name());
+        let cache_manager = runkernel::cache::CacheManager::for_pipeline_with_cache_root(
+            pipeline.name(),
+            crate::RUNKERNEL_CACHE_ROOT,
+        );
         for task in pipeline.tasks() {
             let status = match cache_manager
                 .compute_hash(pipeline.name(), task)
@@ -2065,6 +2090,8 @@ mod tests {
             signature: None,
             apply: true,
             report: ReportMode::Text,
+            verification: Default::default(),
+            rollback: Default::default(),
         };
 
         let runner = RunnerContext {
@@ -2085,6 +2112,7 @@ mod tests {
                 plan: false,
                 dry_run: false,
                 apply: false,
+                release_id: None,
             },
             &crate::environment::Environment::new("test"),
         );
@@ -2119,6 +2147,8 @@ mod tests {
             signature: None,
             apply: true,
             report: ReportMode::Text,
+            verification: Default::default(),
+            rollback: Default::default(),
         };
 
         let runner = RunnerContext {
@@ -2139,6 +2169,7 @@ mod tests {
                 plan: false,
                 dry_run: false,
                 apply: false,
+                release_id: None,
             },
             &crate::environment::Environment::new("prod"),
         );
@@ -2172,6 +2203,8 @@ mod tests {
             signature: None,
             apply: false,
             report: ReportMode::Text,
+            verification: Default::default(),
+            rollback: Default::default(),
         };
 
         let runner = RunnerContext {
@@ -2192,6 +2225,7 @@ mod tests {
                 plan: false,
                 dry_run: false,
                 apply: false,
+                release_id: None,
             },
             &crate::environment::Environment::new("local"),
         );
@@ -2199,6 +2233,51 @@ mod tests {
         assert!(res
             .unwrap_err()
             .contains("approval prompt cannot run in non-interactive mode"));
+    }
+
+    #[test]
+    fn validate_safety_allows_explicit_none_for_noninteractive_local_deploy() {
+        let configured: crate::workflow::profile::WorkflowProfile = toml::from_str(
+            r#"
+            environment = "edge"
+            mode = "deploy"
+            interactive = false
+            build = "run"
+            push = "run"
+            generate = "run"
+            deploy = "run"
+            deploy_context = "dev-cluster"
+            namespace = "default"
+            approval = "none"
+            apply = true
+            "#,
+        )
+        .unwrap();
+        let profile = configured.normalize(false);
+        let runner = RunnerContext {
+            ci_environment: None,
+            kind: RunnerKind::Local,
+            ci: false,
+            interactive: false,
+        };
+        let args = crate::cli::WorkflowRunArgs {
+            profile: "dev-edge-go".to_string(),
+            only: None,
+            ignore: None,
+            non_interactive: true,
+            plan: false,
+            dry_run: false,
+            apply: true,
+            release_id: None,
+        };
+
+        validate_workflow_safety(
+            &profile,
+            &runner,
+            &args,
+            &crate::environment::Environment::new("edge"),
+        )
+        .expect("explicit approval=none should be valid without a policy requiring approval");
     }
 
     #[test]
@@ -2226,6 +2305,8 @@ mod tests {
             signature: None,
             apply: false, // apply is false!
             report: ReportMode::Text,
+            verification: Default::default(),
+            rollback: Default::default(),
         };
 
         let runner = RunnerContext {
@@ -2246,6 +2327,7 @@ mod tests {
                 plan: false,
                 dry_run: false,
                 apply: false,
+                release_id: None,
             },
             &crate::environment::Environment::new("local"),
         );
@@ -2277,6 +2359,8 @@ mod tests {
             signature: None,
             apply: true,
             report: ReportMode::Both,
+            verification: Default::default(),
+            rollback: Default::default(),
         };
 
         let runner = RunnerContext {
@@ -2294,6 +2378,7 @@ mod tests {
             plan: false,
             dry_run: false,
             apply: true,
+            release_id: None,
         };
 
         let res = validate_workflow_safety(
@@ -2335,6 +2420,7 @@ mod tests {
             plan: false,
             dry_run: false,
             apply: true,
+            release_id: None,
         };
 
         let environment = crate::environment::Environment::new("production");
@@ -2346,6 +2432,7 @@ mod tests {
         let mut signature_required = crate::environment::Environment::new("anything");
         signature_required.deployment_policy = DeploymentPolicy {
             required_approval: Some(RequiredDeploymentApproval::Signature),
+            release_lock: None,
         };
         assert!(validate_workflow_safety(
             &profile.normalize(false),
@@ -2355,7 +2442,7 @@ mod tests {
         )
         .is_err());
 
-        profile.approval = ApprovalMode::Signature;
+        profile.approval = Some(ApprovalMode::Signature);
         profile.signature = Some(SignatureApprovalConfig {
             trusted_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
         });

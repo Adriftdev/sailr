@@ -1,11 +1,12 @@
+# Configure the external CircleCI schedule named production-release with cron/branch
+# metadata and set pipeline parameter sailr_production_release_enabled=true.
+parameters:
+  sailr_production_release_enabled:
+    type: boolean
+    default: false
 workflows:
   production-release:
-    triggers:
-      - schedule:
-          cron: "0 0 * * *"
-          filters:
-            branches:
-              only: main
+    when: pipeline.parameters.sailr_production_release_enabled
     jobs:
       - release-plan-job
       - release-approval-job:
