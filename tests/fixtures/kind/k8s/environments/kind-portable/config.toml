@@ -24,3 +24,10 @@ build = "."
 
 [service.hooks]
 post_deploy = "sleep 15"
+
+[[service]]
+name = "busybox"
+version = "ignored-by-promotion"
+path = "kind/portable-busybox"
+namespace = "default"
+build = "."

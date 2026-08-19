@@ -14,3 +14,10 @@ version = "publication-only"
 path = "kind/portable"
 namespace = "default"
 build = "."
+
+[[service]]
+name = "busybox"
+version = "publication-only"
+path = "kind/portable-busybox"
+namespace = "default"
+build = "."

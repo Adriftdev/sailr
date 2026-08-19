@@ -15,7 +15,7 @@ struct PreparationEvidence<'a> {
     profile: &'a str,
     environment: &'a str,
     promotion_plan_digest: &'a str,
-    publication_report_digest: &'a str,
+    publication_report_digests: &'a [String],
     plan_hash: &'a str,
     resource_count: usize,
 }
@@ -25,6 +25,10 @@ struct PreparationEvidence<'a> {
 pub enum ReleaseOutcome {
     Success,
     ApplyFailed,
+    BundleValidationFailed,
+    ApprovalFailed,
+    TargetUnavailable,
+    LockFailed,
     VerificationFailed,
     PostHookFailed,
 }
@@ -42,8 +46,23 @@ pub struct ReleaseLockEvidence {
     pub name: String,
     pub namespace: String,
     pub holder_identity: String,
+    pub acquired: bool,
     pub ownership_lost: bool,
     pub released: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalEvidence {
+    pub mode: ApprovalMode,
+    pub satisfied: bool,
+    pub verified_by_sailr: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_key_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -52,12 +71,15 @@ pub struct ReleaseExecutionEvidence {
     pub profile: String,
     pub environment: String,
     pub release_id: String,
-    pub bundle_schema: String,
-    pub plan_hash: String,
-    pub promotion_plan_digest: String,
-    pub publication_report_digest: String,
-    pub approval: ApprovalMode,
-    pub approval_verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promotion_plan_digest: Option<String>,
+    #[serde(default)]
+    pub publication_report_digests: Vec<String>,
+    pub approval: ApprovalEvidence,
     pub release_lock: Option<ReleaseLockEvidence>,
     pub outcome: ReleaseOutcome,
     pub rollout: Vec<crate::deployment::rollout::RolloutResult>,
@@ -67,6 +89,8 @@ pub struct ReleaseExecutionEvidence {
     pub rollback_succeeded: bool,
     pub rollback_errors: Vec<String>,
     pub errors: Vec<String>,
+    #[serde(default)]
+    pub operational_errors: Vec<String>,
 }
 
 pub async fn prepare(args: WorkflowPrepareArgs) -> Result<(), String> {
@@ -191,100 +215,284 @@ pub async fn apply(args: WorkflowApplyArgs) -> Result<(), String> {
     if !args.non_interactive || !args.apply {
         return Err("workflow apply requires --non-interactive and --apply".to_string());
     }
-    let portable = crate::deployment::bundle::read_portable(&args.bundle)
-        .map_err(|error| error.to_string())?;
-    if portable.payload.profile != args.profile {
-        return Err(format!(
-            "bundle profile '{}' does not match requested profile '{}'",
-            portable.payload.profile, args.profile
-        ));
-    }
     let config = WorkflowConfig::load().map_err(|error| error.to_string())?;
     let profile = config
         .get_profile(&args.profile)
         .ok_or_else(|| format!("Workflow profile '{}' not found", args.profile))?;
-    validate_release_profile(profile)?;
     let normalized = profile.normalize(true);
-    let environment = Environment::load_from_file(&normalized.environment).map_err(|error| {
-        format!(
-            "failed to load environment '{}': {error}",
-            normalized.environment
-        )
-    })?;
-    validate_approval_policy(&normalized, &environment)?;
-    validate_bundle_binding(&portable, &normalized, &environment)?;
-    let runtime = portable.to_runtime().map_err(|error| error.to_string())?;
+    let provisional_release_id = format!(
+        "attempt-{}-{}",
+        chrono::Utc::now().format("%Y%m%d%H%M%S"),
+        std::process::id()
+    );
+    let mut evidence = ReleaseExecutionEvidence {
+        schema_version: "sailr.release-report/v1".to_string(),
+        profile: args.profile.clone(),
+        environment: normalized.environment.clone(),
+        release_id: args.release_id.clone().unwrap_or(provisional_release_id),
+        bundle_schema: None,
+        plan_hash: None,
+        promotion_plan_digest: None,
+        publication_report_digests: Vec::new(),
+        approval: ApprovalEvidence {
+            mode: normalized.approval,
+            satisfied: false,
+            verified_by_sailr: false,
+            signer_key_fingerprint: None,
+            error: None,
+        },
+        release_lock: None,
+        outcome: ReleaseOutcome::BundleValidationFailed,
+        rollout: Vec::new(),
+        applied_resources: 0,
+        rollback_attempted: false,
+        rollback_outcome: RollbackOutcome::NotAttempted,
+        rollback_succeeded: false,
+        rollback_errors: Vec::new(),
+        errors: Vec::new(),
+        operational_errors: Vec::new(),
+    };
 
-    let approval_verified = match normalized.approval {
-        ApprovalMode::External => true,
-        ApprovalMode::Signature => {
-            let signature =
-                std::env::var(crate::workflow::gate::APPROVAL_SIGNATURE_ENV).map_err(|_| {
-                    format!("missing {}", crate::workflow::gate::APPROVAL_SIGNATURE_ENV)
-                })?;
-            let key = &normalized
-                .signature
-                .as_ref()
-                .ok_or_else(|| "signature approval requires trusted_public_key".to_string())?
-                .trusted_public_key;
-            crate::workflow::gate::verify_plan_hash_signature(&portable.plan_hash, key, &signature)
-                .map_err(|error| error.to_string())?;
-            true
+    if let Err(error) = validate_release_id(&evidence.release_id) {
+        evidence.release_id = format!(
+            "attempt-{}-{}",
+            chrono::Utc::now().format("%Y%m%d%H%M%S"),
+            std::process::id()
+        );
+        return fail_release_attempt(
+            &args.bundle,
+            &mut evidence,
+            ReleaseOutcome::BundleValidationFailed,
+            error,
+        );
+    }
+    if let Err(error) = validate_release_profile(profile) {
+        return fail_release_attempt(
+            &args.bundle,
+            &mut evidence,
+            ReleaseOutcome::BundleValidationFailed,
+            error,
+        );
+    }
+    let environment = match Environment::load_from_file(&normalized.environment) {
+        Ok(environment) => environment,
+        Err(error) => {
+            return fail_release_attempt(
+                &args.bundle,
+                &mut evidence,
+                ReleaseOutcome::BundleValidationFailed,
+                format!(
+                    "failed to load environment '{}': {error}",
+                    normalized.environment
+                ),
+            )
         }
-        _ => {
-            return Err(
-                "portable workflow apply requires external or signature approval".to_string(),
+    };
+    let portable = match crate::deployment::bundle::read_portable(&args.bundle) {
+        Ok(portable) => portable,
+        Err(error) => {
+            return fail_release_attempt(
+                &args.bundle,
+                &mut evidence,
+                ReleaseOutcome::BundleValidationFailed,
+                error.to_string(),
+            )
+        }
+    };
+    evidence.bundle_schema = Some(portable.payload.schema_version.clone());
+    evidence.plan_hash = Some(portable.plan_hash.clone());
+    evidence.promotion_plan_digest = Some(portable.payload.promotion_plan_digest.clone());
+    evidence.publication_report_digests = portable.payload.publication_report_digests.clone();
+    evidence.approval.signer_key_fingerprint = portable.payload.signer_key_fingerprint.clone();
+    if portable.payload.profile != args.profile {
+        return fail_release_attempt(
+            &args.bundle,
+            &mut evidence,
+            ReleaseOutcome::BundleValidationFailed,
+            format!(
+                "bundle profile '{}' does not match requested profile '{}'",
+                portable.payload.profile, args.profile
+            ),
+        );
+    }
+    if let Err(error) = validate_bundle_binding(&portable, &normalized, &environment) {
+        return fail_release_attempt(
+            &args.bundle,
+            &mut evidence,
+            ReleaseOutcome::BundleValidationFailed,
+            error,
+        );
+    }
+    let runtime = match portable.to_runtime() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return fail_release_attempt(
+                &args.bundle,
+                &mut evidence,
+                ReleaseOutcome::BundleValidationFailed,
+                error.to_string(),
             )
         }
     };
 
-    let release_id = args.release_id.unwrap_or_else(|| {
-        format!(
+    if let Err(error) = validate_approval_policy(&normalized, &environment) {
+        evidence.approval.error = Some(error.clone());
+        return fail_release_attempt(
+            &args.bundle,
+            &mut evidence,
+            ReleaseOutcome::ApprovalFailed,
+            error,
+        );
+    }
+
+    match normalized.approval {
+        ApprovalMode::External => {
+            evidence.approval.satisfied = true;
+        }
+        ApprovalMode::Signature => {
+            let signature = match std::env::var(crate::workflow::gate::APPROVAL_SIGNATURE_ENV) {
+                Ok(signature) => signature,
+                Err(_) => {
+                    let error =
+                        format!("missing {}", crate::workflow::gate::APPROVAL_SIGNATURE_ENV);
+                    evidence.approval.error = Some(error.clone());
+                    return fail_release_attempt(
+                        &args.bundle,
+                        &mut evidence,
+                        ReleaseOutcome::ApprovalFailed,
+                        error,
+                    );
+                }
+            };
+            let key = match normalized.signature.as_ref() {
+                Some(signature) => &signature.trusted_public_key,
+                None => {
+                    let error = "signature approval requires trusted_public_key".to_string();
+                    evidence.approval.error = Some(error.clone());
+                    return fail_release_attempt(
+                        &args.bundle,
+                        &mut evidence,
+                        ReleaseOutcome::ApprovalFailed,
+                        error,
+                    );
+                }
+            };
+            if let Err(error) = crate::workflow::gate::verify_plan_hash_signature(
+                &portable.plan_hash,
+                key,
+                &signature,
+            ) {
+                let error = error.to_string();
+                evidence.approval.error = Some(error.clone());
+                return fail_release_attempt(
+                    &args.bundle,
+                    &mut evidence,
+                    ReleaseOutcome::ApprovalFailed,
+                    error,
+                );
+            }
+            evidence.approval.satisfied = true;
+            evidence.approval.verified_by_sailr = true;
+        }
+        _ => {
+            let error =
+                "portable workflow apply requires external or signature approval".to_string();
+            evidence.approval.error = Some(error.clone());
+            return fail_release_attempt(
+                &args.bundle,
+                &mut evidence,
+                ReleaseOutcome::ApprovalFailed,
+                error,
+            );
+        }
+    }
+
+    if args.release_id.is_none() {
+        evidence.release_id = format!(
             "{}-{}-{}",
             &portable.plan_hash[..12],
             chrono::Utc::now().format("%Y%m%d%H%M%S"),
             std::process::id()
-        )
-    });
-    validate_release_id(&release_id)?;
+        );
+    }
 
     let context = runtime.target.context.clone();
-    let client = crate::deployment::k8sm8::create_client(context.clone())
-        .await
-        .map_err(|error| error.to_string())?;
-    let backend = crate::deployment::KubernetesDeploymentBackend::new(context)
-        .await
-        .map_err(|error| error.to_string())?;
+    let client = match crate::deployment::k8sm8::create_client(context.clone()).await {
+        Ok(client) => client,
+        Err(error) => {
+            return fail_release_attempt(
+                &args.bundle,
+                &mut evidence,
+                ReleaseOutcome::TargetUnavailable,
+                error.to_string(),
+            )
+        }
+    };
+    let backend = match crate::deployment::KubernetesDeploymentBackend::new(context).await {
+        Ok(backend) => backend,
+        Err(error) => {
+            return fail_release_attempt(
+                &args.bundle,
+                &mut evidence,
+                ReleaseOutcome::TargetUnavailable,
+                error.to_string(),
+            )
+        }
+    };
     let lock_policy = environment
         .deployment_policy
         .release_lock
         .clone()
         .unwrap_or_default();
-    let release_lock = crate::deployment::lease::ReleaseLease::acquire(
+    let (lock_name, lock_namespace) =
+        crate::deployment::lease::identity(&environment.name, &runtime.target, &lock_policy);
+    evidence.release_lock = Some(ReleaseLockEvidence {
+        name: lock_name,
+        namespace: lock_namespace,
+        holder_identity: evidence.release_id.clone(),
+        acquired: false,
+        ownership_lost: false,
+        released: false,
+        release_error: None,
+    });
+    let release_lock = match crate::deployment::lease::ReleaseLease::acquire(
         client,
         &environment.name,
         &runtime.target,
-        &release_id,
+        &evidence.release_id,
         &lock_policy,
     )
     .await
-    .map_err(|error| error.to_string())?;
-    let lock_name = release_lock.name().to_string();
-    let lock_namespace = release_lock.namespace().to_string();
+    {
+        Ok(release_lock) => release_lock,
+        Err(error) => {
+            return fail_release_attempt(
+                &args.bundle,
+                &mut evidence,
+                ReleaseOutcome::LockFailed,
+                error.to_string(),
+            )
+        }
+    };
+    if let Some(lock) = evidence.release_lock.as_mut() {
+        lock.acquired = true;
+    }
     let checked_backend = crate::deployment::lease::LeaseCheckedBackend {
         inner: &backend,
         lease: &release_lock,
     };
     let journal = crate::deployment::new_deployment_journal();
-    let mut outcome = ReleaseOutcome::Success;
-    let mut rollout = Vec::new();
-    let mut errors = Vec::new();
+    evidence.outcome = ReleaseOutcome::Success;
 
     if let Err(error) =
         crate::deployment::apply_bundle(&runtime, &checked_backend, journal.clone()).await
     {
-        outcome = ReleaseOutcome::ApplyFailed;
-        errors.push(error.to_string());
+        evidence.outcome = if release_lock.ensure_held().is_err() {
+            ReleaseOutcome::LockFailed
+        } else {
+            ReleaseOutcome::ApplyFailed
+        };
+        evidence.errors.push(error.to_string());
         rollback_with_timeout(&journal, &checked_backend, profile.rollback.timeout_seconds).await;
     } else {
         match crate::deployment::rollout::verify_bundle_rollout(
@@ -294,20 +502,28 @@ pub async fn apply(args: WorkflowApplyArgs) -> Result<(), String> {
         )
         .await
         {
-            Ok(results) => rollout = results,
+            Ok(results) => evidence.rollout = results,
             Err(error) => {
-                outcome = ReleaseOutcome::VerificationFailed;
-                errors.push(error.to_string());
+                evidence.outcome = if release_lock.ensure_held().is_err() {
+                    ReleaseOutcome::LockFailed
+                } else {
+                    ReleaseOutcome::VerificationFailed
+                };
+                evidence.errors.push(error.to_string());
                 rollback_with_timeout(&journal, &checked_backend, profile.rollback.timeout_seconds)
                     .await;
             }
         }
-        if errors.is_empty() {
+        if evidence.errors.is_empty() {
             if let Err(error) =
                 execute_bound_post_hooks(&portable.payload.post_deploy_hooks, &release_lock).await
             {
-                outcome = ReleaseOutcome::PostHookFailed;
-                errors.push(error);
+                evidence.outcome = if release_lock.ensure_held().is_err() {
+                    ReleaseOutcome::LockFailed
+                } else {
+                    ReleaseOutcome::PostHookFailed
+                };
+                evidence.errors.push(error);
                 rollback_with_timeout(&journal, &checked_backend, profile.rollback.timeout_seconds)
                     .await;
             }
@@ -317,60 +533,67 @@ pub async fn apply(args: WorkflowApplyArgs) -> Result<(), String> {
     let snapshot = match journal.lock() {
         Ok(state) => state.clone(),
         Err(_) => {
-            errors.push("deployment journal lock is poisoned".to_string());
+            evidence
+                .errors
+                .push("deployment journal lock is poisoned".to_string());
             crate::deployment::DeploymentJournal::default()
         }
     };
     let ownership_lost = release_lock.ensure_held().is_err();
     let release_result = release_lock.release().await;
     let released = release_result.is_ok();
-    if let Err(error) = release_result {
-        errors.push(error.to_string());
+    if ownership_lost {
+        evidence.outcome = ReleaseOutcome::LockFailed;
+        evidence
+            .errors
+            .push("release Lease ownership was lost".to_string());
     }
-    let rollback_outcome = if !snapshot.rollback_attempted {
+    if let Some(lock) = evidence.release_lock.as_mut() {
+        lock.ownership_lost = ownership_lost;
+        lock.released = released;
+        if let Err(error) = release_result {
+            lock.release_error = Some(error.to_string());
+            evidence.operational_errors.push(error.to_string());
+        }
+    }
+    evidence.rollback_outcome = if !snapshot.rollback_attempted {
         RollbackOutcome::NotAttempted
     } else if snapshot.rollback_errors.is_empty() {
         RollbackOutcome::RollbackSucceeded
     } else {
         RollbackOutcome::RollbackFailed
     };
-    let evidence = ReleaseExecutionEvidence {
-        schema_version: "sailr.release-report/v1".to_string(),
-        profile: args.profile.clone(),
-        environment: environment.name.clone(),
-        release_id: release_id.clone(),
-        bundle_schema: portable.payload.schema_version.clone(),
-        plan_hash: portable.plan_hash.clone(),
-        promotion_plan_digest: portable.payload.promotion_plan_digest.clone(),
-        publication_report_digest: portable.payload.publication_report_digest.clone(),
-        approval: normalized.approval,
-        approval_verified,
-        release_lock: Some(ReleaseLockEvidence {
-            name: lock_name,
-            namespace: lock_namespace,
-            holder_identity: release_id,
-            ownership_lost,
-            released,
-        }),
-        outcome,
-        rollout,
-        applied_resources: snapshot.entries.len(),
-        rollback_attempted: snapshot.rollback_attempted,
-        rollback_outcome,
-        rollback_succeeded: snapshot.rollback_attempted && snapshot.rollback_errors.is_empty(),
-        rollback_errors: snapshot.rollback_errors,
-        errors: errors.clone(),
-    };
+    evidence.applied_resources = snapshot.entries.len();
+    evidence.rollback_attempted = snapshot.rollback_attempted;
+    evidence.rollback_succeeded =
+        snapshot.rollback_attempted && snapshot.rollback_errors.is_empty();
+    evidence.rollback_errors = snapshot.rollback_errors;
     write_release_evidence(&args.bundle, &evidence)?;
-    if errors.is_empty() {
+    if evidence.errors.is_empty() && evidence.operational_errors.is_empty() {
         println!(
             "{}",
             serde_json::to_string_pretty(&evidence).map_err(|error| error.to_string())?
         );
         Ok(())
     } else {
-        Err(errors.join("; "))
+        let mut all_errors = evidence.errors.clone();
+        all_errors.extend(evidence.operational_errors.clone());
+        Err(all_errors.join("; "))
     }
+}
+
+fn fail_release_attempt(
+    bundle_path: &Path,
+    evidence: &mut ReleaseExecutionEvidence,
+    outcome: ReleaseOutcome,
+    error: String,
+) -> Result<(), String> {
+    evidence.outcome = outcome;
+    evidence.errors.push(error.clone());
+    write_release_evidence(bundle_path, evidence).map_err(|write_error| {
+        format!("{error}; failed to write release evidence: {write_error}")
+    })?;
+    Err(error)
 }
 
 pub(crate) fn validate_release_profile(
@@ -716,7 +939,7 @@ fn write_preparation_artifacts(
         "environment": bundle.payload.environment,
         "target": bundle.payload.target,
         "promotion_plan_digest": bundle.payload.promotion_plan_digest,
-        "publication_report_digest": bundle.payload.publication_report_digest,
+        "publication_report_digests": bundle.payload.publication_report_digests,
         "resources": bundle.payload.resources.iter().map(|resource| serde_json::json!({
             "identity": resource.identity,
             "source_path": resource.source_path,
@@ -756,7 +979,7 @@ fn write_preparation_artifacts(
         profile: &bundle.payload.profile,
         environment: &bundle.payload.environment,
         promotion_plan_digest: &bundle.payload.promotion_plan_digest,
-        publication_report_digest: &bundle.payload.publication_report_digest,
+        publication_report_digests: &bundle.payload.publication_report_digests,
         plan_hash: &bundle.plan_hash,
         resource_count: bundle.payload.resources.len(),
     };
@@ -819,7 +1042,11 @@ fn write_release_evidence(
     evidence: &ReleaseExecutionEvidence,
 ) -> Result<(), String> {
     let bundle_parent = bundle_path.parent().unwrap_or_else(|| Path::new("."));
-    let failed = !evidence.errors.is_empty();
+    let failed = evidence.outcome != ReleaseOutcome::Success
+        || !evidence.errors.is_empty()
+        || !evidence.operational_errors.is_empty();
+    let mut reported_errors = evidence.errors.clone();
+    reported_errors.extend(evidence.operational_errors.clone());
     let task = crate::workflow::runner::WorkflowReportTaskItem {
         name: crate::workflow::task_id::DEPLOY.to_string(),
         kind: crate::workflow::plan::WorkflowTaskKind::Deploy,
@@ -830,7 +1057,7 @@ fn write_release_evidence(
         } else {
             crate::workflow::runner::WorkflowReportTaskStatus::Completed
         },
-        error: failed.then(|| evidence.errors.join("; ")),
+        error: failed.then(|| reported_errors.join("; ")),
     };
     let report = crate::workflow::runner::WorkflowReport {
         schema_version: "sailr.workflow-report/v1".to_string(),
@@ -839,10 +1066,10 @@ fn write_release_evidence(
         mode: "deploy".to_string(),
         runner: crate::workflow::runner::RunnerContext::detect(true),
         environment: evidence.environment.clone(),
-        approval: Some(evidence.approval),
+        approval: Some(evidence.approval.mode),
         success: !failed,
         effects: crate::workflow::plan::WorkflowEffects {
-            mutates_cluster: true,
+            mutates_cluster: evidence.applied_resources > 0,
             ..Default::default()
         },
         tasks: crate::workflow::runner::WorkflowReportTasks {
@@ -868,14 +1095,21 @@ fn write_release_evidence(
     };
     report.validate().map_err(|error| error.to_string())?;
     let bytes = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
-    std::fs::write(bundle_parent.join("release-report.json"), &bytes)
-        .map_err(|error| error.to_string())?;
+    atomic_write(&bundle_parent.join("release-report.json"), &bytes)?;
     let standard = PathBuf::from(".sailr")
         .join("reports")
         .join(&evidence.profile);
-    std::fs::create_dir_all(&standard).map_err(|error| error.to_string())?;
-    std::fs::write(standard.join("latest.json"), bytes).map_err(|error| error.to_string())?;
+    atomic_write(&standard.join("latest.json"), &bytes)?;
     Ok(())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
 pub(crate) fn validate_release_id(release_id: &str) -> Result<(), String> {
@@ -948,6 +1182,30 @@ spec:
         assert_eq!(
             super::workload_image_variable_binding(&external, "service_version"),
             (true, true)
+        );
+    }
+}
+
+#[cfg(test)]
+mod evidence_contract_tests {
+    use super::{ApprovalEvidence, ReleaseOutcome};
+    use crate::workflow::profile::ApprovalMode;
+
+    #[test]
+    fn external_approval_is_satisfied_but_not_sailr_verified() {
+        let evidence = ApprovalEvidence {
+            mode: ApprovalMode::External,
+            satisfied: true,
+            verified_by_sailr: false,
+            signer_key_fingerprint: None,
+            error: None,
+        };
+        let value = serde_json::to_value(evidence).expect("approval evidence");
+        assert_eq!(value["satisfied"], true);
+        assert_eq!(value["verified_by_sailr"], false);
+        assert_eq!(
+            serde_json::to_value(ReleaseOutcome::TargetUnavailable).expect("outcome"),
+            "target_unavailable"
         );
     }
 }

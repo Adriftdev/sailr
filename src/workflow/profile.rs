@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 /// staging deploy, production deploy) should behave. Profiles are loaded from
 /// `sailr.workflow.toml` and converted into runkernel pipelines by the planner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowProfile {
     /// Profile name, injected at load time from the TOML key.
     #[serde(skip)]
@@ -259,6 +260,7 @@ pub struct NormalizedWorkflowProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationPolicy {
     #[serde(default = "default_rollout_timeout_seconds")]
     pub rollout_timeout_seconds: u64,
@@ -273,6 +275,7 @@ impl Default for VerificationPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowRollbackPolicy {
     #[serde(default = "default_rollback_timeout_seconds")]
     pub timeout_seconds: u64,
@@ -295,6 +298,7 @@ fn default_rollback_timeout_seconds() -> u64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SignatureApprovalConfig {
     pub trusted_public_key: String,
 }
@@ -821,7 +825,6 @@ mod tests {
     #[test]
     fn check_profile_respects_explicit_build_disabled() {
         let toml_str = r#"
-            name = "ci"
             environment = "local"
             mode = "check"
             build = "disabled"
@@ -839,7 +842,6 @@ mod tests {
     #[test]
     fn check_profile_defaults_omitted_build_to_plan() {
         let toml_str = r#"
-            name = "default-check"
             environment = "local"
             mode = "check"
         "#;

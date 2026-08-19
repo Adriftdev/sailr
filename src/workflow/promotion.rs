@@ -6,6 +6,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub const PROMOTION_PLAN_SCHEMA: &str = "sailr.promotion-plan/v1";
+pub const RELEASE_CANDIDATES_SCHEMA: &str = "sailr.release-candidates/v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CandidatePublicationReport {
+    pub path: String,
+    pub report_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseCandidateManifest {
+    pub schema_version: String,
+    pub publication_reports: Vec<CandidatePublicationReport>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -34,7 +49,7 @@ pub struct PromotionService {
 pub struct PromotionPlan {
     pub schema_version: String,
     pub target_environment: String,
-    pub source_report: PromotionSourceReport,
+    pub source_reports: Vec<PromotionSourceReport>,
     pub services: Vec<PromotionService>,
 }
 
@@ -115,13 +130,30 @@ impl PromotionPlan {
         if self.target_environment.trim().is_empty() || self.services.is_empty() {
             return Err("promotion target and services must be nonempty".to_string());
         }
-        if self.source_report.schema_version != "sailr.workflow-report/v1"
-            || self.source_report.profile.trim().is_empty()
-            || self.source_report.environment.trim().is_empty()
-        {
-            return Err("promotion source report metadata is invalid".to_string());
+        if self.source_reports.is_empty() {
+            return Err("promotion source reports must be nonempty".to_string());
         }
-        validate_sha256_identity(&self.source_report.digest, "source report digest")?;
+        let mut previous_digest: Option<&str> = None;
+        let mut source_environment: Option<&str> = None;
+        for source in &self.source_reports {
+            if source.schema_version != "sailr.workflow-report/v1"
+                || source.profile.trim().is_empty()
+                || source.environment.trim().is_empty()
+            {
+                return Err("promotion source report metadata is invalid".to_string());
+            }
+            validate_sha256_identity(&source.digest, "source report digest")?;
+            if previous_digest.is_some_and(|digest| digest >= source.digest.as_str()) {
+                return Err(
+                    "promotion source reports must be uniquely sorted by digest".to_string()
+                );
+            }
+            if source_environment.is_some_and(|environment| environment != source.environment) {
+                return Err("promotion source reports must use one source environment".to_string());
+            }
+            previous_digest = Some(source.digest.as_str());
+            source_environment = Some(source.environment.as_str());
+        }
         let mut previous: Option<&str> = None;
         let mut names = BTreeSet::new();
         for service in &self.services {
@@ -190,17 +222,146 @@ pub fn load(path: &Path) -> Result<PromotionPlan, String> {
     Ok(plan)
 }
 
-pub fn create(from_report: &Path, target_environment: &str) -> Result<PromotionPlan, String> {
-    let (report, validation) = publication::load_and_validate(from_report)?;
+pub fn create(
+    from_reports: &[std::path::PathBuf],
+    target_environment: &str,
+) -> Result<PromotionPlan, String> {
+    if from_reports.is_empty() {
+        return Err("at least one publication report is required".to_string());
+    }
+    create_from_selected_reports(
+        from_reports
+            .iter()
+            .map(|path| (path.clone(), None))
+            .collect(),
+        target_environment,
+    )
+}
+
+pub fn create_from_manifest(
+    path: &Path,
+    target_environment: &str,
+) -> Result<PromotionPlan, String> {
+    create_from_selected_reports(load_candidate_manifest(path)?, target_environment)
+}
+
+fn load_candidate_manifest(
+    path: &Path,
+) -> Result<Vec<(std::path::PathBuf, Option<String>)>, String> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        format!(
+            "failed to read candidate manifest '{}': {error}",
+            path.display()
+        )
+    })?;
+    let manifest: ReleaseCandidateManifest = serde_json::from_slice(&bytes).map_err(|error| {
+        format!(
+            "failed to parse candidate manifest '{}': {error}",
+            path.display()
+        )
+    })?;
+    if manifest.schema_version != RELEASE_CANDIDATES_SCHEMA {
+        return Err(format!(
+            "unsupported candidate manifest schema '{}'",
+            manifest.schema_version
+        ));
+    }
+    if manifest.publication_reports.is_empty() {
+        return Err("candidate manifest must contain publication reports".to_string());
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut paths = BTreeSet::new();
+    let mut digests = BTreeSet::new();
+    let mut selected = Vec::new();
+    for candidate in manifest.publication_reports {
+        validate_sha256_identity(&candidate.report_digest, "candidate report digest")?;
+        let relative = Path::new(&candidate.path);
+        if candidate.path.trim().is_empty()
+            || relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(format!(
+                "candidate report path '{}' must be a safe relative path",
+                candidate.path
+            ));
+        }
+        if !paths.insert(candidate.path.clone()) {
+            return Err(format!(
+                "duplicate candidate report path '{}'",
+                candidate.path
+            ));
+        }
+        if !digests.insert(candidate.report_digest.clone()) {
+            return Err(format!(
+                "duplicate candidate report digest '{}'",
+                candidate.report_digest
+            ));
+        }
+        selected.push((parent.join(relative), Some(candidate.report_digest)));
+    }
+    Ok(selected)
+}
+
+fn create_from_selected_reports(
+    selected: Vec<(std::path::PathBuf, Option<String>)>,
+    target_environment: &str,
+) -> Result<PromotionPlan, String> {
     let environment = Environment::load_from_file(target_environment).map_err(|error| {
         format!("failed to load target environment '{target_environment}': {error}")
     })?;
-    let mut services = report
-        .artifacts
-        .published_images
-        .iter()
-        .map(|artifact| {
-            Ok(PromotionService {
+    create_from_selected_reports_for_environment(selected, target_environment, &environment)
+}
+
+fn create_from_selected_reports_for_environment(
+    selected: Vec<(std::path::PathBuf, Option<String>)>,
+    target_environment: &str,
+    environment: &Environment,
+) -> Result<PromotionPlan, String> {
+    let mut source_reports = Vec::new();
+    let mut services = Vec::new();
+    let mut report_digests = BTreeSet::new();
+    let mut service_names = BTreeSet::new();
+    let mut source_environment: Option<String> = None;
+    for (path, expected_digest) in selected {
+        let (report, validation) = publication::load_and_validate(&path)?;
+        if expected_digest
+            .as_deref()
+            .is_some_and(|expected| expected != validation.report_digest)
+        {
+            return Err(format!(
+                "candidate report '{}' canonical digest does not match manifest",
+                path.display()
+            ));
+        }
+        if !report_digests.insert(validation.report_digest.clone()) {
+            return Err(format!(
+                "duplicate publication report digest '{}'",
+                validation.report_digest
+            ));
+        }
+        if source_environment
+            .as_deref()
+            .is_some_and(|environment| environment != report.environment)
+        {
+            return Err("publication reports must use one source environment".to_string());
+        }
+        source_environment = Some(report.environment.clone());
+        source_reports.push(PromotionSourceReport {
+            schema_version: report.schema_version.clone(),
+            profile: report.profile.clone(),
+            environment: report.environment.clone(),
+            digest: validation.report_digest,
+        });
+        for artifact in &report.artifacts.published_images {
+            if !service_names.insert(artifact.service.clone()) {
+                return Err(format!(
+                    "duplicate promotion service '{}'",
+                    artifact.service
+                ));
+            }
+            services.push(PromotionService {
                 service: artifact.service.clone(),
                 registry: artifact.registry.clone(),
                 repository: artifact.repository.clone(),
@@ -214,22 +375,18 @@ pub fn create(from_report: &Path, target_environment: &str) -> Result<PromotionP
                     )
                 })?,
                 published_at: artifact.published_at.clone(),
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+            });
+        }
+    }
+    source_reports.sort_by(|left, right| left.digest.cmp(&right.digest));
     services.sort_by(|left, right| left.service.cmp(&right.service));
     let plan = PromotionPlan {
         schema_version: PROMOTION_PLAN_SCHEMA.to_string(),
         target_environment: target_environment.to_string(),
-        source_report: PromotionSourceReport {
-            schema_version: report.schema_version,
-            profile: report.profile,
-            environment: report.environment,
-            digest: validation.report_digest,
-        },
+        source_reports,
         services,
     };
-    plan.validate_for_environment(&environment)?;
+    plan.validate_for_environment(environment)?;
     Ok(plan)
 }
 
@@ -302,12 +459,12 @@ mod tests {
         PromotionPlan {
             schema_version: PROMOTION_PLAN_SCHEMA.to_string(),
             target_environment: "prod".to_string(),
-            source_report: PromotionSourceReport {
+            source_reports: vec![PromotionSourceReport {
                 schema_version: "sailr.workflow-report/v1".to_string(),
                 profile: "publish".to_string(),
                 environment: "staging".to_string(),
                 digest: digest('a'),
-            },
+            }],
             services,
         }
     }
@@ -344,5 +501,140 @@ mod tests {
         assert!(external_dependency
             .validate_for_environment(&environment)
             .is_err());
+
+        let mut duplicate_sources = complete.clone();
+        duplicate_sources
+            .source_reports
+            .push(duplicate_sources.source_reports[0].clone());
+        assert!(duplicate_sources
+            .validate_for_environment(&environment)
+            .is_err());
+    }
+
+    #[test]
+    fn candidate_manifest_is_strict_and_rejects_unsafe_or_duplicate_selection() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let unsafe_manifest = ReleaseCandidateManifest {
+            schema_version: RELEASE_CANDIDATES_SCHEMA.to_string(),
+            publication_reports: vec![CandidatePublicationReport {
+                path: "../api.json".to_string(),
+                report_digest: digest('a'),
+            }],
+        };
+        let unsafe_path = directory.path().join("unsafe.json");
+        std::fs::write(
+            &unsafe_path,
+            serde_json::to_vec(&unsafe_manifest).expect("manifest"),
+        )
+        .expect("write");
+        assert!(create_from_manifest(&unsafe_path, "unused").is_err());
+
+        let duplicate_manifest = ReleaseCandidateManifest {
+            schema_version: RELEASE_CANDIDATES_SCHEMA.to_string(),
+            publication_reports: vec![
+                CandidatePublicationReport {
+                    path: "api.json".to_string(),
+                    report_digest: digest('a'),
+                },
+                CandidatePublicationReport {
+                    path: "worker.json".to_string(),
+                    report_digest: digest('a'),
+                },
+            ],
+        };
+        let duplicate_path = directory.path().join("duplicate.json");
+        std::fs::write(
+            &duplicate_path,
+            serde_json::to_vec(&duplicate_manifest).expect("manifest"),
+        )
+        .expect("write");
+        assert!(create_from_manifest(&duplicate_path, "unused").is_err());
+
+        let unknown = format!(
+            r#"{{"schema_version":"{}","publication_reports":[],"extra":true}}"#,
+            RELEASE_CANDIDATES_SCHEMA
+        );
+        assert!(serde_json::from_str::<ReleaseCandidateManifest>(&unknown).is_err());
+    }
+
+    #[test]
+    fn direct_and_manifest_selection_are_identical_and_manifest_binds_report_bytes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let report_path = directory.path().join("api.json");
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/reports/image-publication-success.json");
+        let mut report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture).expect("fixture")).expect("report");
+        let repository = "org/repo/ci-build-hello";
+        let digest = report["artifacts"]["published_images"][0]["digest"]
+            .as_str()
+            .expect("digest")
+            .to_string();
+        let tagged = format!("ghcr.io/{repository}:1.2.0");
+        let immutable = format!("ghcr.io/{repository}@{digest}");
+        report["plans"]["image_push"]["items"][0]["service"] = "ci-build-hello".into();
+        report["plans"]["image_push"]["items"][0]["repository"] = repository.into();
+        report["plans"]["image_push"]["items"][0]["target_image_ref"] = tagged.clone().into();
+        report["plans"]["image_push"]["items"][0]["local_image_ref"] = tagged.into();
+        report["artifacts"]["published_images"][0]["service"] = "ci-build-hello".into();
+        report["artifacts"]["published_images"][0]["repository"] = repository.into();
+        report["artifacts"]["published_images"][0]["image_ref"] = immutable.into();
+        std::fs::write(
+            &report_path,
+            serde_json::to_vec_pretty(&report).expect("serialize report"),
+        )
+        .expect("write report");
+
+        let (_, validation) = publication::load_and_validate(&report_path).expect("valid report");
+        let mut environment = Environment::new("prod");
+        environment.registry = RegistryConfig::Detailed {
+            host: "ghcr.io".to_string(),
+            namespace: Some("org/repo".to_string()),
+        };
+        environment.services = vec![build_backed_service("ci-build-hello")];
+        let direct = create_from_selected_reports_for_environment(
+            vec![(report_path.clone(), None)],
+            "prod",
+            &environment,
+        )
+        .expect("direct plan");
+
+        let manifest_path = directory.path().join("candidates.json");
+        let manifest = ReleaseCandidateManifest {
+            schema_version: RELEASE_CANDIDATES_SCHEMA.to_string(),
+            publication_reports: vec![CandidatePublicationReport {
+                path: "api.json".to_string(),
+                report_digest: validation.report_digest,
+            }],
+        };
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("manifest"),
+        )
+        .expect("write manifest");
+        let manifest_plan = create_from_selected_reports_for_environment(
+            load_candidate_manifest(&manifest_path).expect("selection"),
+            "prod",
+            &environment,
+        )
+        .expect("manifest plan");
+        assert_eq!(direct, manifest_plan);
+        assert_eq!(
+            direct.canonical_digest().expect("direct digest"),
+            manifest_plan.canonical_digest().expect("manifest digest")
+        );
+
+        report["artifacts"]["published_images"][0]["published_at"] = "2026-08-19T12:00:00Z".into();
+        std::fs::write(
+            &report_path,
+            serde_json::to_vec_pretty(&report).expect("serialize replacement"),
+        )
+        .expect("replace report");
+        assert!(create_from_selected_reports_for_environment(
+            load_candidate_manifest(&manifest_path).expect("selection"),
+            "prod",
+            &environment,
+        )
+        .is_err());
     }
 }

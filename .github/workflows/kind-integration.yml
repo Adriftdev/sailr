@@ -137,16 +137,20 @@ jobs:
       - name: Create immutable portable release candidate
         run: |
           docker pull nginx:1.27-alpine
+          docker pull busybox:1.36.1
           kind load docker-image nginx:1.27-alpine --name sailr
-          repo_digest="$(docker image inspect \
+          kind load docker-image busybox:1.36.1 --name sailr
+          nginx_repo_digest="$(docker image inspect \
             --format '{{index .RepoDigests 0}}' nginx:1.27-alpine)"
-          digest="${repo_digest#*@}"
-          image_ref="docker.io/library/nginx@${digest}"
+          busybox_repo_digest="$(docker image inspect \
+            --format '{{index .RepoDigests 0}}' busybox:1.36.1)"
+          nginx_digest="${nginx_repo_digest#*@}"
+          busybox_digest="${busybox_repo_digest#*@}"
           revision="$(git rev-parse HEAD)"
           mkdir -p .sailr/kind-portable
           jq \
-            --arg digest "${digest}" \
-            --arg image_ref "${image_ref}" \
+            --arg digest "${nginx_digest}" \
+            --arg image_ref "docker.io/library/nginx@${nginx_digest}" \
             --arg revision "${revision}" \
             '
               .profile = "kind-publication"
@@ -173,19 +177,110 @@ jobs:
                   | .provenance.source_revision = $revision)
             ' \
             tests/fixtures/reports/image-publication-success.json \
-            > .sailr/kind-portable/publication-report.json
-          target/release/sailr publication validate \
-            .sailr/kind-portable/publication-report.json
+            > .sailr/kind-portable/nginx-publication-report.json
+          jq \
+            --arg digest "${busybox_digest}" \
+            --arg image_ref "docker.io/library/busybox@${busybox_digest}" \
+            --arg revision "${revision}" \
+            '
+              .profile = "kind-publication"
+              | .environment = "kind-source"
+              | .plans.image_push.environment = "kind-source"
+              | (.plans.image_push.items[]
+                  | .service = "busybox"
+                  | .registry = "docker.io"
+                  | .repository = "library/busybox"
+                  | .target_image_ref = "docker.io/library/busybox:kind"
+                  | .local_image_ref = "docker.io/library/busybox:kind"
+                  | .tag = "kind"
+                  | .provenance.build_fingerprint = "kind-busybox"
+                  | .provenance.source_revision = $revision)
+              | (.artifacts.published_images[]
+                  | .service = "busybox"
+                  | .environment = "kind-source"
+                  | .registry = "docker.io"
+                  | .repository = "library/busybox"
+                  | .tag = "kind"
+                  | .digest = $digest
+                  | .image_ref = $image_ref
+                  | .provenance.build_fingerprint = "kind-busybox"
+                  | .provenance.source_revision = $revision)
+            ' \
+            tests/fixtures/reports/image-publication-success.json \
+            > .sailr/kind-portable/busybox-publication-report.json
+          nginx_report_digest="$(target/release/sailr publication validate \
+            .sailr/kind-portable/nginx-publication-report.json | jq -r .report_digest)"
+          busybox_report_digest="$(target/release/sailr publication validate \
+            .sailr/kind-portable/busybox-publication-report.json | jq -r .report_digest)"
+          jq -n \
+            --arg nginx_digest "${nginx_report_digest}" \
+            --arg busybox_digest "${busybox_report_digest}" \
+            '{
+              schema_version: "sailr.release-candidates/v1",
+              publication_reports: [
+                {path: "nginx-publication-report.json", report_digest: $nginx_digest},
+                {path: "busybox-publication-report.json", report_digest: $busybox_digest}
+              ]
+            }' > .sailr/kind-portable/release-candidates.json
 
       - name: Promote, prepare, sign, and apply without source manifests
         run: |
           target/release/sailr promote plan \
-            --from-report .sailr/kind-portable/publication-report.json \
+            --from-report .sailr/kind-portable/nginx-publication-report.json \
+            --from-report .sailr/kind-portable/busybox-publication-report.json \
+            --to kind-portable \
+            --out .sailr/kind-portable/direct-promotion-plan.json
+          target/release/sailr promote plan \
+            --from-manifest .sailr/kind-portable/release-candidates.json \
             --to kind-portable \
             --out .sailr/kind-portable/promotion-plan.json
+          cmp .sailr/kind-portable/direct-promotion-plan.json \
+            .sailr/kind-portable/promotion-plan.json
           target/release/sailr workflow prepare kind-portable \
             --promotion-plan .sailr/kind-portable/promotion-plan.json \
             --out .sailr/kind-portable/prepared
+          target/release/sailr workflow prepare kind-unavailable \
+            --promotion-plan .sailr/kind-portable/promotion-plan.json \
+            --out .sailr/kind-portable/unavailable-prepared
+          unavailable_hash="$(jq -r '.plan_hash' \
+            .sailr/kind-portable/unavailable-prepared/deployment-plan.json)"
+          printf '%s' "sailr-deployment-plan-v1:${unavailable_hash}" \
+            > "${RUNNER_TEMP}/unavailable-sign-input.bin"
+          openssl pkeyutl -sign -rawin \
+            -inkey "${RUNNER_TEMP}/sailr-private.pem" \
+            -in "${RUNNER_TEMP}/unavailable-sign-input.bin" \
+            -out "${RUNNER_TEMP}/unavailable-signature.bin"
+          DEPLOY_APPROVAL_SIG="$(base64 --wrap=0 \
+            < "${RUNNER_TEMP}/unavailable-signature.bin")"
+          export DEPLOY_APPROVAL_SIG
+          set +e
+          target/release/sailr workflow apply kind-unavailable \
+            --bundle .sailr/kind-portable/unavailable-prepared/deployment.bundle \
+            --non-interactive \
+            --apply \
+            --release-id kind-target-unavailable
+          unavailable_status=$?
+          set -e
+          test "${unavailable_status}" -ne 0
+          test "$(jq -r '.artifacts.release.outcome' \
+            .sailr/reports/kind-unavailable/latest.json)" = "target_unavailable"
+          ! kubectl --context kind-sailr get deployment sailr-portable
+          DEPLOY_APPROVAL_SIG="not-a-valid-signature"
+          export DEPLOY_APPROVAL_SIG
+          set +e
+          target/release/sailr workflow apply kind-portable \
+            --bundle .sailr/kind-portable/prepared/deployment.bundle \
+            --non-interactive \
+            --apply \
+            --release-id kind-invalid-signature
+          invalid_signature_status=$?
+          set -e
+          test "${invalid_signature_status}" -ne 0
+          test "$(jq -r '.artifacts.release.outcome' \
+            .sailr/reports/kind-portable/latest.json)" = "approval_failed"
+          test "$(jq -r '.artifacts.release.approval.verified_by_sailr' \
+            .sailr/reports/kind-portable/latest.json)" = "false"
+          ! kubectl --context kind-sailr get deployment sailr-portable
           plan_hash="$(jq -r '.plan_hash' \
             .sailr/kind-portable/prepared/deployment-plan.json)"
           printf '%s' "sailr-deployment-plan-v1:${plan_hash}" \
@@ -197,7 +292,9 @@ jobs:
           DEPLOY_APPROVAL_SIG="$(base64 --wrap=0 \
             < "${RUNNER_TEMP}/portable-signature.bin")"
           export DEPLOY_APPROVAL_SIG
-          rm -rf k8s/templates/kind/portable k8s/generated/kind-portable
+          rm -rf k8s/templates/kind/portable \
+            k8s/templates/kind/portable-busybox \
+            k8s/generated/kind-portable
           target/release/sailr workflow apply kind-portable \
             --bundle .sailr/kind-portable/prepared/deployment.bundle \
             --non-interactive \
@@ -252,12 +349,14 @@ jobs:
           contention_status=$?
           set -e
           test "${contention_status}" -ne 0
+          test "$(jq -r '.artifacts.release.outcome' \
+            .sailr/reports/kind-portable/latest.json)" = "lock_failed"
           wait "${first_pid}"
 
       - name: Roll back a portable rollout timeout
         run: |
           target/release/sailr promote plan \
-            --from-report .sailr/kind-portable/publication-report.json \
+            --from-manifest .sailr/kind-portable/release-candidates.json \
             --to kind-timeout \
             --out .sailr/kind-portable/timeout-promotion-plan.json
           target/release/sailr workflow prepare kind-timeout \
@@ -285,6 +384,7 @@ jobs:
           test "${timeout_status}" -ne 0
           ! kubectl --context kind-sailr get configmap sailr-timeout-marker
           ! kubectl --context kind-sailr get deployment sailr-timeout
+          ! kubectl --context kind-sailr get deployment sailr-timeout-busybox
           test "$(jq -r '.artifacts.release.outcome' \
             .sailr/reports/kind-timeout/latest.json)" = "verification_failed"
           test "$(jq -r '.artifacts.release.rollback_outcome' \
@@ -294,13 +394,15 @@ jobs:
         if: always()
         run: |
           mkdir -p .sailr/diagnostics
-          kubectl --context kind-sailr get configmaps \
-            --all-namespaces \
-            --output yaml > .sailr/diagnostics/configmaps.yaml
-          kubectl --context kind-sailr get events \
-            --all-namespaces \
-            --sort-by=.metadata.creationTimestamp \
-            --output yaml > .sailr/diagnostics/events.yaml
+          if kubectl config get-contexts kind-sailr >/dev/null 2>&1; then
+            kubectl --context kind-sailr get configmaps \
+              --all-namespaces \
+              --output yaml > .sailr/diagnostics/configmaps.yaml || true
+            kubectl --context kind-sailr get events \
+              --all-namespaces \
+              --sort-by=.metadata.creationTimestamp \
+              --output yaml > .sailr/diagnostics/events.yaml || true
+          fi
 
       - name: Upload audit evidence and diagnostics
         if: always()

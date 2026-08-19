@@ -895,6 +895,7 @@ pub enum RequiredDeploymentApproval {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DeploymentPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_approval: Option<RequiredDeploymentApproval>,
@@ -909,6 +910,7 @@ impl DeploymentPolicy {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ReleaseLockPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_name: Option<String>,
@@ -2201,5 +2203,25 @@ name = "postgres"
             variables.get("service_namespace").map(String::as_str),
             Some("service-explicit")
         );
+    }
+
+    #[test]
+    fn deployment_policy_rejects_misspelled_safety_fields() {
+        let base = r#"
+schema_version = "0.5.0"
+name = "prod"
+log_level = "INFO"
+domain = "example.com"
+default_replicas = 1
+registry = "docker.io"
+"#;
+        assert!(toml::from_str::<Environment>(&format!(
+            "{base}\n[deployment_policy]\nrequired_aproval = \"signature\"\n"
+        ))
+        .is_err());
+        assert!(toml::from_str::<Environment>(&format!(
+            "{base}\n[deployment_policy.release_lock]\nrenew_intervl_seconds = 20\n"
+        ))
+        .is_err());
     }
 }

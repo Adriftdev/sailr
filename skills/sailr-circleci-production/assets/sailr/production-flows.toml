@@ -1,0 +1,65 @@
+[flow.production-publication]
+kind = "publication"
+provider = "circleci"
+environment = "production"
+concurrency_key = "production-publication"
+
+[flow.production-publication.trigger]
+kind = "branch"
+branch = "main"
+
+[flow.production-publication.toolchain]
+source = "release"
+version = "__SAILR_VERSION__"
+sha256 = "sha256:__SAILR_RELEASE_SHA256__"
+
+[flow.production-publication.storage]
+kind = "circleci-artifact"
+
+[[flow.production-publication.stage]]
+name = "publish"
+profile = "production-publish"
+action = "publish"
+
+[flow.production-release]
+kind = "release"
+provider = "circleci"
+environment = "production"
+concurrency_key = "production-release"
+
+[flow.production-release.trigger]
+kind = "schedule"
+name = "production-release"
+cron = "0 6 * * 2"
+branch = "main"
+
+[flow.production-release.toolchain]
+source = "release"
+version = "__SAILR_VERSION__"
+sha256 = "sha256:__SAILR_RELEASE_SHA256__"
+
+[flow.production-release.candidate]
+fetch_script = "scripts/select-release-candidates"
+manifest_path = ".sailr/candidates/production.json"
+
+[flow.production-release.signing]
+script = "scripts/sign-release"
+signature_path = ".sailr/releases/production/signature.txt"
+
+[[flow.production-release.stage]]
+name = "prepare"
+profile = "production-deploy"
+action = "prepare"
+
+[[flow.production-release.stage]]
+name = "approve"
+approval = "manual"
+
+[[flow.production-release.stage]]
+name = "sign"
+action = "sign"
+
+[[flow.production-release.stage]]
+name = "apply"
+profile = "production-deploy"
+action = "apply"

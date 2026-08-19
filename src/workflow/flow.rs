@@ -1,25 +1,34 @@
 use crate::environment::Environment;
 use crate::workflow::config::WorkflowConfig;
-use crate::workflow::profile::WorkflowStepMode;
+use crate::workflow::profile::{ApprovalMode, ReportMode, WorkflowEngine, WorkflowStepMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FlowProvider {
     Circleci,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DeliveryFlowKind {
+    Publication,
+    Release,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FlowTriggerKind {
+    Branch,
     Schedule,
     Manual,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct FlowTrigger {
     pub kind: FlowTriggerKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,20 +44,37 @@ fn default_branch() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CandidateAdapter {
     pub fetch_script: String,
-    pub report_path: String,
+    pub manifest_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SigningAdapter {
     pub script: String,
     pub signature_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum FlowToolchain {
+    Release { version: String, sha256: String },
+    Git { revision: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PublicationStorageAdapter {
+    CircleciArtifact,
+    Script { script: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FlowStageAction {
+    Publish,
     Prepare,
     Sign,
     Apply,
@@ -61,6 +87,7 @@ pub enum FlowStageApproval {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DeliveryFlowStage {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,14 +99,20 @@ pub struct DeliveryFlowStage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DeliveryFlowProfile {
     #[serde(skip)]
     pub name: String,
+    pub kind: DeliveryFlowKind,
     pub provider: FlowProvider,
     pub environment: String,
     pub concurrency_key: String,
     pub trigger: FlowTrigger,
-    pub candidate: CandidateAdapter,
+    pub toolchain: FlowToolchain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<CandidateAdapter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<PublicationStorageAdapter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing: Option<SigningAdapter>,
     #[serde(default, rename = "stage")]
@@ -315,7 +348,14 @@ pub fn validate_delivery_flow(
         return Err(format!("flow '{name}' has an invalid concurrency_key"));
     }
     validate_command_token(name, "trigger branch", &flow.trigger.branch)?;
+    validate_toolchain(name, &flow.toolchain)?;
     match flow.trigger.kind {
+        FlowTriggerKind::Branch if flow.trigger.cron.is_some() || flow.trigger.name.is_some() => {
+            return Err(format!(
+                "flow '{name}' branch trigger cannot declare schedule fields"
+            ));
+        }
+        FlowTriggerKind::Branch => {}
         FlowTriggerKind::Schedule => {
             if flow
                 .trigger
@@ -350,8 +390,21 @@ pub fn validate_delivery_flow(
         }
         FlowTriggerKind::Manual => {}
     }
-    validate_adapter_path(name, "candidate fetch script", &flow.candidate.fetch_script)?;
-    validate_relative_path(name, "candidate report path", &flow.candidate.report_path)?;
+    if let Some(candidate) = &flow.candidate {
+        validate_adapter_path(name, "candidate fetch script", &candidate.fetch_script)?;
+        validate_relative_path(name, "candidate manifest path", &candidate.manifest_path)?;
+        if Path::new(&candidate.manifest_path)
+            .parent()
+            .is_none_or(|parent| parent.as_os_str().is_empty())
+        {
+            return Err(format!(
+                "flow '{name}' candidate manifest must have a repository-relative parent directory"
+            ));
+        }
+    }
+    if let Some(PublicationStorageAdapter::Script { script }) = &flow.storage {
+        validate_adapter_path(name, "publication storage script", script)?;
+    }
     if let Some(signing) = &flow.signing {
         validate_adapter_path(name, "signing script", &signing.script)?;
         validate_relative_path(name, "signature path", &signing.signature_path)?;
@@ -359,7 +412,7 @@ pub fn validate_delivery_flow(
 
     let mut shape = Vec::new();
     let mut stage_names = std::collections::BTreeSet::new();
-    let mut release_profile: Option<&str> = None;
+    let mut action_profile: Option<&str> = None;
     for stage in &flow.stages {
         if stage.name.trim().is_empty() {
             return Err(format!("flow '{name}' contains a blank stage name"));
@@ -373,11 +426,15 @@ pub fn validate_delivery_flow(
         match (&stage.action, &stage.approval) {
             (Some(action), None) => {
                 shape.push(match action {
+                    FlowStageAction::Publish => "publish",
                     FlowStageAction::Prepare => "prepare",
                     FlowStageAction::Sign => "sign",
                     FlowStageAction::Apply => "apply",
                 });
-                if matches!(action, FlowStageAction::Prepare | FlowStageAction::Apply) {
+                if matches!(
+                    action,
+                    FlowStageAction::Publish | FlowStageAction::Prepare | FlowStageAction::Apply
+                ) {
                     let profile_name = stage.profile.as_deref().ok_or_else(|| {
                         format!("flow '{name}' stage '{}' requires profile", stage.name)
                     })?;
@@ -391,19 +448,14 @@ pub fn validate_delivery_flow(
                             profile.environment, flow.environment
                         ));
                     }
-                    if crate::workflow::release::validate_release_profile(profile).is_err() {
-                        return Err(format!(
-                            "flow '{name}' profile '{profile_name}' is not a portable release profile"
-                        ));
-                    }
-                    if let Some(existing) = release_profile {
+                    if let Some(existing) = action_profile {
                         if existing != profile_name {
                             return Err(format!(
-                                "flow '{name}' prepare and apply stages must use the same profile"
+                                "flow '{name}' action stages must use the same profile"
                             ));
                         }
                     } else {
-                        release_profile = Some(profile_name);
+                        action_profile = Some(profile_name);
                     }
                 }
             }
@@ -416,19 +468,48 @@ pub fn validate_delivery_flow(
             }
         }
     }
-    let valid_shape = shape == ["prepare", "approval", "apply"]
-        || shape == ["prepare", "approval", "sign", "apply"];
-    if !valid_shape {
-        return Err(format!(
-            "flow '{name}' stages must be prepare -> manual approval -> [sign] -> apply"
-        ));
-    }
     let profile_name =
-        release_profile.ok_or_else(|| format!("flow '{name}' has no release profile"))?;
+        action_profile.ok_or_else(|| format!("flow '{name}' has no action profile"))?;
     let profile = config
         .workflow
         .get(profile_name)
         .ok_or_else(|| format!("flow '{name}' references unknown profile '{profile_name}'"))?;
+    if flow.kind == DeliveryFlowKind::Publication {
+        if flow.trigger.kind != FlowTriggerKind::Branch || shape != ["publish"] {
+            return Err(format!(
+                "flow '{name}' publication stages must be branch -> publish"
+            ));
+        }
+        if flow.candidate.is_some() || flow.signing.is_some() || flow.storage.is_none() {
+            return Err(format!("flow '{name}' publication requires storage and cannot declare candidate or signing adapters"));
+        }
+        let normalized = profile.normalize(true);
+        if normalized.engine != WorkflowEngine::Runkernel
+            || normalized.interactive
+            || normalized.build != WorkflowStepMode::Run
+            || normalized.push != WorkflowStepMode::Run
+            || normalized.deploy != WorkflowStepMode::Disabled
+            || normalized.approval != ApprovalMode::None
+            || normalized.apply
+            || !matches!(normalized.report, ReportMode::Json | ReportMode::Both)
+        {
+            return Err(format!(
+                "flow '{name}' publication profile requires runkernel, non-interactive build/push=run, deploy=disabled, approval=none, apply=false, and JSON reporting"
+            ));
+        }
+        return Ok(());
+    }
+
+    let valid_shape = shape == ["prepare", "approval", "apply"]
+        || shape == ["prepare", "approval", "sign", "apply"];
+    if flow.trigger.kind == FlowTriggerKind::Branch || !valid_shape {
+        return Err(format!(
+            "flow '{name}' release stages must be schedule/manual -> prepare -> manual approval -> [sign] -> apply"
+        ));
+    }
+    if flow.candidate.is_none() || flow.storage.is_some() {
+        return Err(format!("flow '{name}' release requires a candidate adapter and cannot declare publication storage"));
+    }
     crate::workflow::release::validate_release_profile(profile)
         .map_err(|error| format!("flow '{name}' profile '{profile_name}': {error}"))?;
     let environment = Environment::load_from_file(&flow.environment)
@@ -467,6 +548,58 @@ pub fn validate_delivery_flow(
         return Err(format!(
             "flow '{name}' signing stage/adapter must exactly match approval=signature"
         ));
+    }
+    Ok(())
+}
+
+fn validate_toolchain(flow: &str, toolchain: &FlowToolchain) -> Result<(), String> {
+    match toolchain {
+        FlowToolchain::Release { version, sha256 } => {
+            let core = version.split('-').next().unwrap_or_default();
+            let semantic_core = core.split('.').collect::<Vec<_>>();
+            if semantic_core.len() != 3
+                || semantic_core
+                    .iter()
+                    .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+                || version.starts_with('-')
+                || version.contains(['*', '^', '~', '<', '>', '='])
+                || matches!(version.to_ascii_lowercase().as_str(), "latest" | "current")
+                || !version
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+            {
+                return Err(format!(
+                    "flow '{flow}' has an invalid immutable Sailr version"
+                ));
+            }
+            validate_sha256_identity(sha256)
+                .map_err(|error| format!("flow '{flow}' toolchain: {error}"))
+        }
+        FlowToolchain::Git { revision } => {
+            if revision.len() != 40
+                || !revision
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(format!(
+                    "flow '{flow}' Git toolchain requires a full lowercase commit revision"
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_sha256_identity(value: &str) -> Result<(), String> {
+    let digest = value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| "checksum must use sha256:<hex>".to_string())?;
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("checksum must use sha256:<64 lowercase hex>".to_string());
     }
     Ok(())
 }
@@ -569,7 +702,7 @@ pub fn generate_ci(
         "output": if matches!(mode, crate::cli::FlowGenerationMode::Create | crate::cli::FlowGenerationMode::Merge) {
             Some(target.to_string_lossy().to_string())
         } else { None },
-        "schedule_setup": {
+        "trigger_setup": {
             "trigger_kind": flow.trigger.kind,
             "name": flow.trigger.name.as_deref().unwrap_or(&flow.name),
             "cron": flow.trigger.cron,
@@ -598,6 +731,108 @@ fn circleci_fragment(
     name: &str,
     flow: &DeliveryFlowProfile,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    match flow.kind {
+        DeliveryFlowKind::Publication => circleci_publication_fragment(name, flow),
+        DeliveryFlowKind::Release => circleci_release_fragment(name, flow),
+    }
+}
+
+fn toolchain_install(toolchain: &FlowToolchain, kind: DeliveryFlowKind) -> String {
+    let capability_filter = match kind {
+        DeliveryFlowKind::Publication => {
+            r#".schema_version == \"sailr.capabilities/v1\"
+              and .features.publication_consumption
+              and .features.publication_flow_generation
+              and .features.circleci_generation"#
+        }
+        DeliveryFlowKind::Release => {
+            r#".schema_version == \"sailr.capabilities/v1\"
+              and (.schemas.release_candidates | index(\"sailr.release-candidates/v1\") != null)
+              and .features.multi_report_promotion
+              and .features.portable_deployment_bundle
+              and .features.signed_deployment
+              and .features.transactional_rollback
+              and .features.rollout_verification
+              and .features.locking
+              and .features.release_flow_generation
+              and .features.circleci_generation"#
+        }
+    };
+    let install = match toolchain {
+        FlowToolchain::Release { version, sha256 } => {
+            let checksum = sha256.strip_prefix("sha256:").unwrap_or(sha256);
+            format!(
+                "mkdir -p \"$HOME/bin\"\n            curl --fail --location --silent --show-error --output /tmp/sailr https://github.com/Adriftdev/sailr/releases/download/v{version}/sailr-v{version}-unknown-linux-gnu\n            printf '%s  %s\\n' {checksum} /tmp/sailr | sha256sum --check -\n            install -m 0755 /tmp/sailr \"$HOME/bin/sailr\"\n            echo 'export PATH=\"$HOME/bin:$PATH\"' >> \"$BASH_ENV\"\n            export PATH=\"$HOME/bin:$PATH\"\n            test \"$(sailr --version)\" = \"sailr {version}\""
+            )
+        }
+        FlowToolchain::Git { revision } => format!(
+            "mkdir -p .sailr/toolchain\n            SAILR_BUILD_REVISION={revision} cargo install --git https://github.com/Adriftdev/sailr --rev {revision} --locked --root .sailr/toolchain sailr\n            echo 'export PATH=\"$PWD/.sailr/toolchain/bin:$PATH\"' >> \"$BASH_ENV\"\n            export PATH=\"$PWD/.sailr/toolchain/bin:$PATH\"\n            sailr --version\n            test \"$(sailr capabilities --format json | jq -r .build_revision)\" = \"{revision}\""
+        ),
+    };
+    format!(
+        "{install}\n            sailr capabilities --format json > /tmp/sailr-capabilities.json\n            jq -e '{capability_filter}' /tmp/sailr-capabilities.json"
+    )
+}
+
+fn circleci_publication_fragment(
+    name: &str,
+    flow: &DeliveryFlowProfile,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let profile = flow
+        .stages
+        .iter()
+        .find(|stage| stage.action == Some(FlowStageAction::Publish))
+        .and_then(|stage| stage.profile.as_deref())
+        .ok_or("publish stage is missing")?;
+    let job = managed_name(name, "publish");
+    let workflow = managed_name(name, "workflow");
+    let report = format!(".sailr/reports/{profile}/latest.json");
+    let install = toolchain_install(&flow.toolchain, flow.kind);
+    let storage = match flow.storage.as_ref().ok_or("publication storage is missing")? {
+        PublicationStorageAdapter::CircleciArtifact => format!(
+            "      - store_artifacts:\n          path: {report}\n          when: always\n"
+        ),
+        PublicationStorageAdapter::Script { script } => format!(
+            "      - run:\n          name: Persist publication candidate\n          command: {script} --report {report}\n"
+        ),
+    };
+    let fragment = format!(
+        r#"# Sailr publication trigger: branch={branch}
+jobs:
+  {job}:
+    docker:
+      - image: cimg/rust:1.89.0
+    steps:
+      - checkout
+      - run:
+          name: Install pinned Sailr
+          command: |
+            {install}
+      - run:
+          name: Publish immutable application artifacts
+          command: |
+            sailr workflow run {profile} --non-interactive --apply
+            sailr publication validate {report}
+{storage}workflows:
+  {workflow}:
+    jobs:
+      - {job}:
+          serial-group: << pipeline.project.slug >>/{concurrency}
+          filters:
+            branches:
+              only: {branch}
+"#,
+        branch = flow.trigger.branch,
+        concurrency = flow.concurrency_key,
+    );
+    let _: serde_yaml::Value = serde_yaml::from_str(&fragment)?;
+    Ok(fragment)
+}
+
+fn circleci_release_fragment(
+    name: &str,
+    flow: &DeliveryFlowProfile,
+) -> Result<String, Box<dyn std::error::Error>> {
     let prepare = flow
         .stages
         .iter()
@@ -619,42 +854,52 @@ fn circleci_fragment(
     let release_dir = format!(".sailr/releases/{}", managed_name(name, "artifacts"));
     let promotion_path = format!("{release_dir}/promotion-plan.json");
     let bundle_path = format!("{release_dir}/prepared/deployment.bundle");
-    let install = "curl -sSL https://sailr.dev/install.sh | bash";
+    let install = toolchain_install(&flow.toolchain, flow.kind);
+    let candidate = flow
+        .candidate
+        .as_ref()
+        .ok_or("candidate adapter is missing")?;
+    let candidate_parent = Path::new(&candidate.manifest_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or("candidate manifest must have a repository-relative parent directory")?
+        .to_string_lossy();
     let mut jobs = format!(
         r#"jobs:
   {plan_job}:
     docker:
-      - image: cimg/base:current
+      - image: cimg/rust:1.89.0
     steps:
       - checkout
       - run:
-          name: Install Sailr
-          command: {install}
+          name: Install pinned Sailr
+          command: |
+            {install}
       - run:
           name: Retrieve release candidate
-          command: {fetch} --output {report}
+          command: {fetch} --output {manifest}
       - run:
           name: Validate and prepare release
           command: |
-            sailr publication validate {report}
-            sailr promote plan --from-report {report} --to {environment} --out {promotion_path}
+            sailr promote plan --from-manifest {manifest} --to {environment} --out {promotion_path}
             sailr workflow prepare {prepare} --promotion-plan {promotion_path} --out {release_dir}/prepared
       - persist_to_workspace:
           root: .
           paths:
             - {release_dir}
+            - {candidate_parent}
       - store_artifacts:
           path: {release_dir}/prepared
 "#,
-        fetch = flow.candidate.fetch_script,
-        report = flow.candidate.report_path,
+        fetch = candidate.fetch_script,
+        manifest = candidate.manifest_path,
         environment = flow.environment,
     );
     if let Some(signing) = &flow.signing {
         jobs.push_str(&format!(
             r#"  {sign_job}:
     docker:
-      - image: cimg/base:current
+      - image: cimg/rust:1.89.0
     steps:
       - checkout
       - attach_workspace:
@@ -682,14 +927,15 @@ fn circleci_fragment(
     jobs.push_str(&format!(
         r#"  {apply_job}:
     docker:
-      - image: cimg/base:current
+      - image: cimg/rust:1.89.0
     steps:
       - checkout
       - attach_workspace:
           at: .
       - run:
-          name: Install Sailr
-          command: {install}
+          name: Install pinned Sailr
+          command: |
+            {install}
       - run:
           name: Apply prepared release
           command: {signature_prefix}sailr workflow apply {apply} --bundle {bundle_path} --non-interactive --apply --release-id "$CIRCLE_WORKFLOW_ID"
@@ -724,6 +970,7 @@ fn circleci_fragment(
             "# Sailr manual trigger: branch={} parameter={}\n",
             flow.trigger.branch, enabled_parameter
         ),
+        FlowTriggerKind::Branch => return Err("release flow cannot use a branch trigger".into()),
     };
     let fragment = format!(
         r#"{trigger_metadata}parameters:
@@ -901,6 +1148,7 @@ mod tests {
     fn circleci_release_fragment_has_approval_workspace_and_serialization() {
         let flow = DeliveryFlowProfile {
             name: "release".to_string(),
+            kind: DeliveryFlowKind::Release,
             provider: FlowProvider::Circleci,
             environment: "prod".to_string(),
             concurrency_key: "prod-release".to_string(),
@@ -910,10 +1158,15 @@ mod tests {
                 branch: "main".to_string(),
                 name: Some("production-release".to_string()),
             },
-            candidate: CandidateAdapter {
-                fetch_script: "scripts/fetch-candidate".to_string(),
-                report_path: "artifacts/publication-report.json".to_string(),
+            toolchain: FlowToolchain::Release {
+                version: "1.26.0".to_string(),
+                sha256: format!("sha256:{}", "a".repeat(64)),
             },
+            candidate: Some(CandidateAdapter {
+                fetch_script: "scripts/fetch-candidate".to_string(),
+                manifest_path: "artifacts/release-candidates.json".to_string(),
+            }),
+            storage: None,
             signing: None,
             stages: vec![
                 DeliveryFlowStage {
@@ -943,6 +1196,11 @@ mod tests {
         assert!(yaml.contains("serial-group: << pipeline.project.slug >>/prod-release"));
         assert!(yaml.contains("sailr workflow prepare release"));
         assert!(yaml.contains("sailr workflow apply release"));
+        assert!(yaml.contains("sailr promote plan --from-manifest"));
+        assert!(yaml.contains("sha256sum --check"));
+        assert!(yaml.contains(".schemas.release_candidates"));
+        assert!(yaml.contains(".features.locking"));
+        assert!(!yaml.contains("sailr.dev/install.sh"));
         assert!(yaml.contains("pipeline.parameters.sailr_release_enabled"));
 
         let dir = tempdir().expect("tempdir");
@@ -963,5 +1221,73 @@ mod tests {
         )
         .expect("conflicting config");
         assert!(merge_circleci(&config_path, &yaml).is_err());
+    }
+
+    #[test]
+    fn circleci_publication_uses_invocation_consent_and_typed_storage() {
+        let flow = DeliveryFlowProfile {
+            name: "publication".to_string(),
+            kind: DeliveryFlowKind::Publication,
+            provider: FlowProvider::Circleci,
+            environment: "source".to_string(),
+            concurrency_key: "publication".to_string(),
+            trigger: FlowTrigger {
+                kind: FlowTriggerKind::Branch,
+                cron: None,
+                branch: "main".to_string(),
+                name: None,
+            },
+            toolchain: FlowToolchain::Git {
+                revision: "a".repeat(40),
+            },
+            candidate: None,
+            storage: Some(PublicationStorageAdapter::CircleciArtifact),
+            signing: None,
+            stages: vec![DeliveryFlowStage {
+                name: "publish".to_string(),
+                profile: Some("production-publication".to_string()),
+                action: Some(FlowStageAction::Publish),
+                approval: None,
+            }],
+        };
+        let yaml = circleci_fragment("publication", &flow).expect("fragment");
+        assert!(
+            yaml.contains("sailr workflow run production-publication --non-interactive --apply")
+        );
+        assert!(yaml.contains("--rev aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(yaml.contains("store_artifacts"));
+        assert!(yaml.contains("only: main"));
+        assert!(yaml.contains(".features.publication_flow_generation"));
+    }
+
+    #[test]
+    fn flow_types_reject_unknown_fields_and_floating_toolchains() {
+        let unknown = r#"
+kind = "manual"
+branch = "main"
+cronn = "0 0 * * *"
+"#;
+        assert!(toml::from_str::<FlowTrigger>(unknown).is_err());
+        assert!(validate_toolchain(
+            "bad",
+            &FlowToolchain::Release {
+                version: "latest".to_string(),
+                sha256: format!("sha256:{}", "a".repeat(64)),
+            },
+        )
+        .is_err());
+        assert!(validate_toolchain(
+            "bad",
+            &FlowToolchain::Git {
+                revision: "abc123".to_string(),
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn circleci_validation_rejects_duplicate_keys() {
+        let duplicate = "version: 2.1\njobs: {}\njobs: {}\nworkflows: {}\n";
+        assert!(validate_circleci_root(duplicate).is_err());
     }
 }

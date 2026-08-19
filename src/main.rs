@@ -700,9 +700,15 @@ async fn main() -> Result<(), CliError> {
         },
         Commands::Promote(cmd) => match cmd {
             sailr::cli::PromoteCommands::Plan(args) => {
-                let plan =
-                    sailr::workflow::promotion::create(&args.from_report, &args.target_environment)
-                        .map_err(CliError::Other)?;
+                let plan = if let Some(manifest) = args.from_manifest.as_deref() {
+                    sailr::workflow::promotion::create_from_manifest(
+                        manifest,
+                        &args.target_environment,
+                    )
+                } else {
+                    sailr::workflow::promotion::create(&args.from_reports, &args.target_environment)
+                }
+                .map_err(CliError::Other)?;
                 sailr::workflow::promotion::write(&args.out, &plan).map_err(CliError::Other)?;
                 println!(
                     "{}",

@@ -8,3 +8,7 @@ A delivery flow connects a source code change to a running environment.
 - **Release**: Deploying a published artifact to an environment.
 
 The separation of publication and release is fundamental. Images are built once and deployed multiple times.
+
+Review publication and release as separate flow kinds. Block release stages that build or push,
+publication stages that deploy, candidate manifests without canonical report digests, and
+toolchains lacking an exact checksum or full Git revision.

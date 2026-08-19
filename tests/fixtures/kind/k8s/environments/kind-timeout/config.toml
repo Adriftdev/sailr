@@ -17,3 +17,10 @@ version = "ignored-by-promotion"
 path = "kind/timeout"
 namespace = "default"
 build = "."
+
+[[service]]
+name = "busybox"
+version = "ignored-by-promotion"
+path = "kind/timeout-busybox"
+namespace = "default"
+build = "."

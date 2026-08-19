@@ -658,18 +658,30 @@ impl WorkflowReport {
         }
         if let Some(release) = &self.artifacts.release {
             if release.schema_version != "sailr.release-report/v1"
-                || release.bundle_schema != crate::deployment::bundle::DEPLOYMENT_BUNDLE_SCHEMA
                 || release.profile != self.profile
                 || release.environment != self.environment
-                || release.plan_hash.len() != 64
-                || !release
-                    .plan_hash
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
             {
                 return Err(WorkflowReportError::Validation(
                     "invalid portable release evidence".to_string(),
                 ));
+            }
+            if release.outcome == crate::workflow::release::ReleaseOutcome::Success {
+                let valid_plan_hash = release.plan_hash.as_deref().is_some_and(|hash| {
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                });
+                if release.bundle_schema.as_deref()
+                    != Some(crate::deployment::bundle::DEPLOYMENT_BUNDLE_SCHEMA)
+                    || !valid_plan_hash
+                    || release.promotion_plan_digest.is_none()
+                    || release.publication_report_digests.is_empty()
+                {
+                    return Err(WorkflowReportError::Validation(
+                        "successful release evidence is missing bundle provenance".to_string(),
+                    ));
+                }
             }
         }
         let bundle_completed = self.tasks.items.iter().any(|item| {
@@ -1241,24 +1253,8 @@ pub fn validate_workflow_safety(
     args: &crate::cli::WorkflowRunArgs,
     environment: &crate::environment::Environment,
 ) -> Result<(), String> {
-    if profile.push == crate::workflow::profile::WorkflowStepMode::Run {
-        if !profile.apply {
-            return Err("push=run requires profile apply=true".to_string());
-        }
-
-        if !args.apply {
-            return Err("push=run requires --apply".to_string());
-        }
-
-        if runner.ci && profile.approval != crate::workflow::profile::ApprovalMode::External {
-            let msg = match runner.kind {
-                RunnerKind::CircleCi => "CI push requires approval=external.\n\nDetected CircleCI.\nAdd approval = \"external\" to [workflow.ci-build-push] and gate the mutating CircleCI job behind:\n\n  approve_image_push:\n    type: approval",
-                RunnerKind::GitHubActions => "CI push requires approval=external.\n\nDetected GitHub Actions.\nAdd approval = \"external\" to [workflow.ci-build-push] and run the job behind a protected GitHub Environment.",
-                RunnerKind::Travis => "CI push requires approval=external.\n\nDetected Travis.\nAdd approval = \"external\" to [workflow.ci-build-push] and guard the mutating job with branch and environment variable conditions.",
-                _ => "CI push requires approval=external",
-            };
-            return Err(msg.to_string());
-        }
+    if profile.push == crate::workflow::profile::WorkflowStepMode::Run && !args.apply {
+        return Err("push=run requires --apply".to_string());
     }
 
     if runner.ci && profile.interactive {
@@ -1270,6 +1266,9 @@ pub fn validate_workflow_safety(
     }
 
     if profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
+        if !profile.apply {
+            return Err("deploy=run requires profile apply=true".to_string());
+        }
         let context = profile.deploy_context.as_deref();
 
         if context.is_none() || context == Some("none") {
@@ -1335,10 +1334,6 @@ pub fn validate_workflow_safety(
                 return Err("deploy=run in CI requires --apply".to_string());
             }
         } else {
-            if !profile.apply {
-                return Err("deploy=run requires apply=true".to_string());
-            }
-
             if !runner.interactive && !args.apply {
                 return Err("non-interactive deploy requires --apply".to_string());
             }
@@ -2332,7 +2327,60 @@ mod tests {
             &crate::environment::Environment::new("local"),
         );
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("deploy=run requires apply=true"));
+        assert!(res
+            .unwrap_err()
+            .contains("deploy=run requires profile apply=true"));
+    }
+
+    #[test]
+    fn publication_push_uses_invocation_consent_without_deployment_approval() {
+        let configured: crate::workflow::profile::WorkflowProfile = toml::from_str(
+            r#"
+            environment = "source"
+            mode = "build"
+            interactive = false
+            build = "run"
+            push = "run"
+            deploy = "disabled"
+            approval = "none"
+            apply = false
+            report = "json"
+            "#,
+        )
+        .expect("publication profile");
+        let profile = configured.normalize(true);
+        let runner = RunnerContext {
+            ci_environment: None,
+            kind: RunnerKind::CircleCi,
+            ci: true,
+            interactive: false,
+        };
+        let mut args = crate::cli::WorkflowRunArgs {
+            profile: "publication".to_string(),
+            only: None,
+            ignore: None,
+            non_interactive: true,
+            plan: false,
+            dry_run: false,
+            apply: false,
+            release_id: None,
+        };
+        assert!(validate_workflow_safety(
+            &profile,
+            &runner,
+            &args,
+            &crate::environment::Environment::new("source"),
+        )
+        .unwrap_err()
+        .contains("push=run requires --apply"));
+        args.apply = true;
+        validate_workflow_safety(
+            &profile,
+            &runner,
+            &args,
+            &crate::environment::Environment::new("source"),
+        )
+        .expect("CLI consent permits push-only publication");
     }
     #[test]
     fn validate_safety_ci_staging_deploy_allowed() {

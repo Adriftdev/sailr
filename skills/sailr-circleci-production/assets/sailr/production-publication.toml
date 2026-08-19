@@ -6,4 +6,6 @@ build = "run"
 push = "run"
 generate = "disabled"
 deploy = "disabled"
+approval = "none"
+apply = false
 report = "json"

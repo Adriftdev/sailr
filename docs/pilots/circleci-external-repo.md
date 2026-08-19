@@ -41,7 +41,7 @@ sailr workflow graph ci-build-push-plan --format mermaid
 sailr workflow run ci-build-push-plan --non-interactive
 ```
 
-4. **Protected Publication:** *(requires external approval gate in CircleCI prior to execution)*
+4. **Protected Publication:** *(the protected branch and CI policy authorize who may invoke the registry mutation; deployment approval is not involved)*
 ```bash
 sailr workflow run ci-build-push --non-interactive --apply
 ```

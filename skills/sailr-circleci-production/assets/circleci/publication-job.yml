@@ -3,4 +3,8 @@ publication-job:
     - image: __PLACEHOLDER_IMAGE__
   steps:
     - checkout
-    - run: sailr workflow run __PLACEHOLDER_PUBLISH_PROFILE__
+    - run: __PINNED_SAILR_INSTALL_AND_VERIFY__
+    - run: sailr workflow run __PLACEHOLDER_PUBLISH_PROFILE__ --non-interactive --apply
+    - run: sailr publication validate .sailr/reports/__PLACEHOLDER_PUBLISH_PROFILE__/latest.json
+    - store_artifacts:
+        path: .sailr/reports/__PLACEHOLDER_PUBLISH_PROFILE__/latest.json

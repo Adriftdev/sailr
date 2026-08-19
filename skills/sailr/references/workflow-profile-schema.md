@@ -49,3 +49,7 @@ Sailr renders only the key's `sha256:<hex>` fingerprint. The first run writes `.
 Portable release profiles additionally require `push = "disabled"`, `interactive = false`,
 `apply = true`, and `approval = "external"` or `"signature"`. Use `workflow prepare`
 before approval and `workflow apply` afterward; apply never regenerates manifests.
+
+Continuous publication is a separate push-only profile: `build/push = "run"`,
+`deploy = "disabled"`, `approval = "none"`, `apply = false`, and JSON reporting. Its CI
+invocation deliberately passes CLI `--apply` as registry-mutation consent.

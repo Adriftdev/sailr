@@ -25,9 +25,9 @@ When starting work on a Sailr repository, inspect the layout:
 - `k8s/templates/` contains Kubernetes manifest templates.
 - `sailr.workflow.toml` in the repository root defines CI/CD workflow profiles.
 
-Before suggesting publication, promotion, portable prepare/apply, rollout verification,
-release locking, or flow generation, run `sailr capabilities --format json`. Refuse to
-invent commands or schemas that the installed binary does not advertise.
+Before suggesting publication, multi-report promotion, portable prepare/apply, rollout
+verification, release locking, or flow generation, run `sailr capabilities --format json`.
+Refuse commands or schemas that the installed binary does not advertise.
 Never write credentials or private/signing keys into repository files.
 
 ## 3. Reference Loading
@@ -47,7 +47,8 @@ Load the detailed reference documents from `references/` into your context using
 - If generating CI or delivery flows using legacy methods, warn the user that they should be using the specialised delivery-flow skills.
 - Use `sailr lint` to validate configuration changes.
 - Use `sailr workflow plan` to verify workflow profiles.
-- Use `sailr publication validate` and `sailr promote plan` before preparing a release.
+- Validate each publication and use repeatable `--from-report` or a digest-bound candidate
+  manifest before preparing a release.
 - Stop after preparation unless the user separately authorizes production apply.
 - When running builds locally for testing, use `sailr build --name <env>`.
 

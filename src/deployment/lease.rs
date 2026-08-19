@@ -79,17 +79,7 @@ impl ReleaseLease {
                 "release lock renewal interval must be positive and shorter than its duration",
             ));
         }
-        let namespace = policy
-            .lease_namespace
-            .clone()
-            .unwrap_or_else(|| target.namespace.clone());
-        let name = policy.lease_name.clone().unwrap_or_else(|| {
-            let key = format!("{environment}\0{}\0{}", target.context, target.namespace);
-            format!(
-                "sailr-release-{}",
-                &hex::encode(Sha256::digest(key.as_bytes()))[..16]
-            )
-        });
+        let (name, namespace) = identity(environment, target, policy);
         let api: Api<Lease> = Api::namespaced(client, &namespace);
         let now = Utc::now();
         let desired = Lease {
@@ -233,7 +223,9 @@ impl ReleaseLease {
             .and_then(|spec| spec.holder_identity.as_deref())
             != Some(self.holder.as_str())
         {
-            return Ok(());
+            return Err(lock_error(
+                "release lock ownership changed before release finalization",
+            ));
         }
         let spec = lease.spec.get_or_insert_with(LeaseSpec::default);
         spec.holder_identity = None;
@@ -244,6 +236,25 @@ impl ReleaseLease {
             .map_err(kube_error)?;
         Ok(())
     }
+}
+
+pub fn identity(
+    environment: &str,
+    target: &DeploymentTarget,
+    policy: &ReleaseLockPolicy,
+) -> (String, String) {
+    let namespace = policy
+        .lease_namespace
+        .clone()
+        .unwrap_or_else(|| target.namespace.clone());
+    let name = policy.lease_name.clone().unwrap_or_else(|| {
+        let key = format!("{environment}\0{}\0{}", target.context, target.namespace);
+        format!(
+            "sailr-release-{}",
+            &hex::encode(Sha256::digest(key.as_bytes()))[..16]
+        )
+    });
+    (name, namespace)
 }
 
 fn is_stale(lease: &Lease, now: chrono::DateTime<Utc>) -> bool {

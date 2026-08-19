@@ -32,6 +32,9 @@ A full review covers:
 - Direct push requires credential isolation.
 - GitOps write-backs must not trigger infinite loops.
 - Direct production flows must use publication validation, full digest promotion, portable prepare/apply, rollout verification, and release locking.
+- Candidate manifests must bind every selected report by its canonical Sailr report digest.
+- Block unpinned Sailr installers, single-report assumptions for multi-service candidates,
+  production rebuilds, missing serialization, and mismatched sign stages/policies.
 - Do not infer production from names; use declared flow stages and environment policy.
 
 ## 4. Output Contract

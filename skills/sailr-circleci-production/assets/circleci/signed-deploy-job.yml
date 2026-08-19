@@ -5,4 +5,8 @@ signed-deploy-job:
     - checkout
     - attach_workspace:
         at: .
+    - run: __PINNED_SAILR_INSTALL_AND_VERIFY__
     - run: sailr workflow apply __PLACEHOLDER_DEPLOY_PROFILE__ --bundle artifacts/prepared-release/deployment.bundle --non-interactive --apply --release-id "$CIRCLE_WORKFLOW_ID"
+    - store_artifacts:
+        path: .sailr/reports
+        when: always

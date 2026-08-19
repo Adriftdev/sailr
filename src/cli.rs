@@ -56,6 +56,7 @@ pub enum Commands {
     /// Migrate an environment configuration to schema 0.5.0
     Migrate(MigrateArgs),
     /// Bump the version of a service
+    #[command(disable_version_flag = true)]
     Bump(BumpArgs),
     /// Lint an environment configuration
     Lint(LintArgs),
@@ -171,8 +172,10 @@ pub enum PromoteCommands {
 
 #[derive(Debug, Args)]
 pub struct PromotePlanArgs {
-    #[arg(long = "from-report")]
-    pub from_report: std::path::PathBuf,
+    #[arg(long = "from-report", action = clap::ArgAction::Append, conflicts_with = "from_manifest", required_unless_present = "from_manifest")]
+    pub from_reports: Vec<std::path::PathBuf>,
+    #[arg(long = "from-manifest", conflicts_with = "from_reports")]
+    pub from_manifest: Option<std::path::PathBuf>,
     #[arg(long = "to")]
     pub target_environment: String,
     #[arg(long)]
@@ -506,7 +509,7 @@ pub struct CreateArgs {
 
     #[arg(
         name = "Region",
-        short = 'r',
+        short = 'R',
         long = "region",
         help = "Region to use for the provider"
     )]
@@ -955,6 +958,46 @@ mod tests {
             _ => panic!("Expected workflow init command"),
         }
     }
+
+    #[test]
+    fn promotion_accepts_repeated_reports_or_one_manifest() {
+        let direct = Cli::try_parse_from([
+            "sailr",
+            "promote",
+            "plan",
+            "--from-report",
+            "api.json",
+            "--from-report",
+            "worker.json",
+            "--to",
+            "prod",
+            "--out",
+            "promotion.json",
+        ])
+        .expect("repeated reports");
+        match direct.commands {
+            Commands::Promote(PromoteCommands::Plan(args)) => {
+                assert_eq!(args.from_reports.len(), 2);
+                assert!(args.from_manifest.is_none());
+            }
+            _ => panic!("Expected promote plan command"),
+        }
+
+        assert!(Cli::try_parse_from([
+            "sailr",
+            "promote",
+            "plan",
+            "--from-report",
+            "api.json",
+            "--from-manifest",
+            "candidates.json",
+            "--to",
+            "prod",
+            "--out",
+            "promotion.json",
+        ])
+        .is_err());
+    }
 }
 
 #[derive(Debug, Args, Clone)]
@@ -972,7 +1015,7 @@ pub struct BumpArgs {
     pub name: String,
     #[arg(short, long)]
     pub service: String,
-    #[arg(short, long)]
+    #[arg(long)]
     pub version: String,
 }
 

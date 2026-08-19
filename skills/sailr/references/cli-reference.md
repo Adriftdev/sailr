@@ -32,6 +32,10 @@
 
 ## Release Contracts
 * **Validate publication evidence**: `sailr publication validate <REPORT>`
-* **Plan digest promotion**: `sailr promote plan --from-report <REPORT> --to <ENV> --out <FILE>`
+* **Plan digest promotion**: `sailr promote plan --from-report <REPORT> [--from-report <REPORT> ...] --to <ENV> --out <FILE>`
+* **Promote a bound candidate manifest**: `sailr promote plan --from-manifest <MANIFEST> --to <ENV> --out <FILE>`
 * **Inspect capabilities**: `sailr capabilities --format json`
 * **Generate a delivery flow**: `sailr flow generate-ci [FLOW] --mode print|fragment|create|merge [--output <FILE>]`
+
+`--apply` is invocation consent. Push additionally requires `push=run`; Kubernetes mutation
+requires `deploy=run` and profile `apply=true`. It never activates a disabled or plan-only step.

@@ -26,6 +26,9 @@ Before designing a flow, inspect the repository (see `references/repository-disc
 - Existing GitOps configuration (`argocd/`, `flux/`)
 
 ## 3. Decision Rules
+- Model continuous publication and scheduled/manual release as separate declared flows.
+- Require a checksummed release binary or full Git revision in generated production CI.
+- Keep publication storage and candidate selection behind declared adapters.
 - If the environment extends a production profile or uses signed deployments, recommend **CircleCI Production Flow**.
 - If the environment is for development/preview and the team prefers GitOps, recommend **GitOps Development Flow**.
 - Never mix direct push and GitOps in the same environment.

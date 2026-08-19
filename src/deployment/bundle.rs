@@ -74,7 +74,7 @@ pub struct PortableBundlePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_key_fingerprint: Option<String>,
     pub promotion_plan_digest: String,
-    pub publication_report_digest: String,
+    pub publication_report_digests: Vec<String>,
     pub services: Vec<crate::workflow::promotion::PromotionService>,
     #[serde(default)]
     pub post_deploy_hooks: Vec<BoundPostDeployHook>,
@@ -107,7 +107,11 @@ impl PortableDeploymentBundle {
             promotion_plan_digest: promotion
                 .canonical_digest()
                 .map_err(|error| DeployError::ManifestApplicationFailed(error.to_string()))?,
-            publication_report_digest: promotion.source_report.digest.clone(),
+            publication_report_digests: promotion
+                .source_reports
+                .iter()
+                .map(|source| source.digest.clone())
+                .collect(),
             services: promotion.services.clone(),
             post_deploy_hooks,
             resources: bundle
@@ -147,10 +151,21 @@ impl PortableDeploymentBundle {
             ));
         }
         validate_prefixed_sha256(&self.payload.promotion_plan_digest, "promotion plan digest")?;
-        validate_prefixed_sha256(
-            &self.payload.publication_report_digest,
-            "publication report digest",
-        )?;
+        if self.payload.publication_report_digests.is_empty() {
+            return Err(fail(
+                "Deployment bundle contains no publication report digests".to_string(),
+            ));
+        }
+        let mut previous_report_digest: Option<&str> = None;
+        for digest in &self.payload.publication_report_digests {
+            validate_prefixed_sha256(digest, "publication report digest")?;
+            if previous_report_digest.is_some_and(|previous| previous >= digest.as_str()) {
+                return Err(fail(
+                    "Publication report digests must be uniquely sorted".to_string(),
+                ));
+            }
+            previous_report_digest = Some(digest);
+        }
         match self.payload.approval {
             crate::workflow::profile::ApprovalMode::Signature => {
                 let fingerprint =
@@ -787,12 +802,12 @@ mod tests {
         let promotion = crate::workflow::promotion::PromotionPlan {
             schema_version: crate::workflow::promotion::PROMOTION_PLAN_SCHEMA.to_string(),
             target_environment: "prod".to_string(),
-            source_report: crate::workflow::promotion::PromotionSourceReport {
+            source_reports: vec![crate::workflow::promotion::PromotionSourceReport {
                 schema_version: "sailr.workflow-report/v1".to_string(),
                 profile: "publish".to_string(),
                 environment: "staging".to_string(),
                 digest: format!("sha256:{}", "b".repeat(64)),
-            },
+            }],
             services: vec![crate::workflow::promotion::PromotionService {
                 service: "api".to_string(),
                 registry: "docker.io".to_string(),
@@ -822,6 +837,13 @@ mod tests {
             .canonical_json_base64
             .push('A');
         assert!(resource_tamper.validate().is_err());
+
+        let mut provenance_tamper = portable.clone();
+        provenance_tamper
+            .payload
+            .publication_report_digests
+            .push(format!("sha256:{}", "a".repeat(64)));
+        assert!(provenance_tamper.validate().is_err());
 
         let mut hash_tamper = portable;
         hash_tamper.plan_hash = "0".repeat(64);

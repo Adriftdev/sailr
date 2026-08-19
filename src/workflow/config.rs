@@ -19,6 +19,7 @@ const DEFAULT_CONFIG_FILENAME: &str = "sailr.workflow.toml";
 /// mode = "check"
 /// ```
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowConfig {
     #[serde(default)]
     pub workflow: HashMap<String, WorkflowProfile>,
@@ -462,5 +463,31 @@ mod tests {
         let config = WorkflowConfig::parse(toml_str).unwrap();
         let profile = config.get_profile("test").unwrap();
         assert_eq!(profile.report, ReportMode::Text);
+    }
+
+    #[test]
+    fn safety_configuration_rejects_unknown_fields() {
+        for contents in [
+            r#"
+                [workflow.prod]
+                environment = "prod"
+                mode = "deploy"
+                verificaton = {}
+            "#,
+            r#"
+                [workflow.prod]
+                environment = "prod"
+                mode = "deploy"
+                approval = "signature"
+                [workflow.prod.signature]
+                trusted_public_ky = "bad"
+            "#,
+            r#"
+                [flow.prod]
+                concurency_key = "prod"
+            "#,
+        ] {
+            assert!(WorkflowConfig::parse(contents).is_err());
+        }
     }
 }

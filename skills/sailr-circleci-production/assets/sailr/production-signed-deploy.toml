@@ -3,8 +3,11 @@ environment = "production"
 mode = "deploy"
 interactive = false
 build = "disabled"
+push = "disabled"
 generate = "run"
 deploy = "run"
+deploy_context = "__PLACEHOLDER_CONTEXT__"
+namespace = "production"
 approval = "signature"
 apply = true
 [workflow.production-deploy.signature]

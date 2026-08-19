@@ -276,16 +276,24 @@ Runs deterministic workflow profiles from `sailr.workflow.toml`.
   transactional rollback after its configured safety checks.
 * `sailr publication validate <REPORT>` validates a successful immutable-image
   publication and prints structured JSON.
-* `sailr promote plan --from-report <REPORT> --to <ENV> --out <FILE>` creates a
-  deterministic, complete digest promotion plan without external service access.
+* `sailr promote plan --from-report <REPORT> [--from-report <REPORT> ...] --to
+  <ENV> --out <FILE>` creates a deterministic, complete digest promotion plan.
+  Use mutually exclusive `--from-manifest <FILE>` for a
+  `sailr.release-candidates/v1` selection whose relative paths are bound to
+  canonical publication-report digests.
 * `sailr workflow prepare <PROFILE> --promotion-plan <FILE> --out <DIR>` writes
   an immutable deployment bundle, offline diff, plan, and preparation evidence.
 * `sailr workflow apply <PROFILE> --bundle <FILE> --non-interactive --apply`
   revalidates and applies only the canonical bytes stored in the bundle.
 * `sailr flow generate-ci [FLOW] --mode print|fragment|create|merge` generates a
   capability-aware CircleCI release workflow. Schedule setup remains external.
-* `sailr capabilities --format json` reports supported schemas and release
-  features for automation and agent tooling.
+* `sailr capabilities --format json` reports supported schemas, release
+  features, Sailr version, and build revision for automation and agent tooling.
+
+Workflow step modes grant capability while CLI `--apply` grants consent for one
+invocation. Registry push requires `push=run` plus `--apply`. Kubernetes mutation
+also requires `deploy=run` and profile `apply=true`; invalid deploy capability is
+rejected before earlier build or push tasks execute.
 
 Signature profiles configure a trusted Ed25519 public key under
 `[workflow.<profile>.signature]`. The first unsigned run writes

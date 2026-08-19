@@ -68,7 +68,8 @@ initialization or preparation.
 ```bash
 sailr publication validate artifacts/publication-report.json
 sailr promote plan \
-  --from-report artifacts/publication-report.json \
+  --from-report artifacts/api-report.json \
+  --from-report artifacts/worker-report.json \
   --to production \
   --out artifacts/promotion-plan.json
 sailr workflow prepare production \
@@ -81,6 +82,11 @@ Preparation is offline with respect to Docker, registries, Git, hooks, and Kuber
 `preparation-evidence.json` in a new output directory. It rejects pre-deployment hooks. Exact
 post-deployment hook commands are included in the bundle; database migrations should remain
 separate CI stages.
+
+Candidate-selection adapters may instead write `sailr.release-candidates/v1`. Every entry binds
+a report path, relative to the manifest, to the report's canonical Sailr digest. Use
+`--from-manifest`; Sailr revalidates the report and digest before promotion. Direct and manifest
+selection produce the same promotion plan for the same reports.
 
 ## Signing and applying
 
@@ -114,3 +120,8 @@ Deployments, StatefulSets, and DaemonSets are polled for typed readiness every t
 rollout, or post-hook failure triggers reverse-journal rollback within the configured timeout.
 The resulting `sailr.workflow-report/v1` records approval, bundle and provenance digests, lock,
 rollout, deployment, and rollback evidence.
+
+Release outcomes distinguish bundle validation, approval, unavailable Kubernetes targets, lock,
+apply, rollout verification, and post-hook failures. External approval is recorded as satisfied
+but not cryptographically verified by Sailr. Reports are written atomically even when failure
+occurs before mutation.
