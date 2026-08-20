@@ -1,0 +1,11 @@
+[workflow.production-publish]
+environment = "production"
+mode = "build"
+interactive = false
+build = "run"
+push = "run"
+generate = "disabled"
+deploy = "disabled"
+approval = "none"
+apply = false
+report = "json"

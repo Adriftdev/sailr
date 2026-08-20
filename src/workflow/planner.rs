@@ -1,17 +1,20 @@
-use runkernel::{Pipeline, Task};
+use runkernel::{FailurePolicy, Pipeline, RollbackPolicy, Task};
 
 use crate::builder::{
     add_runkernel_tasks_from_workflow_plan, create_sailr_build_plan, BuildOptions, SailrBuildPlan,
 };
 use crate::environment::Environment;
 use crate::workflow::plan::{
-    WorkflowEdge, WorkflowEffects, WorkflowFinalizerKind, WorkflowFinalizerPlan, WorkflowPlan,
+    WorkflowEdge, WorkflowEffects, WorkflowFinalizerKind, WorkflowFinalizerPhase,
+    WorkflowFinalizerPlan, WorkflowFinalizerTrigger, WorkflowPlan, WorkflowTaskCachePolicy,
     WorkflowTaskKind, WorkflowTaskPlan,
 };
 use crate::workflow::runner::RunnerContext;
 
 use super::profile::NormalizedWorkflowProfile;
 
+use sha2::Digest;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub enum WorkflowBuildExecution {
@@ -36,12 +39,32 @@ fn runtime_task(plan: &WorkflowPlan, id: &str) -> Result<Task, String> {
         .depends_on(&dependencies))
 }
 
+fn generation_image_overrides(
+    plan: &WorkflowPlan,
+    push_mode: crate::workflow::profile::WorkflowStepMode,
+) -> BTreeMap<String, String> {
+    if push_mode != crate::workflow::profile::WorkflowStepMode::Run {
+        return BTreeMap::new();
+    }
+    plan.image_push_plan
+        .as_ref()
+        .map(|push_plan| {
+            push_plan
+                .items
+                .iter()
+                .map(|item| (item.service.clone(), item.target_image_ref.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub struct WorkflowPlanner {
     pub profile: NormalizedWorkflowProfile,
     pub env: Arc<Environment>,
     pub options: BuildOptions,
     pub runner: RunnerContext,
     source_revision_resolver: Arc<dyn SourceRevisionResolver>,
+    release_id: Option<String>,
 }
 
 pub trait SourceRevisionResolver: Send + Sync {
@@ -151,6 +174,7 @@ impl WorkflowPlanner {
             options,
             runner,
             source_revision_resolver: Arc::new(SystemSourceRevisionResolver),
+            release_id: None,
         }
     }
 
@@ -167,7 +191,13 @@ impl WorkflowPlanner {
             options,
             runner,
             source_revision_resolver,
+            release_id: None,
         }
+    }
+
+    pub fn with_release_id(mut self, release_id: Option<String>) -> Self {
+        self.release_id = release_id;
+        self
     }
 
     pub fn plan(&self) -> Result<WorkflowPlan, String> {
@@ -176,12 +206,34 @@ impl WorkflowPlanner {
         let mut effects;
         let mut build_plan_opt = None;
         let mut image_push_plan_opt = None;
+        let signer_key_fingerprint =
+            if self.profile.approval == crate::workflow::profile::ApprovalMode::Signature {
+                let signature = self.profile.signature.as_ref().ok_or_else(|| {
+                    "approval=signature requires [workflow.<profile>.signature]".to_string()
+                })?;
+                if !self.profile.generate.is_active() {
+                    return Err("approval=signature requires generate to be enabled".to_string());
+                }
+                if self.profile.deploy != crate::workflow::profile::WorkflowStepMode::Run {
+                    return Err("approval=signature requires deploy=run".to_string());
+                }
+                Some(
+                    crate::workflow::gate::trusted_key_fingerprint(&signature.trusted_public_key)
+                        .map_err(|error| format!("Invalid trusted signer: {error}"))?,
+                )
+            } else {
+                None
+            };
+        let deployment_state = crate::workflow::gate::DeploymentRunState::default();
 
         // 0. Validate Phase
         tasks.push(WorkflowTaskPlan {
             id: crate::workflow::task_id::VALIDATE_CONFIG.to_string(),
             label: "Validate Config".to_string(),
             kind: WorkflowTaskKind::ValidateConfig,
+            cache_policy: WorkflowTaskCachePolicy::Disabled,
+            service: None,
+            phase: None,
             dependencies: vec![],
             effects: WorkflowEffects::default(),
             description: "Validates Sailr environment configuration.".to_string(),
@@ -203,6 +255,9 @@ impl WorkflowPlanner {
                     id: crate::workflow::task_id::BUILD_PLAN.to_string(),
                     label: "Build Plan".to_string(),
                     kind: WorkflowTaskKind::BuildPlan,
+                    cache_policy: WorkflowTaskCachePolicy::Disabled,
+                    service: None,
+                    phase: None,
                     dependencies: vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()],
                     effects: task_effects,
                     description: "Analyzes services to determine what needs to be built."
@@ -213,89 +268,56 @@ impl WorkflowPlanner {
             crate::workflow::profile::WorkflowStepMode::Run => {
                 let plan = create_sailr_build_plan(&self.env, &self.options)?;
                 build_plan_opt = Some(plan.clone());
-
-                let dirty_services = plan
-                    .services
+                let translated = crate::workflow::translator::translate_build_plan(&plan, false);
+                let translated_ids = translated
                     .iter()
-                    .filter(|service| service.dirty)
-                    .map(|service| service.service.name.as_str())
+                    .map(|task| task.id.clone())
                     .collect::<std::collections::BTreeSet<_>>();
-                let has_before_all = !dirty_services.is_empty() && !plan.before_all.is_empty();
+                let depended_on = translated
+                    .iter()
+                    .flat_map(|task| task.dependencies.iter().cloned())
+                    .collect::<std::collections::BTreeSet<_>>();
 
-                if has_before_all {
-                    tasks.push(WorkflowTaskPlan {
-                        id: crate::workflow::task_id::BUILD_BEFORE_ALL.to_string(),
-                        label: "Before All Build Hooks".to_string(),
-                        kind: WorkflowTaskKind::ServiceBuild,
-                        dependencies: vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()],
-                        effects: WorkflowEffects {
-                            mutates_filesystem: true,
-                            ..Default::default()
-                        },
-                        description: "Runs before-all build hooks.".to_string(),
-                    });
-                }
-
-                let mut build_tasks = Vec::new();
-                for s in &plan.services {
-                    if s.dirty {
-                        let service_effects = WorkflowEffects {
-                            mutates_docker: true,
-                            ..Default::default()
-                        };
-                        let task_id = crate::workflow::task_id::service_build(&s.service.name);
-                        let mut dependencies = s
-                            .dependencies
-                            .iter()
-                            .filter(|dependency| dirty_services.contains(dependency.as_str()))
-                            .map(|dependency| crate::workflow::task_id::service_build(dependency))
-                            .collect::<Vec<_>>();
-                        if has_before_all {
-                            dependencies
-                                .push(crate::workflow::task_id::BUILD_BEFORE_ALL.to_string());
-                        }
-                        if dependencies.is_empty() {
-                            dependencies
-                                .push(crate::workflow::task_id::VALIDATE_CONFIG.to_string());
-                        }
-                        dependencies.sort();
-                        dependencies.dedup();
-
-                        tasks.push(WorkflowTaskPlan {
-                            id: task_id.clone(),
-                            label: format!("Build {}", s.service.name),
-                            kind: WorkflowTaskKind::ServiceBuild,
-                            dependencies,
-                            effects: service_effects,
-                            description: format!(
-                                "Builds the local Docker image for {}.",
-                                s.service.name
-                            ),
-                        });
-                        build_tasks.push(task_id);
+                for translated_task in &translated {
+                    let mut dependencies = translated_task.dependencies.clone();
+                    if dependencies.is_empty() {
+                        dependencies.push(crate::workflow::task_id::VALIDATE_CONFIG.to_string());
                     }
-                }
-
-                if build_tasks.is_empty() {
-                    build_tasks = vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()];
-                }
-
-                if !dirty_services.is_empty() && !plan.after_all.is_empty() {
                     tasks.push(WorkflowTaskPlan {
-                        id: crate::workflow::task_id::BUILD_AFTER_ALL.to_string(),
-                        label: "After All Build Hooks".to_string(),
+                        id: translated_task.id.clone(),
+                        label: translated_task.label.clone(),
                         kind: WorkflowTaskKind::ServiceBuild,
-                        dependencies: build_tasks.clone(),
-                        effects: WorkflowEffects {
-                            mutates_filesystem: true,
-                            ..Default::default()
+                        cache_policy: if plan.force {
+                            WorkflowTaskCachePolicy::ForcedBypass
+                        } else {
+                            match translated_task.cache_policy {
+                                crate::workflow::translator::TranslatedCachePolicy::Disabled => {
+                                    WorkflowTaskCachePolicy::Disabled
+                                }
+                                crate::workflow::translator::TranslatedCachePolicy::InputsAndKey => {
+                                    WorkflowTaskCachePolicy::InputsAndKey
+                                }
+                            }
                         },
-                        description: "Runs after-all build hooks.".to_string(),
+                        service: translated_task.service.clone(),
+                        phase: Some(translated_task.phase.clone()),
+                        dependencies,
+                        effects: translated_task.effects.clone(),
+
+                        description: format!(
+                            "Runs deterministic build phase '{}'.",
+                            translated_task.phase
+                        ),
                     });
-                    build_tasks = vec![crate::workflow::task_id::BUILD_AFTER_ALL.to_string()];
                 }
 
-                last_tasks = build_tasks;
+                last_tasks = translated_ids
+                    .difference(&depended_on)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if last_tasks.is_empty() {
+                    last_tasks = vec![crate::workflow::task_id::VALIDATE_CONFIG.to_string()];
+                }
             }
         }
 
@@ -336,6 +358,9 @@ impl WorkflowPlanner {
                     id: crate::workflow::task_id::PUSH_PLAN.to_string(),
                     label: "Push Plan".to_string(),
                     kind: WorkflowTaskKind::PushPlan,
+                    cache_policy: WorkflowTaskCachePolicy::Disabled,
+                    service: None,
+                    phase: None,
                     dependencies: last_tasks.clone(),
                     effects: WorkflowEffects::default(),
                     description: "Determine target images and tags without pushing.".to_string(),
@@ -358,8 +383,16 @@ impl WorkflowPlanner {
                     {
                         let mut dependencies =
                             vec![crate::workflow::task_id::PUSH_PLAN.to_string()];
-                        let build_task = crate::workflow::task_id::service_build(&item.service);
-                        if tasks.iter().any(|task| task.id == build_task) {
+                        let build_task = build_plan_opt.as_ref().and_then(|build_plan| {
+                            crate::workflow::translator::terminal_task_for_service(
+                                build_plan,
+                                &item.service,
+                                false,
+                            )
+                        });
+                        if let Some(build_task) =
+                            build_task.filter(|id| tasks.iter().any(|task| task.id == *id))
+                        {
                             dependencies.push(build_task);
                         }
                         dependencies.sort();
@@ -370,6 +403,9 @@ impl WorkflowPlanner {
                             id: push_task.clone(),
                             label: format!("Push {}", item.service),
                             kind: WorkflowTaskKind::ServicePush,
+                            cache_policy: WorkflowTaskCachePolicy::Disabled,
+                            service: Some(item.service.clone()),
+                            phase: Some("push".to_string()),
                             dependencies,
                             effects: WorkflowEffects {
                                 mutates_docker: true,
@@ -389,6 +425,9 @@ impl WorkflowPlanner {
                             id: crate::workflow::task_id::IMAGE_REPORT.to_string(),
                             label: "Finalize Image Artifacts".to_string(),
                             kind: WorkflowTaskKind::ImageReport,
+                            cache_policy: WorkflowTaskCachePolicy::Disabled,
+                            service: None,
+                            phase: None,
                             dependencies: push_tasks,
                             effects: WorkflowEffects::default(),
                             description: "Ensures all service publication tasks have completed before workflow finalization.".to_string(),
@@ -410,6 +449,9 @@ impl WorkflowPlanner {
                 id: crate::workflow::task_id::GENERATE.to_string(),
                 label: "Generate Manifests".to_string(),
                 kind: WorkflowTaskKind::Generate,
+                cache_policy: WorkflowTaskCachePolicy::InputsAndKey,
+                service: None,
+                phase: None,
                 dependencies: last_tasks.clone(),
                 effects: generate_effects,
                 description: "Generates Kubernetes manifests.".to_string(),
@@ -420,10 +462,57 @@ impl WorkflowPlanner {
 
         // 3. Deploy Phase
         if self.profile.deploy.is_active() {
+            let has_pre_hooks = self.env.services.iter().any(|service| {
+                service
+                    .hooks
+                    .as_ref()
+                    .and_then(|hooks| hooks.pre_deploy.as_ref())
+                    .is_some()
+            });
+            if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run {
+                tasks.push(WorkflowTaskPlan {
+                    id: crate::workflow::task_id::PRE_DEPLOY_HOOKS.to_string(),
+                    label: "Pre-deployment Hooks".to_string(),
+                    kind: WorkflowTaskKind::PreDeployHooks,
+                    cache_policy: WorkflowTaskCachePolicy::Disabled,
+                    service: None,
+                    phase: Some("pre_deploy".to_string()),
+                    dependencies: last_tasks.clone(),
+                    effects: WorkflowEffects {
+                        mutates_filesystem: has_pre_hooks,
+                        ..Default::default()
+                    },
+                    description: "Runs pre-deployment hooks before constructing the signed bundle."
+                        .to_string(),
+                });
+                last_tasks = vec![crate::workflow::task_id::PRE_DEPLOY_HOOKS.to_string()];
+            }
+
+            tasks.push(WorkflowTaskPlan {
+                id: crate::workflow::task_id::DEPLOYMENT_BUNDLE.to_string(),
+                label: "Deployment Bundle".to_string(),
+                kind: WorkflowTaskKind::DeploymentBundle,
+                cache_policy: WorkflowTaskCachePolicy::Disabled,
+                service: None,
+                phase: None,
+                dependencies: last_tasks.clone(),
+                effects: WorkflowEffects {
+                    mutates_filesystem: true,
+                    ..Default::default()
+                },
+                description:
+                    "Constructs the immutable in-memory deployment bundle and audit artifact."
+                        .to_string(),
+            });
+            last_tasks = vec![crate::workflow::task_id::DEPLOYMENT_BUNDLE.to_string()];
+
             tasks.push(WorkflowTaskPlan {
                 id: crate::workflow::task_id::DEPLOYMENT_PLAN.to_string(),
                 label: "Deployment Plan".to_string(),
                 kind: WorkflowTaskKind::DeploymentPlan,
+                cache_policy: WorkflowTaskCachePolicy::Disabled,
+                service: None,
+                phase: None,
                 dependencies: last_tasks.clone(),
                 effects: WorkflowEffects::default(),
                 description:
@@ -439,6 +528,9 @@ impl WorkflowPlanner {
                         id: crate::workflow::task_id::APPROVAL.to_string(),
                         label: "Approval".to_string(),
                         kind: WorkflowTaskKind::Approval,
+                        cache_policy: WorkflowTaskCachePolicy::Disabled,
+                        service: None,
+                        phase: None,
                         dependencies: last_tasks.clone(),
                         effects: WorkflowEffects {
                             prompts_user: true,
@@ -452,11 +544,31 @@ impl WorkflowPlanner {
                     last_tasks = vec![crate::workflow::task_id::APPROVAL.to_string()];
                 }
 
+                if self.profile.approval == crate::workflow::profile::ApprovalMode::Signature {
+                    tasks.push(WorkflowTaskPlan {
+                        id: crate::workflow::task_id::VERIFICATION_GATE.to_string(),
+                        label: "Cryptographic Verification Gate".to_string(),
+                        kind: WorkflowTaskKind::VerificationGate,
+                        cache_policy: WorkflowTaskCachePolicy::Disabled,
+                        service: None,
+                        phase: None,
+                        dependencies: last_tasks.clone(),
+                        effects: WorkflowEffects::default(),
+                        description:
+                            "Verifies an Ed25519 signature over the immutable deployment plan."
+                                .to_string(),
+                    });
+                    last_tasks = vec![crate::workflow::task_id::VERIFICATION_GATE.to_string()];
+                }
+
                 if self.profile.apply {
                     tasks.push(WorkflowTaskPlan {
                         id: crate::workflow::task_id::DEPLOY.to_string(),
                         label: "Deploy".to_string(),
                         kind: WorkflowTaskKind::Deploy,
+                        cache_policy: WorkflowTaskCachePolicy::Disabled,
+                        service: None,
+                        phase: None,
                         dependencies: last_tasks.clone(),
                         effects: WorkflowEffects {
                             mutates_cluster: true,
@@ -466,18 +578,82 @@ impl WorkflowPlanner {
                             "Apply generated manifests to the configured Kubernetes context."
                                 .to_string(),
                     });
+                    last_tasks = vec![crate::workflow::task_id::DEPLOY.to_string()];
+
+                    tasks.push(WorkflowTaskPlan {
+                        id: crate::workflow::task_id::ROLLOUT_VERIFICATION.to_string(),
+                        label: "Rollout Verification".to_string(),
+                        kind: WorkflowTaskKind::RolloutVerification,
+                        cache_policy: WorkflowTaskCachePolicy::Disabled,
+                        service: None,
+                        phase: Some("rollout_verification".to_string()),
+                        dependencies: last_tasks.clone(),
+                        effects: WorkflowEffects::default(),
+                        description: "Waits for bundled Kubernetes workloads to become ready."
+                            .to_string(),
+                    });
+                    last_tasks = vec![crate::workflow::task_id::ROLLOUT_VERIFICATION.to_string()];
+
+                    let has_post_hooks = self.env.services.iter().any(|service| {
+                        service
+                            .hooks
+                            .as_ref()
+                            .and_then(|hooks| hooks.post_deploy.as_ref())
+                            .is_some()
+                    });
+                    tasks.push(WorkflowTaskPlan {
+                        id: crate::workflow::task_id::POST_DEPLOY_HOOKS.to_string(),
+                        label: "Post-deployment Hooks".to_string(),
+                        kind: WorkflowTaskKind::PostDeployHooks,
+                        cache_policy: WorkflowTaskCachePolicy::Disabled,
+                        service: None,
+                        phase: Some("post_deploy".to_string()),
+                        dependencies: last_tasks.clone(),
+                        effects: WorkflowEffects {
+                            mutates_filesystem: has_post_hooks,
+                            ..Default::default()
+                        },
+                        description: "Runs post-deployment hooks after all bundle resources apply."
+                            .to_string(),
+                    });
                 }
             }
         }
 
         if let Some(plan) = &build_plan_opt {
             if self.profile.build == crate::workflow::profile::WorkflowStepMode::Run {
+                for service in plan
+                    .services
+                    .iter()
+                    .rev()
+                    .filter(|service| service.dirty && !service.phases.finally.is_empty())
+                {
+                    finalizers.push(WorkflowFinalizerPlan {
+                        id: crate::workflow::task_id::service_finally(&service.service.name),
+                        label: format!("Finalize {}", service.service.name),
+                        kind: WorkflowFinalizerKind::RunServiceFinally {
+                            service: service.service.name.clone(),
+                            cwd: service.cwd.clone(),
+                            commands: service.phases.finally.clone(),
+                        },
+                        phase: WorkflowFinalizerPhase::BeforeReport,
+                        trigger: WorkflowFinalizerTrigger::Always,
+                        effects: WorkflowEffects {
+                            mutates_filesystem: true,
+                            ..Default::default()
+                        },
+                        description: "Runs service cleanup after all active pipeline tasks settle."
+                            .to_string(),
+                    });
+                }
                 let dirty_services = plan.services.iter().filter(|s| s.dirty).count();
                 if dirty_services > 0 {
                     finalizers.push(WorkflowFinalizerPlan {
                         id: crate::workflow::task_id::WRITE_BUILD_CACHE_FINALIZER.to_string(),
                         label: "Write Build Caches".to_string(),
                         kind: WorkflowFinalizerKind::WriteBuildCache,
+                        phase: WorkflowFinalizerPhase::BeforeReport,
+                        trigger: WorkflowFinalizerTrigger::OnSuccess,
                         effects: WorkflowEffects {
                             mutates_filesystem: true,
                             ..Default::default()
@@ -496,6 +672,8 @@ impl WorkflowPlanner {
                 id: crate::workflow::task_id::WRITE_REPORT_FINALIZER.to_string(),
                 label: "Write Workflow Report".to_string(),
                 kind: WorkflowFinalizerKind::WriteWorkflowReport,
+                phase: WorkflowFinalizerPhase::ReportSink,
+                trigger: WorkflowFinalizerTrigger::Always,
                 effects: WorkflowEffects {
                     mutates_filesystem: true,
                     ..Default::default()
@@ -532,6 +710,9 @@ impl WorkflowPlanner {
             image_push_plan: image_push_plan_opt,
             finalizers,
             effects,
+            cache_predictions: std::collections::BTreeMap::new(),
+            signer_key_fingerprint,
+            deployment_state,
         })
     }
 
@@ -558,8 +739,7 @@ impl WorkflowPlanner {
                 .repository_for(&service_plan.service.name)
                 .map_err(|e| format!("Invalid repository: {}", e))?;
 
-            let tag = crate::workflow::image::derive_image_tag(&service_plan.fingerprint.full_hash)
-                .map_err(|error| error.to_string())?;
+            let tag = service_plan.service.version.clone();
 
             let target_image_ref = resolved_registry
                 .tagged_ref(&service_plan.service.name, &tag)
@@ -598,7 +778,15 @@ impl WorkflowPlanner {
         plan: &WorkflowPlan,
         accumulator: crate::workflow::image::WorkflowReportAccumulator,
     ) -> Result<(Pipeline, WorkflowBuildExecution), String> {
-        let mut pipeline = Pipeline::new(format!("Workflow: {}", self.profile.name));
+        let mut pipeline =
+            crate::new_runkernel_pipeline(format!("Workflow: {}", self.profile.name));
+        if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
+            && self.profile.apply
+        {
+            pipeline = pipeline
+                .failure_policy(FailurePolicy::FinishRunning)
+                .rollback_policy(RollbackPolicy::CompletedTasksReverseOrder);
+        }
         let mut build_execution = WorkflowBuildExecution::None;
 
         let validate_task = runtime_task(plan, crate::workflow::task_id::VALIDATE_CONFIG)?.exec_fn(
@@ -811,15 +999,32 @@ impl WorkflowPlanner {
             let mut task = runtime_task(plan, crate::workflow::task_id::GENERATE)?;
 
             let name = self.profile.environment.clone();
+            let environment_input =
+                format!("k8s/environments/{}/config.toml", self.profile.environment);
+            let image_overrides = generation_image_overrides(plan, self.profile.push);
+            let generation_context = crate::GenerationContext {
+                service_images: image_overrides,
+                deployment_date: None,
+                default_namespace: self.profile.namespace.clone(),
+            };
+            let context_bytes = serde_json::to_vec(&generation_context)
+                .map_err(|error| format!("failed to hash generation context: {error}"))?;
+            let generation_cache_key = format!(
+                "sailr-manifest-generator-v2-{}",
+                hex::encode(sha2::Sha256::digest(context_bytes))
+            );
+            task = task
+                .inputs(&["k8s/templates/**/*.yaml", environment_input.as_str()])
+                .cache_key(&generation_cache_key);
             let only = self.options.only.clone();
             let ignore = self.options.ignore.clone();
             let env_clone = self.env.clone();
-
             task = task.exec_fn(move |_ctx| {
                 let name = name.clone();
                 let only = only.clone();
                 let ignore = ignore.clone();
                 let env_clone = env_clone.clone();
+                let generation_context = generation_context.clone();
                 async move {
                     crate::LOGGER.info("Generating Kubernetes manifests...");
 
@@ -829,7 +1034,7 @@ impl WorkflowPlanner {
                         &ignore,
                     );
 
-                    crate::generate(&name, &env_clone, services)
+                    crate::generate_with_context(&name, &env_clone, services, &generation_context)
                         .map_err(|e| anyhow::anyhow!("Generate failed: {}", e))?;
 
                     Ok(())
@@ -839,7 +1044,70 @@ impl WorkflowPlanner {
             pipeline.add(task);
         }
 
-        if self.profile.deploy.is_active() {
+        if plan
+            .tasks
+            .iter()
+            .any(|task| task.id == crate::workflow::task_id::PRE_DEPLOY_HOOKS)
+        {
+            let env = self.env.clone();
+            pipeline.add(
+                runtime_task(plan, crate::workflow::task_id::PRE_DEPLOY_HOOKS)?
+                    .cache_disabled()
+                    .exec_fn(move |_ctx| {
+                        let env = env.clone();
+                        async move {
+                            crate::deployment::run_environment_hooks(
+                                &env,
+                                crate::deployment::DeploymentHookStage::Pre,
+                            )
+                            .map_err(|error| anyhow::anyhow!(error.to_string()))
+                        }
+                    }),
+            );
+
+            let profile_name = self.profile.name.clone();
+            let environment = self.profile.environment.clone();
+            let context = self.profile.deploy_context.clone().unwrap_or_default();
+            let namespace = self
+                .profile
+                .namespace
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            let signer_fingerprint = plan.signer_key_fingerprint.clone();
+            let deployment_state = plan.deployment_state.clone();
+            pipeline.add(
+                runtime_task(plan, crate::workflow::task_id::DEPLOYMENT_BUNDLE)?
+                    .cache_disabled()
+                    .exec_fn(move |ctx| {
+                        let profile_name = profile_name.clone();
+                        let environment = environment.clone();
+                        let context = context.clone();
+                        let namespace = namespace.clone();
+                        let signer_fingerprint = signer_fingerprint.clone();
+                        let deployment_state = deployment_state.clone();
+                        async move {
+                            let bundle = crate::deployment::bundle::build_deployment_bundle(
+                                &crate::workflow::gate::generated_manifest_root(&environment),
+                                &profile_name,
+                                &environment,
+                                &context,
+                                &namespace,
+                            )
+                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                            crate::workflow::gate::write_artifact(
+                                &crate::workflow::gate::audit_artifact_path(&profile_name),
+                                &bundle.approval_artifact(),
+                            )?;
+                            ctx.set_output(
+                                crate::workflow::gate::PLAN_HASH_OUTPUT,
+                                bundle.plan_hash.clone(),
+                            )?;
+                            deployment_state.set_bundle(bundle, signer_fingerprint)?;
+                            Ok(())
+                        }
+                    }),
+            );
+
             let mut task = runtime_task(plan, crate::workflow::task_id::DEPLOYMENT_PLAN)?;
 
             let env_name = self.profile.environment.clone();
@@ -850,42 +1118,34 @@ impl WorkflowPlanner {
                 .clone()
                 .unwrap_or_else(|| "default".to_string());
 
-            let is_static_plan =
-                self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Plan;
+            let deployment_state = plan.deployment_state.clone();
 
             task = task.exec_fn(move |_ctx| {
                 let env_name = env_name.clone();
                 let context = context.clone();
                 let namespace = namespace.clone();
+                let deployment_state = deployment_state.clone();
                 async move {
                     crate::LOGGER.info("Deployment plan:");
-
-                    if is_static_plan {
-                        let plan = crate::workflow::plan::generate_static_deployment_plan(
-                            &env_name, &context, &namespace,
-                        )
-                        .map_err(|e| anyhow::anyhow!("Static deployment plan failed: {}", e))?;
-
-                        println!("Sailr deployment plan:");
-                        println!("  environment: {}", plan.environment);
-                        println!("  context: {}", plan.context);
-                        println!("  namespace: {}", plan.namespace);
-                        println!("  mode: static");
-                        println!("  requires cluster: no");
-                        println!("  mutates cluster: no\n");
-                        println!("Resources:");
-                        for res in plan.resources {
-                            println!("  - {} {} \twould apply", res.kind, res.name);
-                        }
-                    } else {
-                        let plan =
-                            crate::plan::generate_deployment_plan(&env_name, &context, &namespace)
-                                .await
-                                .map_err(|e| anyhow::anyhow!("Deployment plan failed: {}", e))?;
-
-                        crate::plan::validate_plan_safety(&plan).map_err(|e| {
-                            anyhow::anyhow!("Deployment plan validation failed: {}", e)
-                        })?;
+                    let bundle = deployment_state.bundle()?;
+                    println!("Sailr deployment plan:");
+                    println!("  environment: {}", env_name);
+                    println!("  context: {}", context);
+                    println!("  namespace: {}", namespace);
+                    println!("  plan hash: {}", bundle.plan_hash);
+                    println!("  resources: {}", bundle.resources.len());
+                    for resource in bundle.resources {
+                        println!(
+                            "  - {} {} {}/{}",
+                            resource.identity.api_version,
+                            resource.identity.kind,
+                            resource
+                                .identity
+                                .namespace
+                                .as_deref()
+                                .unwrap_or("<cluster>"),
+                            resource.identity.name
+                        );
                     }
 
                     Ok(())
@@ -916,40 +1176,298 @@ impl WorkflowPlanner {
                 pipeline.add(task);
             }
 
+            if self.profile.approval == crate::workflow::profile::ApprovalMode::Signature {
+                let gate_plan = plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == crate::workflow::task_id::VERIFICATION_GATE)
+                    .ok_or_else(|| {
+                        "Signature approval selected but verification gate is missing".to_string()
+                    })?;
+                pipeline.add(crate::workflow::gate::build_verification_task(
+                    &gate_plan.dependencies,
+                    self.profile
+                        .signature
+                        .as_ref()
+                        .ok_or_else(|| {
+                            "Signature approval selected but trusted signer is missing".to_string()
+                        })?
+                        .trusted_public_key
+                        .clone(),
+                    plan.deployment_state.clone(),
+                ));
+            }
+
             if self.profile.deploy == crate::workflow::profile::WorkflowStepMode::Run
                 && self.profile.apply
             {
                 let mut task = runtime_task(plan, crate::workflow::task_id::DEPLOY)?;
 
                 let context = self.profile.deploy_context.clone().unwrap_or_default();
-                let env_name = self.profile.environment.clone();
+                let deployment_state = plan.deployment_state.clone();
+                let journal = crate::deployment::new_deployment_journal();
+                plan.deployment_state
+                    .set_journal(journal.clone())
+                    .map_err(|error| error.to_string())?;
+                let rollback_journal = journal.clone();
+                let backend_state = Arc::new(tokio::sync::Mutex::new(
+                    None::<Arc<crate::deployment::KubernetesDeploymentBackend>>,
+                ));
+                let rollback_backend_state = backend_state.clone();
+                let lease_state = Arc::new(tokio::sync::Mutex::new(
+                    None::<crate::deployment::lease::ReleaseLease>,
+                ));
+                let rollback_lease_state = lease_state.clone();
+                let rollout_backend_state = backend_state.clone();
+                let rollout_lease_state = lease_state.clone();
+                let post_lease_state = lease_state.clone();
+                let has_post_deploy_hooks = plan
+                    .tasks
+                    .iter()
+                    .any(|task| task.id == crate::workflow::task_id::POST_DEPLOY_HOOKS);
+                let release_after_rollout = !has_post_deploy_hooks;
+                let environment_name = self.profile.environment.clone();
+                let release_id = self.release_id.clone();
+                let lock_policy = self
+                    .env
+                    .deployment_policy
+                    .release_lock
+                    .clone()
+                    .unwrap_or_default();
+                let rollback_timeout =
+                    std::time::Duration::from_secs(self.profile.rollback.timeout_seconds);
+                let deploy_rollback_timeout = rollback_timeout;
 
-                task = task.exec_fn(move |_ctx| {
-                    let context = context.clone();
-                    let env_name = env_name.clone();
+                task = task
+                    .exec_fn(move |_ctx| {
+                        let context = context.clone();
+                        let deployment_state = deployment_state.clone();
+                        let journal = journal.clone();
+                        let backend_state = backend_state.clone();
+                        let lease_state = lease_state.clone();
+                        let environment_name = environment_name.clone();
+                        let release_id = release_id.clone();
+                        let lock_policy = lock_policy.clone();
 
-                    async move {
-                        crate::LOGGER.info(&format!(
-                            "Deploying environment '{}' to context '{}'...",
-                            env_name, context
-                        ));
-                        crate::deployment::deploy(
-                            context,
-                            &env_name,
-                            crate::cli::DeploymentStrategy::Rolling,
-                        )
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Deploy failed: {}", e))?;
+                        async move {
+                            let bundle = deployment_state.bundle()?;
+                            crate::LOGGER.info(&format!(
+                                "Deploying immutable plan '{}' to context '{}'...",
+                                bundle.plan_hash, context
+                            ));
+                            let backend = Arc::new(
+                                crate::deployment::KubernetesDeploymentBackend::new(
+                                    context.clone(),
+                                )
+                                .await
+                                .map_err(|error| {
+                                    anyhow::anyhow!("Deploy backend failed: {error}")
+                                })?,
+                            );
+                            *backend_state.lock().await = Some(backend.clone());
+                            let client = crate::deployment::k8sm8::create_client(context)
+                                .await
+                                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                            let release_id = release_id
+                                .or_else(ci_release_id)
+                                .unwrap_or_else(|| local_release_id(&bundle.plan_hash));
+                            crate::workflow::release::validate_release_id(&release_id)
+                                .map_err(anyhow::Error::msg)?;
+                            let lease = crate::deployment::lease::ReleaseLease::acquire(
+                                client,
+                                &environment_name,
+                                &bundle.target,
+                                &release_id,
+                                &lock_policy,
+                            )
+                            .await
+                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                            let checked = crate::deployment::lease::LeaseCheckedBackend {
+                                inner: backend.as_ref(),
+                                lease: &lease,
+                            };
+                            if let Err(error) =
+                                crate::deployment::apply_bundle(&bundle, &checked, journal.clone())
+                                    .await
+                            {
+                                let rollback =
+                                    crate::deployment::rollback_transaction_with_timeout(
+                                        &journal,
+                                        &checked,
+                                        deploy_rollback_timeout,
+                                    )
+                                    .await;
+                                let release = lease.release().await;
+                                return Err(anyhow::anyhow!(
+                                    "Deploy failed: {error}; rollback: {}; lock release: {}",
+                                    terminal_result(&rollback),
+                                    terminal_result(&release)
+                                ));
+                            }
+                            *lease_state.lock().await = Some(lease);
 
-                        Ok(())
-                    }
-                });
+                            Ok(())
+                        }
+                    })
+                    .rollback(move |_ctx| {
+                        let rollback_journal = rollback_journal.clone();
+                        let rollback_backend_state = rollback_backend_state.clone();
+                        let rollback_lease_state = rollback_lease_state.clone();
+                        async move {
+                            let backend =
+                                rollback_backend_state.lock().await.clone().ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "Deployment backend is unavailable for rollback"
+                                    )
+                                })?;
+                            let lease =
+                                rollback_lease_state.lock().await.take().ok_or_else(|| {
+                                    anyhow::anyhow!("Release lock is unavailable for rollback")
+                                })?;
+                            let checked = crate::deployment::lease::LeaseCheckedBackend {
+                                inner: backend.as_ref(),
+                                lease: &lease,
+                            };
+                            let rollback = crate::deployment::rollback_transaction_with_timeout(
+                                &rollback_journal,
+                                &checked,
+                                rollback_timeout,
+                            )
+                            .await;
+                            let release = lease.release().await;
+                            if rollback.is_err() || release.is_err() {
+                                return Err(anyhow::anyhow!(
+                                    "rollback: {}; lock release: {}",
+                                    terminal_result(&rollback),
+                                    terminal_result(&release)
+                                ));
+                            }
+                            Ok(())
+                        }
+                    });
 
                 pipeline.add(task);
+
+                let rollout_state = plan.deployment_state.clone();
+                let rollout_timeout = std::time::Duration::from_secs(
+                    self.profile.verification.rollout_timeout_seconds,
+                );
+                pipeline.add(
+                    runtime_task(plan, crate::workflow::task_id::ROLLOUT_VERIFICATION)?
+                        .cache_disabled()
+                        .exec_fn(move |_ctx| {
+                            let rollout_backend_state = rollout_backend_state.clone();
+                            let rollout_lease_state = rollout_lease_state.clone();
+                            let rollout_state = rollout_state.clone();
+                            async move {
+                                let backend =
+                                    rollout_backend_state.lock().await.clone().ok_or_else(
+                                        || anyhow::anyhow!("Deployment backend is unavailable"),
+                                    )?;
+                                {
+                                    let lease_guard = rollout_lease_state.lock().await;
+                                    let lease = lease_guard.as_ref().ok_or_else(|| {
+                                        anyhow::anyhow!("Release lock is unavailable")
+                                    })?;
+                                    let checked = crate::deployment::lease::LeaseCheckedBackend {
+                                        inner: backend.as_ref(),
+                                        lease,
+                                    };
+                                    crate::deployment::rollout::verify_bundle_rollout(
+                                        &rollout_state.bundle()?,
+                                        &checked,
+                                        rollout_timeout,
+                                    )
+                                    .await
+                                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                }
+                                if release_after_rollout {
+                                    let lease =
+                                        rollout_lease_state.lock().await.take().ok_or_else(
+                                            || anyhow::anyhow!("Release lock is unavailable"),
+                                        )?;
+                                    lease
+                                        .ensure_held()
+                                        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                    lease
+                                        .release()
+                                        .await
+                                        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                }
+                                Ok(())
+                            }
+                        }),
+                );
+
+                if has_post_deploy_hooks {
+                    let env = self.env.clone();
+                    pipeline.add(
+                        runtime_task(plan, crate::workflow::task_id::POST_DEPLOY_HOOKS)?
+                            .cache_disabled()
+                            .exec_fn(move |_ctx| {
+                                let env = env.clone();
+                                let post_lease_state = post_lease_state.clone();
+                                async move {
+                                    {
+                                        let guard = post_lease_state.lock().await;
+                                        guard
+                                            .as_ref()
+                                            .ok_or_else(|| {
+                                                anyhow::anyhow!("Release lock is unavailable")
+                                            })?
+                                            .ensure_held()
+                                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                    }
+                                    crate::deployment::run_environment_hooks(
+                                        &env,
+                                        crate::deployment::DeploymentHookStage::Post,
+                                    )
+                                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                                    let lease =
+                                        post_lease_state.lock().await.take().ok_or_else(|| {
+                                            anyhow::anyhow!("Release lock is unavailable")
+                                        })?;
+                                    let ownership = lease.ensure_held();
+                                    let release = lease.release().await;
+                                    if ownership.is_err() || release.is_err() {
+                                        return Err(anyhow::anyhow!(
+                                            "release ownership: {}; lock release: {}",
+                                            terminal_result(&ownership),
+                                            terminal_result(&release)
+                                        ));
+                                    }
+                                    Ok(())
+                                }
+                            }),
+                    );
+                }
             }
         }
 
         Ok((pipeline, build_execution))
+    }
+}
+
+fn ci_release_id() -> Option<String> {
+    ["CIRCLE_WORKFLOW_ID", "GITHUB_RUN_ID", "TRAVIS_BUILD_ID"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok())
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn local_release_id(plan_hash: &str) -> String {
+    format!(
+        "{}-{}-{}",
+        &plan_hash[..12],
+        chrono::Utc::now().format("%Y%m%d%H%M%S"),
+        std::process::id()
+    )
+}
+
+fn terminal_result<T, E: std::fmt::Display>(result: &Result<T, E>) -> String {
+    match result {
+        Ok(_) => "succeeded".to_string(),
+        Err(error) => error.to_string(),
     }
 }
 
@@ -980,8 +1498,11 @@ mod tests {
             deploy_context: Some("local".to_string()),
             namespace: Some("default".to_string()),
             approval: ApprovalMode::None,
+            signature: None,
             apply: false,
             report: ReportMode::Text,
+            verification: Default::default(),
+            rollback: Default::default(),
         }
     }
 
@@ -1034,6 +1555,7 @@ mod tests {
         svc.build = Some(crate::environment::ServiceBuildConfig {
             path: temp_dir.path().to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1073,6 +1595,7 @@ mod tests {
         svc.build = Some(crate::environment::ServiceBuildConfig {
             path: _temp_dir.path().to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1112,6 +1635,7 @@ mod tests {
         svc.build = Some(crate::environment::ServiceBuildConfig {
             path: _temp_dir.path().to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1150,12 +1674,53 @@ mod tests {
             crate::workflow::task_id::VALIDATE_CONFIG.to_string(),
             crate::workflow::task_id::BUILD_PLAN.to_string(),
             crate::workflow::task_id::GENERATE.to_string(),
+            crate::workflow::task_id::PRE_DEPLOY_HOOKS.to_string(),
+            crate::workflow::task_id::DEPLOYMENT_BUNDLE.to_string(),
             crate::workflow::task_id::DEPLOYMENT_PLAN.to_string(),
             crate::workflow::task_id::APPROVAL.to_string(),
             crate::workflow::task_id::DEPLOY.to_string(),
+            crate::workflow::task_id::ROLLOUT_VERIFICATION.to_string(),
+            crate::workflow::task_id::POST_DEPLOY_HOOKS.to_string(),
         ];
         expected.sort();
         assert_eq!(task_names, expected);
+    }
+
+    #[test]
+    fn signature_deploy_inserts_uncached_gate_before_deploy() {
+        let env = Environment::new("local");
+        let mut profile = dummy_profile(WorkflowStepMode::Run, WorkflowStepMode::Disabled);
+        profile.approval = ApprovalMode::Signature;
+        profile.signature = Some(crate::workflow::profile::SignatureApprovalConfig {
+            trusted_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+        });
+        profile.apply = true;
+        profile.deploy_context = Some("minikube".to_string());
+        let planner =
+            WorkflowPlanner::new(profile, Arc::new(env), dummy_options(false), dummy_runner());
+        let plan = planner.plan().unwrap();
+        let deploy = plan
+            .tasks
+            .iter()
+            .find(|task| task.id == crate::workflow::task_id::DEPLOY)
+            .unwrap();
+        assert_eq!(
+            deploy.dependencies,
+            vec![crate::workflow::task_id::VERIFICATION_GATE]
+        );
+
+        let (pipeline, _) = planner
+            .build_pipeline_from_plan(&plan, Default::default())
+            .unwrap();
+        let gate = pipeline
+            .task(crate::workflow::task_id::VERIFICATION_GATE)
+            .unwrap();
+        assert!(!gate.cacheable());
+        assert_eq!(pipeline.failure_policy, FailurePolicy::FinishRunning);
+        assert_eq!(
+            pipeline.rollback_policy,
+            RollbackPolicy::CompletedTasksReverseOrder
+        );
     }
 }
 
@@ -1265,6 +1830,7 @@ mod tests_addendum {
         service.build = Some(crate::environment::ServiceBuildConfig {
             path: temp.path().to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1386,6 +1952,7 @@ mod tests_addendum {
         service.build = Some(crate::environment::ServiceBuildConfig {
             path: service_path.to_string_lossy().to_string(),
             include: None,
+            ignore_cache: None,
             relies_on: None,
             before_synchronous: None,
             before: None,
@@ -1689,6 +2256,17 @@ mod tests_addendum {
         assert!(plan.effects.mutates_registry);
         assert!(plan.effects.mutates_docker);
         assert!(plan.effects.mutates_filesystem);
+        let push_item = &plan.image_push_plan.as_ref().unwrap().items[0];
+        assert_eq!(
+            generation_image_overrides(&plan, crate::workflow::profile::WorkflowStepMode::Run,)
+                .get("api"),
+            Some(&push_item.target_image_ref)
+        );
+        assert!(generation_image_overrides(
+            &plan,
+            crate::workflow::profile::WorkflowStepMode::Plan
+        )
+        .is_empty());
 
         let accumulator = crate::workflow::image::WorkflowReportAccumulator::default();
         let (pipeline, _) = planner

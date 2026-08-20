@@ -13,6 +13,7 @@
     }
   },
   "environment": "staging",
+  "approval": "none",
   "success": true,
   "effects": {
     "mutates_filesystem": true,
@@ -23,7 +24,7 @@
     "prompts_user": false
   },
   "tasks": {
-    "completed": 5,
+    "completed": 6,
     "failed": 0,
     "skipped": 0,
     "cancelled": 0,
@@ -33,22 +34,38 @@
     "items": [
       {
         "name": "workflow:validate-config",
+        "kind": "validate_config",
+        "status": "completed"
+      },
+      {
+        "name": "service:api:build:0",
+        "kind": "service_build",
+        "service": "api",
+        "phase": "build",
         "status": "completed"
       },
       {
         "name": "service:api:build",
+        "kind": "service_build",
+        "service": "api",
+        "phase": "service_complete",
         "status": "completed"
       },
       {
         "name": "workflow:push-plan",
+        "kind": "push_plan",
         "status": "completed"
       },
       {
         "name": "service:api:push",
+        "kind": "service_push",
+        "service": "api",
+        "phase": "push",
         "status": "completed"
       },
       {
         "name": "workflow:image-report",
+        "kind": "image_report",
         "status": "completed"
       }
     ]
@@ -62,11 +79,11 @@
           "service": "api",
           "registry": "ghcr.io",
           "repository": "org/repo/api",
-          "target_image_ref": "ghcr.io/org/repo/api:1bf43f1",
+          "target_image_ref": "ghcr.io/org/repo/api:1.2.0",
           "local_image_ref": "ghcr.io/org/repo/api:1.2.0",
-          "tag": "1bf43f1",
+          "tag": "1.2.0",
           "provenance": {
-            "build_fingerprint": "1bf43f1a943982aa",
+            "build_fingerprint": "ddcae79c4997d46a",
             "source_revision": "0123456789abcdef"
           },
           "action": "would_push"
@@ -81,11 +98,11 @@
         "environment": "staging",
         "registry": "ghcr.io",
         "repository": "org/repo/api",
-        "tag": "1bf43f1",
+        "tag": "1.2.0",
         "digest": "sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
         "image_ref": "ghcr.io/org/repo/api@sha256:d8c58252270dd7a199042c161ab8b5c98cf85a8efb7aab782167dcf42f02b938",
         "provenance": {
-          "build_fingerprint": "1bf43f1a943982aa",
+          "build_fingerprint": "ddcae79c4997d46a",
           "source_revision": "0123456789abcdef"
         },
         "published_at": "2024-03-20T12:00:00Z"

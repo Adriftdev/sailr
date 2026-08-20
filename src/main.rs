@@ -2,7 +2,7 @@ use std::{io, process::exit};
 
 use sailr::{
     builder::{filter_services_exact, split_matches, Builder},
-    cli::{Cli, Commands, EnvType, InfraCommands, Provider, WorkflowCommands},
+    cli::{Cli, Commands, EnvType, FlowCommands, InfraCommands, Provider, WorkflowCommands},
     create_default_env_config,
     create_default_env_infra,
     environment::{Environment, Service},
@@ -45,6 +45,7 @@ async fn main() -> Result<(), CliError> {
                 arg.name.clone(),
                 arg.config_template_path,
                 arg.default_registry.clone(),
+                arg.engine,
             );
 
             // Handle infrastructure setup
@@ -690,6 +691,39 @@ async fn main() -> Result<(), CliError> {
         Commands::Bump(arg) => handle_bump(arg)?,
         Commands::Lint(arg) => handle_lint(arg)?,
         Commands::Workflow(cmd) => handle_workflow(cmd).await?,
+        Commands::Flow(cmd) => handle_flow(cmd).await?,
+        Commands::Publication(cmd) => match cmd {
+            sailr::cli::PublicationCommands::Validate(args) => {
+                sailr::workflow::publication::validate_to_stdout(&args.report)
+                    .map_err(CliError::Other)?;
+            }
+        },
+        Commands::Promote(cmd) => match cmd {
+            sailr::cli::PromoteCommands::Plan(args) => {
+                let plan = if let Some(manifest) = args.from_manifest.as_deref() {
+                    sailr::workflow::promotion::create_from_manifest(
+                        manifest,
+                        &args.target_environment,
+                    )
+                } else {
+                    sailr::workflow::promotion::create(&args.from_reports, &args.target_environment)
+                }
+                .map_err(CliError::Other)?;
+                sailr::workflow::promotion::write(&args.out, &plan).map_err(CliError::Other)?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&plan)
+                        .map_err(|error| CliError::Other(error.to_string()))?
+                );
+            }
+        },
+        Commands::Capabilities(_) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&sailr::workflow::capabilities::current())
+                    .map_err(|error| CliError::Other(error.to_string()))?
+            );
+        }
         Commands::Interactive(args) => {
             // Handle interactive commands
             sailr::interactive::main_menu(args)
@@ -703,7 +737,7 @@ async fn main() -> Result<(), CliError> {
 }
 
 fn handle_migrate(arg: sailr::cli::MigrateArgs) -> Result<(), CliError> {
-    match Environment::migrate_file_to_v05(&arg.name) {
+    match Environment::migrate_file_to_v05(&arg.name, arg.engine) {
         Ok(_) => {
             sailr::LOGGER.info(&format!(
                 "Successfully migrated environment '{}' to schema 0.5.0",
@@ -793,8 +827,88 @@ fn handle_lint(arg: sailr::cli::LintArgs) -> Result<(), CliError> {
     Ok(())
 }
 
+async fn handle_flow(cmd: FlowCommands) -> Result<(), CliError> {
+    use sailr::workflow::flow;
+
+    match cmd {
+        FlowCommands::Inspect => match flow::inspect() {
+            Ok(result) => {
+                let json = serde_json::to_string_pretty(&result)
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+                println!("{}", json);
+            }
+            Err(e) => {
+                return Err(CliError::Other(e.to_string()));
+            }
+        },
+        FlowCommands::Validate => match flow::validate() {
+            Ok(result) => {
+                let json = serde_json::to_string_pretty(&result)
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+                println!("{}", json);
+                if !result.is_valid {
+                    return Err(CliError::Other("Validation failed".to_string()));
+                }
+            }
+            Err(e) => {
+                return Err(CliError::Other(e.to_string()));
+            }
+        },
+        FlowCommands::GenerateCi(arg) => {
+            let result = flow::generate_ci(arg.flow.as_deref(), arg.mode, arg.output.as_deref())
+                .map_err(|error| CliError::Other(error.to_string()))?;
+            if matches!(
+                arg.mode,
+                sailr::cli::FlowGenerationMode::Create | sailr::cli::FlowGenerationMode::Merge
+            ) {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result)
+                        .map_err(|error| CliError::Other(error.to_string()))?
+                );
+            }
+        }
+        FlowCommands::CheckRelease => match flow::check_release() {
+            Ok(result) => {
+                let json = serde_json::to_string_pretty(&result)
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+                println!("{}", json);
+                if !result.passed {
+                    return Err(CliError::Other(
+                        "Production validation checks failed".to_string(),
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(CliError::Other(e.to_string()));
+            }
+        },
+        FlowCommands::CheckGitops => match flow::check_gitops() {
+            Ok(result) => {
+                let json = serde_json::to_string_pretty(&result)
+                    .map_err(|e| CliError::Other(e.to_string()))?;
+                println!("{}", json);
+                if !result.passed {
+                    return Err(CliError::Other(
+                        "Development/GitOps validation checks failed".to_string(),
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(CliError::Other(e.to_string()));
+            }
+        },
+    }
+    Ok(())
+}
+
 async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
     use sailr::workflow::config::WorkflowConfig;
+
+    if let WorkflowCommands::Init(args) = cmd {
+        sailr::workflow::init::run(args).map_err(CliError::Other)?;
+        return Ok(());
+    }
 
     if let WorkflowCommands::Run(args) = cmd {
         sailr::workflow::runner::WorkflowRunner::run(args)
@@ -831,9 +945,24 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
         return Ok(());
     }
 
+    if let WorkflowCommands::Prepare(args) = cmd {
+        sailr::workflow::release::prepare(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
+    if let WorkflowCommands::Apply(args) = cmd {
+        sailr::workflow::release::apply(args)
+            .await
+            .map_err(CliError::Other)?;
+        return Ok(());
+    }
+
     let config = WorkflowConfig::load()?;
 
     match cmd {
+        WorkflowCommands::Init(_) => unreachable!(),
         WorkflowCommands::List => {
             let profiles = config.list_profiles();
             if profiles.is_empty() {
@@ -885,7 +1014,9 @@ async fn handle_workflow(cmd: WorkflowCommands) -> Result<(), CliError> {
         | WorkflowCommands::Plan(_)
         | WorkflowCommands::Graph(_)
         | WorkflowCommands::Explain(_)
-        | WorkflowCommands::Inspect(_) => unreachable!(),
+        | WorkflowCommands::Inspect(_)
+        | WorkflowCommands::Prepare(_)
+        | WorkflowCommands::Apply(_) => unreachable!(),
     }
 
     Ok(())

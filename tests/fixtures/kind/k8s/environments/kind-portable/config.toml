@@ -1,0 +1,33 @@
+schema_version = "0.5.0"
+name = "kind-portable"
+log_level = "info"
+domain = "kind.test"
+default_replicas = 1
+
+[registry]
+host = "docker.io"
+namespace = "library"
+
+[deployment_policy]
+required_approval = "signature"
+
+[deployment_policy.release_lock]
+lease_duration_seconds = 60
+renew_interval_seconds = 20
+
+[[service]]
+name = "nginx"
+version = "ignored-by-promotion"
+path = "kind/portable"
+namespace = "default"
+build = "."
+
+[service.hooks]
+post_deploy = "sleep 15"
+
+[[service]]
+name = "busybox"
+version = "ignored-by-promotion"
+path = "kind/portable-busybox"
+namespace = "default"
+build = "."

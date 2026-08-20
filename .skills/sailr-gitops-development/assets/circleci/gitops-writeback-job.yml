@@ -1,0 +1,6 @@
+gitops-writeback-job:
+  docker:
+    - image: __PLACEHOLDER_IMAGE__
+  steps:
+    - checkout
+    - run: sailr workflow run __PLACEHOLDER_GITOPS_PROFILE__

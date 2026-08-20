@@ -19,9 +19,12 @@ const DEFAULT_CONFIG_FILENAME: &str = "sailr.workflow.toml";
 /// mode = "check"
 /// ```
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowConfig {
     #[serde(default)]
     pub workflow: HashMap<String, WorkflowProfile>,
+    #[serde(default)]
+    pub flow: HashMap<String, super::flow::DeliveryFlowProfile>,
 }
 
 impl WorkflowConfig {
@@ -34,6 +37,7 @@ impl WorkflowConfig {
         if !path.exists() {
             return Ok(Self {
                 workflow: HashMap::new(),
+                flow: HashMap::new(),
             });
         }
         Self::load_from(path)
@@ -52,6 +56,9 @@ impl WorkflowConfig {
         // Inject profile names from the TOML keys.
         for (name, profile) in config.workflow.iter_mut() {
             profile.name = name.clone();
+        }
+        for (name, flow) in config.flow.iter_mut() {
+            flow.name = name.clone();
         }
 
         Ok(config)
@@ -145,7 +152,13 @@ impl WorkflowConfig {
         }
 
         lines.push(String::new());
-        lines.push(format!("Approval:       {}", profile.approval));
+        lines.push(format!(
+            "Approval:       {}",
+            profile
+                .approval
+                .map(|approval| approval.to_string())
+                .unwrap_or_else(|| "auto".to_string())
+        ));
         lines.push(format!("Report:         {}", profile.report));
 
         if profile.artifacts.upload || profile.artifacts.directory.is_some() {
@@ -260,7 +273,7 @@ mod tests {
 
         // Production profile
         let prod = config.get_profile("production").unwrap();
-        assert_eq!(prod.approval, ApprovalMode::External);
+        assert_eq!(prod.approval, Some(ApprovalMode::External));
         assert_eq!(prod.apply, Some(false));
 
         // Local deploy profile
@@ -270,7 +283,7 @@ mod tests {
         assert_eq!(local_deploy.mode, WorkflowMode::Go);
         assert_eq!(local_deploy.build, Some(WorkflowStepMode::Plan));
         assert_eq!(local_deploy.deploy, Some(WorkflowStepMode::Run));
-        assert_eq!(local_deploy.approval, ApprovalMode::Prompt);
+        assert_eq!(local_deploy.approval, Some(ApprovalMode::Prompt));
         assert_eq!(local_deploy.apply, Some(true));
         assert_eq!(local_deploy.namespace.as_deref(), Some("default"));
     }
@@ -450,5 +463,31 @@ mod tests {
         let config = WorkflowConfig::parse(toml_str).unwrap();
         let profile = config.get_profile("test").unwrap();
         assert_eq!(profile.report, ReportMode::Text);
+    }
+
+    #[test]
+    fn safety_configuration_rejects_unknown_fields() {
+        for contents in [
+            r#"
+                [workflow.prod]
+                environment = "prod"
+                mode = "deploy"
+                verificaton = {}
+            "#,
+            r#"
+                [workflow.prod]
+                environment = "prod"
+                mode = "deploy"
+                approval = "signature"
+                [workflow.prod.signature]
+                trusted_public_ky = "bad"
+            "#,
+            r#"
+                [flow.prod]
+                concurency_key = "prod"
+            "#,
+        ] {
+            assert!(WorkflowConfig::parse(contents).is_err());
+        }
     }
 }

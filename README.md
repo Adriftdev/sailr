@@ -67,6 +67,9 @@ sailr completions [bash|zsh]
 
 ### Deployment
 
+> [!NOTE]
+> `sailr deploy` uses legacy apply behaviour. Transactional deployment guarantees, bundle validation, and automated rollback apply exclusively to the newer `sailr workflow run` command.
+
 Deploys an existing environment named <environment_name> to a specified Kubernetes cluster context.
 
 ```bash 
@@ -94,7 +97,10 @@ Use `--engine runkernel` or `[build].engine = "runkernel"` to try the new backen
 
 Roomservice stores build cache under `.roomservice`. The runkernel backend stores Sailr-owned build cache under `.sailr/cache/build`, keeping embedded runkernel state inside Sailr's project cache instead of exposing `.runkernel` as a user-facing project directory.
 
-`[build].max_parallelism` is accepted by the runkernel backend, but not enforced yet. Sailr emits a warning when this setting is used with `engine = "runkernel"`.
+`[build].max_parallelism` is enforced across executable runkernel phase tasks.
+Translated tasks use stable service/phase IDs, exact sorted inputs, and explicit
+command/configuration cache fingerprints. `--force` bypasses cache reads and
+writes without deleting prior cache state.
 
 ```bash 
 sailr build <environment_name> [--ignore <service1,service2,...>]
@@ -164,6 +170,13 @@ include = ["src/**/*.rs", "Cargo.toml", "Dockerfile"]
 build_command = "docker buildx build -t {{ registry }}/{{ name }}:{{ version }} ."
 push_command = "docker push {{ registry }}/{{ name }}:{{ version }}"
 ```
+
+An explicit service `version` is authoritative for local development and other
+mutable-tag workflows. If a build-backed service omits `version`, Sailr derives
+an immutable tag from the build fingerprint and uses it consistently for
+building, pushing, and `{{service_image}}` manifest generation. External
+services without a build step should continue to declare their vendor version
+and use it through `{{service_version}}`.
 
 Older configs may still use `service_whitelist`; migrate to schema `0.5.0` and `[[service]]` for new projects. See the [config.toml Guide](docs/docs/configuration/config-toml.md) and [Roomservice to runkernel migration guide](docs/docs/migration/roomservice-to-runkernel.md) for details.
 

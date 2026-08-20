@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sailr-timeout
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sailr-timeout
+  template:
+    metadata:
+      labels:
+        app: sailr-timeout
+    spec:
+      containers:
+        - name: nginx
+          image: "{{service_image}}"
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "exit 1"]

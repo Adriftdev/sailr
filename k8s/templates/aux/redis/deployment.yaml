@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: redis-container
-          image: redis
+          image: redis:{{service_version}}
           ports:
             - containerPort: 6379
               hostPort: 6379

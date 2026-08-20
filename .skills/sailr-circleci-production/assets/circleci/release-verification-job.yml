@@ -1,0 +1,10 @@
+release-verification-job:
+  docker:
+    - image: __PLACEHOLDER_IMAGE__
+  steps:
+    - attach_workspace:
+        at: .
+    - run: test -f .sailr/reports/__PLACEHOLDER_DEPLOY_PROFILE__/latest.json
+    - store_artifacts:
+        path: .sailr/reports/__PLACEHOLDER_DEPLOY_PROFILE__/latest.json
+        when: always

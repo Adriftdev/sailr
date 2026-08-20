@@ -1,0 +1,15 @@
+schema_version = "0.5.0"
+name = "kind-rollback"
+log_level = "info"
+domain = "kind.test"
+default_replicas = 1
+registry = "docker.io"
+
+[deployment_policy]
+required_approval = "signature"
+
+[[service]]
+name = "rollback"
+version = "test"
+path = "kind/rollback"
+namespace = "default"

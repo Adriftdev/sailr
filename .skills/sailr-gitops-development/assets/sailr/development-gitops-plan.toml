@@ -1,0 +1,7 @@
+[workflow.dev-gitops]
+environment = "development"
+mode = "deploy"
+interactive = false
+build = "disabled"
+generate = "run"
+deploy = "disabled"

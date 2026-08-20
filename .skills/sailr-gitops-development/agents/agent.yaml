@@ -1,0 +1,4 @@
+---
+name: sailr-gitops-development
+description: "Agent for implementing GitOps development flows in Sailr."
+capabilities: []

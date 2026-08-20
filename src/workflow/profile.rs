@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 /// staging deploy, production deploy) should behave. Profiles are loaded from
 /// `sailr.workflow.toml` and converted into runkernel pipelines by the planner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowProfile {
     /// Profile name, injected at load time from the TOML key.
     #[serde(skip)]
@@ -57,8 +58,15 @@ pub struct WorkflowProfile {
     pub namespace: Option<String>,
 
     /// How approvals are handled before deployment.
+    /// `None` means Sailr applies a runner-aware safe default; an explicit
+    /// `approval = "none"` remains distinct and is honored when environment
+    /// policy permits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalMode>,
+
+    /// Trusted signer configuration for cryptographic deployment approval.
     #[serde(default)]
-    pub approval: ApprovalMode,
+    pub signature: Option<SignatureApprovalConfig>,
 
     /// Whether to apply changes (mutate the cluster).
     #[serde(default)]
@@ -79,6 +87,14 @@ pub struct WorkflowProfile {
     /// Promotion policy for reusing artifacts from another environment.
     #[serde(default)]
     pub promotion: Option<PromotionPolicy>,
+
+    /// Typed Kubernetes rollout verification policy.
+    #[serde(default)]
+    pub verification: VerificationPolicy,
+
+    /// Transactional rollback timing policy.
+    #[serde(default)]
+    pub rollback: WorkflowRollbackPolicy,
 }
 
 impl WorkflowProfile {
@@ -101,7 +117,8 @@ impl WorkflowProfile {
     /// Normalizes the profile by applying mode-aware defaults based on whether it is running in CI.
     pub fn normalize(&self, runner_is_ci: bool) -> NormalizedWorkflowProfile {
         let mut interactive = self.interactive.unwrap_or(!runner_is_ci);
-        let mut approval = self.approval;
+        let approval_was_configured = self.approval.is_some();
+        let mut approval = self.approval.unwrap_or_default();
         let mut apply = self.apply.unwrap_or(false);
 
         let (
@@ -183,7 +200,7 @@ impl WorkflowProfile {
                 }
             }
             WorkflowMode::Go | WorkflowMode::Deploy => {
-                if approval == ApprovalMode::None && deploy == WorkflowStepMode::Run {
+                if !approval_was_configured && deploy == WorkflowStepMode::Run {
                     approval = if runner_is_ci {
                         ApprovalMode::External
                     } else {
@@ -209,8 +226,11 @@ impl WorkflowProfile {
             deploy_context: self.deploy_context.clone(),
             namespace: self.namespace.clone(),
             approval,
+            signature: self.signature.clone(),
             apply,
             report: self.report,
+            verification: self.verification.clone(),
+            rollback: self.rollback.clone(),
         }
     }
 }
@@ -232,8 +252,55 @@ pub struct NormalizedWorkflowProfile {
     pub deploy_context: Option<String>,
     pub namespace: Option<String>,
     pub approval: ApprovalMode,
+    pub signature: Option<SignatureApprovalConfig>,
     pub apply: bool,
     pub report: ReportMode,
+    pub verification: VerificationPolicy,
+    pub rollback: WorkflowRollbackPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationPolicy {
+    #[serde(default = "default_rollout_timeout_seconds")]
+    pub rollout_timeout_seconds: u64,
+}
+
+impl Default for VerificationPolicy {
+    fn default() -> Self {
+        Self {
+            rollout_timeout_seconds: default_rollout_timeout_seconds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRollbackPolicy {
+    #[serde(default = "default_rollback_timeout_seconds")]
+    pub timeout_seconds: u64,
+}
+
+impl Default for WorkflowRollbackPolicy {
+    fn default() -> Self {
+        Self {
+            timeout_seconds: default_rollback_timeout_seconds(),
+        }
+    }
+}
+
+fn default_rollout_timeout_seconds() -> u64 {
+    300
+}
+
+fn default_rollback_timeout_seconds() -> u64 {
+    300
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SignatureApprovalConfig {
+    pub trusted_public_key: String,
 }
 
 fn default_engine() -> WorkflowEngine {
@@ -355,6 +422,8 @@ pub enum ApprovalMode {
     Prompt,
     /// CI provider or external system handles approval.
     External,
+    /// An Ed25519 signature over the immutable deployment plan is required.
+    Signature,
     /// Command must include `--approve` or `--apply`.
     RequireFlag,
 }
@@ -365,6 +434,7 @@ impl ApprovalMode {
             Self::None => "none",
             Self::Prompt => "prompt",
             Self::External => "external",
+            Self::Signature => "signature",
             Self::RequireFlag => "require-flag",
         }
     }
@@ -472,7 +542,7 @@ mod tests {
         assert_eq!(profile.push, None);
         assert_eq!(profile.generate, None);
         assert_eq!(profile.deploy, None);
-        assert_eq!(profile.approval, ApprovalMode::None);
+        assert_eq!(profile.approval, None);
         assert_eq!(profile.report, ReportMode::Text);
         assert!(profile.interactive.is_none());
         assert!(profile.deploy_context.is_none());
@@ -523,7 +593,7 @@ mod tests {
         assert_eq!(profile.verify, Some(WorkflowStepMode::Run));
         assert_eq!(profile.deploy_context.as_deref(), Some("prod"));
         assert_eq!(profile.namespace.as_deref(), Some("production"));
-        assert_eq!(profile.approval, ApprovalMode::External);
+        assert_eq!(profile.approval, Some(ApprovalMode::External));
         assert_eq!(profile.apply, Some(false));
         assert_eq!(profile.report, ReportMode::Both);
         assert!(profile.artifacts.upload);
@@ -581,6 +651,7 @@ mod tests {
             ("none", ApprovalMode::None),
             ("prompt", ApprovalMode::Prompt),
             ("external", ApprovalMode::External),
+            ("signature", ApprovalMode::Signature),
             ("require-flag", ApprovalMode::RequireFlag),
         ] {
             let toml_str = format!(
@@ -590,8 +661,39 @@ mod tests {
                 input
             );
             let profile: WorkflowProfile = toml::from_str(&toml_str).unwrap();
-            assert_eq!(profile.approval, expected, "failed for input: {}", input);
+            assert_eq!(
+                profile.approval,
+                Some(expected),
+                "failed for input: {}",
+                input
+            );
         }
+    }
+
+    #[test]
+    fn signature_profile_parses_configured_trusted_signer() {
+        let profile: WorkflowProfile = toml::from_str(
+            r#"
+            environment = "production"
+            mode = "deploy"
+            generate = "run"
+            deploy = "run"
+            approval = "signature"
+            apply = true
+
+            [signature]
+            trusted_public_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            "#,
+        )
+        .expect("signature profile");
+        assert_eq!(profile.approval, Some(ApprovalMode::Signature));
+        assert_eq!(
+            profile
+                .signature
+                .as_ref()
+                .map(|signature| signature.trusted_public_key.as_str()),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        );
     }
 
     #[test]
@@ -723,7 +825,6 @@ mod tests {
     #[test]
     fn check_profile_respects_explicit_build_disabled() {
         let toml_str = r#"
-            name = "ci"
             environment = "local"
             mode = "check"
             build = "disabled"
@@ -741,7 +842,6 @@ mod tests {
     #[test]
     fn check_profile_defaults_omitted_build_to_plan() {
         let toml_str = r#"
-            name = "default-check"
             environment = "local"
             mode = "check"
         "#;
@@ -789,6 +889,35 @@ mod tests {
         assert!(normalized.apply);
         assert_eq!(normalized.deploy_context.as_deref(), Some("minikube"));
         assert_eq!(normalized.namespace.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn explicit_none_approval_is_not_replaced_by_local_prompt_default() {
+        let explicit: WorkflowProfile = toml::from_str(
+            r#"
+            environment = "edge"
+            mode = "deploy"
+            interactive = false
+            deploy = "run"
+            deploy_context = "dev-cluster"
+            approval = "none"
+            apply = true
+            "#,
+        )
+        .unwrap();
+        assert_eq!(explicit.normalize(false).approval, ApprovalMode::None);
+
+        let omitted: WorkflowProfile = toml::from_str(
+            r#"
+            environment = "edge"
+            mode = "deploy"
+            deploy = "run"
+            deploy_context = "dev-cluster"
+            apply = true
+            "#,
+        )
+        .unwrap();
+        assert_eq!(omitted.normalize(false).approval, ApprovalMode::Prompt);
     }
     #[test]
     fn normalize_ci_deploy_plan_profile() {

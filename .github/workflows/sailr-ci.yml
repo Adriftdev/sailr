@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Sailr
-        run: cargo install --path .
+        run: cargo install --path . --locked
 
       - name: Run Sailr workflow profile
         run: sailr workflow run ${{ matrix.profile }} --non-interactive
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Sailr
-        run: cargo install --path .
+        run: cargo install --path . --locked
 
       - name: Run experimental CI build
         run: sailr workflow run ci-build --non-interactive
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Sailr
-        run: cargo install --path .
+        run: cargo install --path . --locked
 
       - name: Configure kubeconfig
         run: |

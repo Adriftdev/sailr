@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: registry
-          image: {{registry}}/registry:{{service_version}}
+          image: registry:{{service_version}}
           ports:
             - containerPort: 5000
               protocol: TCP

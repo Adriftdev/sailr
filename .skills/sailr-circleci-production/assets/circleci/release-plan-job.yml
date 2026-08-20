@@ -1,0 +1,13 @@
+release-plan-job:
+  docker:
+    - image: __PLACEHOLDER_IMAGE__
+  steps:
+    - checkout
+    - run: __PINNED_SAILR_INSTALL_AND_VERIFY__
+    - run: scripts/select-release-candidates --output artifacts/release-candidates.json
+    - run: sailr promote plan --from-manifest artifacts/release-candidates.json --to __PLACEHOLDER_ENVIRONMENT__ --out artifacts/promotion-plan.json
+    - run: sailr workflow prepare __PLACEHOLDER_PLAN_PROFILE__ --promotion-plan artifacts/promotion-plan.json --out artifacts/prepared-release
+    - persist_to_workspace:
+        root: .
+        paths:
+          - artifacts

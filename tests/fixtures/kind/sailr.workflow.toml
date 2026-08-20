@@ -1,0 +1,97 @@
+[workflow.kind-signed]
+environment = "kind-signed"
+mode = "deploy"
+interactive = false
+build = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "kind-sailr"
+namespace = "default"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.kind-signed.signature]
+trusted_public_key = "__TRUSTED_PUBLIC_KEY__"
+
+[workflow.kind-rollback]
+environment = "kind-rollback"
+mode = "deploy"
+interactive = false
+build = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "kind-sailr"
+namespace = "default"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.kind-rollback.signature]
+trusted_public_key = "__TRUSTED_PUBLIC_KEY__"
+
+[workflow.kind-portable]
+environment = "kind-portable"
+mode = "deploy"
+engine = "runkernel"
+interactive = false
+build = "disabled"
+push = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "kind-sailr"
+namespace = "default"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.kind-portable.signature]
+trusted_public_key = "__TRUSTED_PUBLIC_KEY__"
+
+[workflow.kind-portable.verification]
+rollout_timeout_seconds = 60
+
+[workflow.kind-portable.rollback]
+timeout_seconds = 30
+
+[workflow.kind-unavailable]
+environment = "kind-portable"
+mode = "deploy"
+engine = "runkernel"
+interactive = false
+build = "disabled"
+push = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "kind-context-does-not-exist"
+namespace = "default"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.kind-unavailable.signature]
+trusted_public_key = "__TRUSTED_PUBLIC_KEY__"
+
+[workflow.kind-timeout]
+environment = "kind-timeout"
+mode = "deploy"
+engine = "runkernel"
+interactive = false
+build = "disabled"
+push = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "kind-sailr"
+namespace = "default"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.kind-timeout.signature]
+trusted_public_key = "__TRUSTED_PUBLIC_KEY__"
+
+[workflow.kind-timeout.verification]
+rollout_timeout_seconds = 10
+
+[workflow.kind-timeout.rollback]
+timeout_seconds = 30
