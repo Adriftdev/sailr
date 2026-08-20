@@ -672,6 +672,12 @@ pub fn build_deployment_bundle(
         }
     }
 
+    resources.sort_by(|left, right| {
+        left.source_path
+            .cmp(&right.source_path)
+            .then_with(|| left.document_index.cmp(&right.document_index))
+    });
+
     if resources.is_empty() {
         return Err(DeployError::ManifestApplicationFailed(
             "Deployment bundle contains no Kubernetes resources".to_string(),
@@ -754,6 +760,14 @@ mod tests {
             &root.path().join("a.yaml"),
             "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n",
         );
+        write(
+            &root.path().join("portable/deployment.yaml"),
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: portable\n",
+        );
+        write(
+            &root.path().join("portable-busybox/deployment.yaml"),
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: portable-busybox\n",
+        );
         let first =
             build_deployment_bundle(root.path(), "prod", "prod", "ctx", "ns").expect("bundle");
         let second =
@@ -761,6 +775,11 @@ mod tests {
         assert_eq!(first.plan_hash, second.plan_hash);
         assert_eq!(first.resources[0].source_path, "a.yaml");
         assert_eq!(first.resources[1].source_path, "b.yaml");
+        assert_eq!(
+            first.resources[2].source_path,
+            "portable-busybox/deployment.yaml"
+        );
+        assert_eq!(first.resources[3].source_path, "portable/deployment.yaml");
 
         let changed =
             build_deployment_bundle(root.path(), "prod", "prod", "other", "ns").expect("bundle");
