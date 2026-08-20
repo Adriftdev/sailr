@@ -156,8 +156,8 @@ jobs:
               .profile = "kind-publication"
               | .environment = "kind-source"
               | .plans.image_push.environment = "kind-source"
-              | (.plans.image_push.items[]
-                  | .service = "nginx"
+              | .plans.image_push.items[] |= (
+                  .service = "nginx"
                   | .registry = "docker.io"
                   | .repository = "library/nginx"
                   | .target_image_ref = "docker.io/library/nginx:kind"
@@ -165,8 +165,8 @@ jobs:
                   | .tag = "kind"
                   | .provenance.build_fingerprint = "kind-nginx"
                   | .provenance.source_revision = $revision)
-              | (.artifacts.published_images[]
-                  | .service = "nginx"
+              | .artifacts.published_images[] |= (
+                  .service = "nginx"
                   | .environment = "kind-source"
                   | .registry = "docker.io"
                   | .repository = "library/nginx"
@@ -186,8 +186,8 @@ jobs:
               .profile = "kind-publication"
               | .environment = "kind-source"
               | .plans.image_push.environment = "kind-source"
-              | (.plans.image_push.items[]
-                  | .service = "busybox"
+              | .plans.image_push.items[] |= (
+                  .service = "busybox"
                   | .registry = "docker.io"
                   | .repository = "library/busybox"
                   | .target_image_ref = "docker.io/library/busybox:kind"
@@ -195,8 +195,8 @@ jobs:
                   | .tag = "kind"
                   | .provenance.build_fingerprint = "kind-busybox"
                   | .provenance.source_revision = $revision)
-              | (.artifacts.published_images[]
-                  | .service = "busybox"
+              | .artifacts.published_images[] |= (
+                  .service = "busybox"
                   | .environment = "kind-source"
                   | .registry = "docker.io"
                   | .repository = "library/busybox"
