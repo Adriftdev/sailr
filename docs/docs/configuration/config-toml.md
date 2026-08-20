@@ -230,12 +230,10 @@ Sailr integrates a build system to build your service's container images. Roomse
 - Exclusions are resolved by Sailr before exact input paths are passed to runkernel.
 - Example: `ignore_cache = ["dist/**", "*.log"]`
 
-> > > > > > > `sailr build/go --force` disables both runkernel cache reads and writes for
-> > > > > > > every executable translated service task. It does not delete or randomize
-> > > > > > > existing cache state, so a later normal run can still use the last successful
-> > > > > > > record.
-
-<<<<<<< HEAD
+`sailr build/go --force` disables both runkernel cache reads and writes for
+every executable translated service task. It does not delete or randomize
+existing cache state, so a later normal run can still use the last successful
+record.
 
 #### `before` (string or array of strings)
 
