@@ -1,6 +1,6 @@
 use crate::environment::Environment;
 use crate::workflow::config::WorkflowConfig;
-use crate::workflow::profile::{ApprovalMode, ReportMode, WorkflowEngine, WorkflowStepMode};
+use crate::workflow::profile::WorkflowStepMode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -483,20 +483,8 @@ pub fn validate_delivery_flow(
         if flow.candidate.is_some() || flow.signing.is_some() || flow.storage.is_none() {
             return Err(format!("flow '{name}' publication requires storage and cannot declare candidate or signing adapters"));
         }
-        let normalized = profile.normalize(true);
-        if normalized.engine != WorkflowEngine::Runkernel
-            || normalized.interactive
-            || normalized.build != WorkflowStepMode::Run
-            || normalized.push != WorkflowStepMode::Run
-            || normalized.deploy != WorkflowStepMode::Disabled
-            || normalized.approval != ApprovalMode::None
-            || normalized.apply
-            || !matches!(normalized.report, ReportMode::Json | ReportMode::Both)
-        {
-            return Err(format!(
-                "flow '{name}' publication profile requires runkernel, non-interactive build/push=run, deploy=disabled, approval=none, apply=false, and JSON reporting"
-            ));
-        }
+        crate::workflow::publication::validate_publication_profile(profile)
+            .map_err(|error| format!("flow '{name}' profile '{profile_name}': {error}"))?;
         return Ok(());
     }
 
@@ -742,6 +730,7 @@ fn toolchain_install(toolchain: &FlowToolchain, kind: DeliveryFlowKind) -> Strin
         DeliveryFlowKind::Publication => {
             r#".schema_version == \"sailr.capabilities/v1\"
               and .features.publication_consumption
+              and .features.publication_execution
               and .features.publication_flow_generation
               and .features.circleci_generation"#
         }
@@ -811,8 +800,7 @@ jobs:
       - run:
           name: Publish immutable application artifacts
           command: |
-            sailr workflow run {profile} --non-interactive --apply
-            sailr publication validate {report}
+            sailr publication run {profile} --apply
 {storage}workflows:
   {workflow}:
     jobs:
@@ -1251,9 +1239,7 @@ mod tests {
             }],
         };
         let yaml = circleci_fragment("publication", &flow).expect("fragment");
-        assert!(
-            yaml.contains("sailr workflow run production-publication --non-interactive --apply")
-        );
+        assert!(yaml.contains("sailr publication run production-publication --apply"));
         assert!(yaml.contains("--rev aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
         assert!(yaml.contains("store_artifacts"));
         assert!(yaml.contains("only: main"));

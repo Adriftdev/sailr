@@ -234,7 +234,7 @@ A comprehensive command that performs a sequence of actions:
 Runs deterministic workflow profiles from `sailr.workflow.toml`.
 
 * `sailr workflow init <PROFILE> --environment <ENV> [--preset
-  build|deploy|portable-release]` validates an existing environment and safely
+  build|publication|deploy|portable-release]` validates an existing environment and safely
   adds a profile to `sailr.workflow.toml`. It refuses profile collisions and
   does not contact Docker, Git, registries, or Kubernetes. Use `--print` to
   preview the complete resulting configuration without writing it, and
@@ -274,8 +274,16 @@ Runs deterministic workflow profiles from `sailr.workflow.toml`.
 * `sailr workflow run <PROFILE> --non-interactive --apply [--release-id <ID>]`
   executes a mutating profile with release locking, rollout verification, and
   transactional rollback after its configured safety checks.
-* `sailr publication validate <REPORT>` validates a successful immutable-image
-  publication and prints structured JSON.
+* `sailr publication init <PROFILE> --environment <ENV>` creates the safe,
+  registry-only publication profile: build/push run, deploy disabled, approval
+  none, profile apply false, and JSON reporting.
+* `sailr publication run <PROFILE> --apply [--out <REPORT>]` builds and pushes
+  using that profile, writes the workflow report, validates it as immutable
+  publication evidence, and optionally copies the validated report atomically
+  to a durable CI artifact path. Developers should not construct this JSON.
+* `sailr publication validate <REPORT>` validates an existing successful
+  immutable-image publication and prints its canonical report digest as
+  structured JSON.
 * `sailr promote plan --from-report <REPORT> [--from-report <REPORT> ...] --to
   <ENV> --out <FILE>` creates a deterministic, complete digest promotion plan.
   Use mutually exclusive `--from-manifest <FILE>` for a
@@ -288,7 +296,8 @@ Runs deterministic workflow profiles from `sailr.workflow.toml`.
 * `sailr flow generate-ci [FLOW] --mode print|fragment|create|merge` generates a
   capability-aware CircleCI release workflow. Schedule setup remains external.
 * `sailr capabilities --format json` reports supported schemas, release
-  features, Sailr version, and build revision for automation and agent tooling.
+  features (including first-class publication execution), Sailr version, and
+  build revision for automation and agent tooling.
 
 Workflow step modes grant capability while CLI `--apply` grants consent for one
 invocation. Registry push requires `push=run` plus `--apply`. Kubernetes mutation

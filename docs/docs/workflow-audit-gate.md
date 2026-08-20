@@ -66,10 +66,17 @@ Omitting `{{service_version}}` for an external workload emits a warning but does
 initialization or preparation.
 
 ```bash
-sailr publication validate artifacts/publication-report.json
+# One-time setup: generate the safe publication profile from an environment.
+sailr publication init publish-staging --environment staging
+
+# CI: explicit --apply consent permits registry push, never Kubernetes deploy.
+# Sailr produces and validates the report; no report-generation script is needed.
+sailr publication run publish-staging \
+  --apply \
+  --out artifacts/publication-report.json
+
 sailr promote plan \
-  --from-report artifacts/api-report.json \
-  --from-report artifacts/worker-report.json \
+  --from-report artifacts/publication-report.json \
   --to production \
   --out artifacts/promotion-plan.json
 sailr workflow prepare production \

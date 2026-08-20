@@ -15,7 +15,12 @@ pub fn run(args: WorkflowInitArgs) -> Result<(), String> {
             environment.name, args.environment
         ));
     }
-    emit_template_warnings(&environment);
+    if matches!(
+        args.preset,
+        WorkflowInitPreset::Deploy | WorkflowInitPreset::PortableRelease
+    ) {
+        emit_template_warnings(&environment);
+    }
 
     let trusted_public_key = validate_options(&args, &environment)?;
     let profile = build_profile_table(&args, trusted_public_key.as_deref())?;
@@ -32,7 +37,12 @@ pub fn run(args: WorkflowInitArgs) -> Result<(), String> {
     let rendered = insert_profile(&existing, &args.profile, profile)?;
     let generated_config = crate::workflow::config::WorkflowConfig::parse(&rendered)
         .map_err(|error| format!("generated workflow configuration is invalid: {error}"))?;
-    if matches!(args.preset, WorkflowInitPreset::PortableRelease) {
+    if matches!(args.preset, WorkflowInitPreset::Publication) {
+        let profile = generated_config
+            .get_profile(&args.profile)
+            .ok_or_else(|| format!("generated workflow profile '{}' is missing", args.profile))?;
+        crate::workflow::publication::validate_publication_profile(profile)?;
+    } else if matches!(args.preset, WorkflowInitPreset::PortableRelease) {
         let profile = generated_config
             .get_profile(&args.profile)
             .ok_or_else(|| format!("generated workflow profile '{}' is missing", args.profile))?;
@@ -52,6 +62,12 @@ pub fn run(args: WorkflowInitArgs) -> Result<(), String> {
         args.environment,
         args.config.display()
     );
+    if matches!(args.preset, WorkflowInitPreset::Publication) {
+        println!(
+            "Next: sailr publication run {} --apply --out artifacts/publication-report.json",
+            args.profile
+        );
+    }
     Ok(())
 }
 
@@ -65,10 +81,30 @@ fn validate_options(
     args: &WorkflowInitArgs,
     environment: &Environment,
 ) -> Result<Option<String>, String> {
-    if matches!(args.preset, WorkflowInitPreset::Build)
-        && (args.context.is_some() || args.namespace.is_some())
+    if matches!(args.preset, WorkflowInitPreset::Publication)
+        && !environment
+            .services
+            .iter()
+            .any(|service| service.build.is_some())
     {
-        return Err("the build preset does not accept --context or --namespace".to_string());
+        return Err(format!(
+            "environment '{}' has no build-backed services to publish; add [service.build] to each service Sailr should build and push",
+            environment.name
+        ));
+    }
+    if matches!(
+        args.preset,
+        WorkflowInitPreset::Build | WorkflowInitPreset::Publication
+    ) && (args.context.is_some() || args.namespace.is_some())
+    {
+        return Err(format!(
+            "the {} preset does not accept --context or --namespace",
+            match args.preset {
+                WorkflowInitPreset::Build => "build",
+                WorkflowInitPreset::Publication => "publication",
+                _ => unreachable!(),
+            }
+        ));
     }
     if !matches!(args.preset, WorkflowInitPreset::PortableRelease)
         && (args.approval.is_some() || args.trusted_public_key_file.is_some())
@@ -151,6 +187,15 @@ fn build_profile_table(
             profile.insert("approval", value("none"));
             profile.insert("apply", value(false));
         }
+        WorkflowInitPreset::Publication => {
+            profile.insert("mode", value("build"));
+            profile.insert("build", value("run"));
+            profile.insert("push", value("run"));
+            profile.insert("generate", value("disabled"));
+            profile.insert("deploy", value("disabled"));
+            profile.insert("approval", value("none"));
+            profile.insert("apply", value(false));
+        }
         WorkflowInitPreset::Deploy => {
             profile.insert("mode", value("deploy"));
             profile.insert("build", value("disabled"));
@@ -190,7 +235,14 @@ fn build_profile_table(
             profile.insert("rollback", Item::Table(rollback));
         }
     }
-    profile.insert("report", value("both"));
+    profile.insert(
+        "report",
+        value(if matches!(args.preset, WorkflowInitPreset::Publication) {
+            "json"
+        } else {
+            "both"
+        }),
+    );
     Ok(profile)
 }
 
@@ -353,6 +405,46 @@ mod tests {
     }
 
     #[test]
+    fn publication_profile_has_safe_registry_only_defaults() {
+        let mut args = args(WorkflowInitPreset::Publication);
+        args.context = None;
+        args.namespace = None;
+        let table = build_profile_table(&args, None).expect("publication profile");
+        let rendered = insert_profile("", &args.profile, table).expect("insert profile");
+        let parsed = crate::workflow::config::WorkflowConfig::parse(&rendered)
+            .expect("parse generated config");
+        let profile = parsed
+            .get_profile("release-prod")
+            .expect("generated profile");
+        crate::workflow::publication::validate_publication_profile(profile)
+            .expect("valid publication profile");
+        let normalized = profile.normalize(true);
+        assert_eq!(
+            normalized.push,
+            crate::workflow::profile::WorkflowStepMode::Run
+        );
+        assert_eq!(
+            normalized.deploy,
+            crate::workflow::profile::WorkflowStepMode::Disabled
+        );
+        assert!(!normalized.apply);
+        assert_eq!(
+            normalized.report,
+            crate::workflow::profile::ReportMode::Json
+        );
+    }
+
+    #[test]
+    fn publication_initialization_rejects_an_environment_with_nothing_to_publish() {
+        let mut args = args(WorkflowInitPreset::Publication);
+        args.context = None;
+        args.namespace = None;
+        let environment = Environment::new("prod");
+        let error = validate_options(&args, &environment).expect_err("no build services");
+        assert!(error.contains("no build-backed services"));
+    }
+
+    #[test]
     fn insertion_preserves_unrelated_content_and_refuses_collisions() {
         let args = args(WorkflowInitPreset::Deploy);
         let existing = "# retained\n[workflow.existing]\nenvironment = \"dev\"\nmode = \"check\"\n";
@@ -375,10 +467,17 @@ mod tests {
     }
 
     #[test]
-    fn build_and_deploy_presets_are_non_mutating() {
-        for preset in [WorkflowInitPreset::Build, WorkflowInitPreset::Deploy] {
+    fn non_release_presets_disable_kubernetes_mutation() {
+        for preset in [
+            WorkflowInitPreset::Build,
+            WorkflowInitPreset::Publication,
+            WorkflowInitPreset::Deploy,
+        ] {
             let mut args = args(preset);
-            if preset == WorkflowInitPreset::Build {
+            if matches!(
+                preset,
+                WorkflowInitPreset::Build | WorkflowInitPreset::Publication
+            ) {
                 args.context = None;
                 args.namespace = None;
             }

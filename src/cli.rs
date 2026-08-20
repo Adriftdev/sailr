@@ -66,7 +66,7 @@ pub enum Commands {
     /// Delivery flow management and validation
     #[command(subcommand)]
     Flow(FlowCommands),
-    /// Validate immutable publication reports
+    /// Create and validate immutable publication reports
     #[command(subcommand)]
     Publication(PublicationCommands),
     /// Plan immutable artifact promotion
@@ -105,6 +105,7 @@ pub enum WorkflowCommands {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum WorkflowInitPreset {
     Build,
+    Publication,
     Deploy,
     PortableRelease,
 }
@@ -155,8 +156,45 @@ pub struct WorkflowInitArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum PublicationCommands {
+    /// Create a safe build-and-push publication workflow profile
+    Init(PublicationInitArgs),
+    /// Run a publication profile and validate its generated report
+    Run(PublicationRunArgs),
     /// Validate a workflow publication report
     Validate(PublicationValidateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PublicationInitArgs {
+    /// Name of the publication workflow profile to create
+    pub profile: String,
+    /// Existing Sailr environment whose build-backed services will be published
+    #[arg(long)]
+    pub environment: String,
+    /// Print the complete resulting workflow configuration without writing it
+    #[arg(long)]
+    pub print: bool,
+    /// Workflow configuration to create or update
+    #[arg(long, default_value = "sailr.workflow.toml")]
+    pub config: std::path::PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct PublicationRunArgs {
+    /// Publication workflow profile to run
+    pub profile: String,
+    /// Limit publication to a comma-separated service list
+    #[arg(long)]
+    pub only: Option<String>,
+    /// Ignore a comma-separated service list
+    #[arg(long)]
+    pub ignore: Option<String>,
+    /// Consent to build and push images for this invocation
+    #[arg(long, required = true)]
+    pub apply: bool,
+    /// Optional durable output path for the validated publication report
+    #[arg(long)]
+    pub out: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -957,6 +995,52 @@ mod tests {
             }
             _ => panic!("Expected workflow init command"),
         }
+    }
+
+    #[test]
+    fn publication_init_and_run_parse_the_guided_path() {
+        let init = Cli::try_parse_from([
+            "sailr",
+            "publication",
+            "init",
+            "publish-staging",
+            "--environment",
+            "staging",
+            "--print",
+        ])
+        .expect("publication init arguments");
+        match init.commands {
+            Commands::Publication(PublicationCommands::Init(args)) => {
+                assert_eq!(args.profile, "publish-staging");
+                assert_eq!(args.environment, "staging");
+                assert!(args.print);
+            }
+            _ => panic!("Expected publication init command"),
+        }
+
+        let run = Cli::try_parse_from([
+            "sailr",
+            "publication",
+            "run",
+            "publish-staging",
+            "--apply",
+            "--out",
+            "artifacts/publication-report.json",
+        ])
+        .expect("publication run arguments");
+        match run.commands {
+            Commands::Publication(PublicationCommands::Run(args)) => {
+                assert_eq!(args.profile, "publish-staging");
+                assert!(args.apply);
+                assert_eq!(
+                    args.out.as_deref(),
+                    Some(std::path::Path::new("artifacts/publication-report.json"))
+                );
+            }
+            _ => panic!("Expected publication run command"),
+        }
+
+        assert!(Cli::try_parse_from(["sailr", "publication", "run", "publish-staging"]).is_err());
     }
 
     #[test]

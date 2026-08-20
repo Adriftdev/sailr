@@ -12,6 +12,7 @@ pub struct CapabilityFeatures {
     pub signed_deployment: bool,
     pub transactional_rollback: bool,
     pub publication_consumption: bool,
+    pub publication_execution: bool,
     pub promotion: bool,
     pub multi_report_promotion: bool,
     pub portable_deployment_bundle: bool,
@@ -51,6 +52,7 @@ pub fn current() -> Capabilities {
             signed_deployment: true,
             transactional_rollback: true,
             publication_consumption: true,
+            publication_execution: true,
             promotion: true,
             multi_report_promotion: true,
             portable_deployment_bundle: true,
@@ -72,6 +74,7 @@ mod tests {
         assert_eq!(value["features"]["promotion"], true);
         assert_eq!(value["features"]["multi_report_promotion"], true);
         assert_eq!(value["features"]["publication_flow_generation"], true);
+        assert_eq!(value["features"]["publication_execution"], true);
         assert_eq!(value["features"]["locking"], true);
         assert_eq!(
             value["schemas"]["release_candidates"][0],

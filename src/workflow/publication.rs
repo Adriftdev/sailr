@@ -1,9 +1,14 @@
 use crate::environment::Environment;
+use crate::workflow::config::WorkflowConfig;
+use crate::workflow::profile::{
+    ApprovalMode, ReportMode, WorkflowEngine, WorkflowMode, WorkflowProfile, WorkflowStepMode,
+};
 use crate::workflow::runner::{WorkflowReport, WorkflowReportType};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicationValidationResult {
@@ -12,6 +17,141 @@ pub struct PublicationValidationResult {
     pub report_digest: String,
     pub environment: String,
     pub services: Vec<String>,
+}
+
+/// Validate the deliberately narrow profile contract used to create publication reports.
+/// Registry mutation is authorized per invocation with `--apply`; this profile can never
+/// mutate Kubernetes resources.
+pub fn validate_publication_profile(profile: &WorkflowProfile) -> Result<(), String> {
+    let normalized = profile.normalize(true);
+    if normalized.mode != WorkflowMode::Build
+        || normalized.engine != WorkflowEngine::Runkernel
+        || normalized.interactive
+        || normalized.build != WorkflowStepMode::Run
+        || normalized.push != WorkflowStepMode::Run
+        || normalized.deploy != WorkflowStepMode::Disabled
+        || normalized.approval != ApprovalMode::None
+        || normalized.apply
+        || !matches!(normalized.report, ReportMode::Json | ReportMode::Both)
+    {
+        return Err(format!(
+            "publication profile '{}' requires mode=build, runkernel, non-interactive build/push=run, deploy=disabled, approval=none, apply=false, and JSON reporting",
+            profile.name
+        ));
+    }
+    Ok(())
+}
+
+pub async fn run(args: crate::cli::PublicationRunArgs) -> Result<(), String> {
+    if !args.apply {
+        return Err(
+            "publication pushes images; rerun with --apply to consent to registry mutation"
+                .to_string(),
+        );
+    }
+
+    // Fail before building or pushing when the requested profile is not a publication profile.
+    let config = WorkflowConfig::load().map_err(|error| error.to_string())?;
+    let profile = config
+        .get_profile(&args.profile)
+        .ok_or_else(|| format!("Workflow profile '{}' not found", args.profile))?;
+    validate_publication_profile(profile)?;
+
+    crate::workflow::runner::WorkflowRunner::run(crate::cli::WorkflowRunArgs {
+        profile: args.profile.clone(),
+        only: args.only,
+        ignore: args.ignore,
+        non_interactive: true,
+        plan: false,
+        dry_run: false,
+        apply: true,
+        release_id: None,
+    })
+    .await?;
+
+    let generated = PathBuf::from(".sailr")
+        .join("reports")
+        .join(&args.profile)
+        .join("latest.json");
+    let (_, result) = load_and_validate(&generated)?;
+    let output = match args.out {
+        Some(output) if output != generated => {
+            atomic_copy(&generated, &output)?;
+            output
+        }
+        Some(output) => output,
+        None => generated,
+    };
+
+    eprintln!("Validated publication report: {}", output.display());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result)
+            .map_err(|error| format!("failed to serialize validation result: {error}"))?
+    );
+    Ok(())
+}
+
+fn atomic_copy(source: &Path, destination: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(source).map_err(|error| {
+        format!(
+            "failed to read validated publication report '{}': {error}",
+            source.display()
+        )
+    })?;
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create publication report directory '{}': {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let file_name = destination.file_name().ok_or_else(|| {
+        format!(
+            "publication report output '{}' is invalid",
+            destination.display()
+        )
+    })?;
+    let temporary = destination.with_file_name(format!(
+        ".{}.tmp-{}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+    let result = (|| -> Result<(), String> {
+        let mut file = std::fs::File::create(&temporary).map_err(|error| {
+            format!(
+                "failed to create temporary publication report '{}': {error}",
+                temporary.display()
+            )
+        })?;
+        file.write_all(&bytes).map_err(|error| {
+            format!(
+                "failed to write temporary publication report '{}': {error}",
+                temporary.display()
+            )
+        })?;
+        file.sync_all().map_err(|error| {
+            format!(
+                "failed to sync temporary publication report '{}': {error}",
+                temporary.display()
+            )
+        })?;
+        std::fs::rename(&temporary, destination).map_err(|error| {
+            format!(
+                "failed to install publication report '{}': {error}",
+                destination.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 pub fn canonical_report_digest(report: &WorkflowReport) -> Result<String, String> {

@@ -47,7 +47,8 @@ Load the detailed reference documents from `references/` into your context using
 - If generating CI or delivery flows using legacy methods, warn the user that they should be using the specialised delivery-flow skills.
 - Use `sailr lint` to validate configuration changes.
 - Use `sailr workflow plan` to verify workflow profiles.
-- Validate each publication and use repeatable `--from-report` or a digest-bound candidate
+- Prefer `sailr publication init` followed by `sailr publication run --apply`; the run command
+  produces and validates the report. Use repeatable `--from-report` or a digest-bound candidate
   manifest before preparing a release.
 - Stop after preparation unless the user separately authorizes production apply.
 - When running builds locally for testing, use `sailr build --name <env>`.
