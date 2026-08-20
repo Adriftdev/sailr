@@ -108,6 +108,21 @@ Sailr integrates a build system (based on Roomservice) to build your service's c
 *   These commands will run sequentially for this service. If multiple services have synchronous commands, their execution order relative to each other depends on the build orchestrator.
 *   Example: `run_synchronous = "./scripts/prepare_data.sh"`
 
+<<<<<<< Updated upstream
+=======
+#### `ignore_cache` (array of strings)
+*   **Optional**
+*   Excludes matching paths, relative to the service build path, from runkernel cache inputs.
+*   `ignoreCache` is accepted as a compatibility alias.
+*   Exclusions are resolved by Sailr before exact input paths are passed to runkernel.
+*   Example: `ignore_cache = ["dist/**", "*.log"]`
+
+`sailr build/go --force` disables both runkernel cache reads and writes for
+every executable translated service task. It does not delete or randomize
+existing cache state, so a later normal run can still use the last successful
+record.
+
+>>>>>>> Stashed changes
 #### `before` (string or array of strings)
 *   **Optional**
 *   A shell command or list of shell commands to run *before* the main build steps (`run_parallel`, `run_synchronous`, Docker build) for this service. Executed within the `build` context directory.
