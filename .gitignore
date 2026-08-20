@@ -7,6 +7,12 @@ k8s/environments/dev
 .kube
 netrc
 .roomservice/
+<<<<<<< HEAD
+
+.sailr/
+.runkernel/
+=======
 .runkernel/
 .sailr/
+>>>>>>> 56a221e8309a5d1c75a16c322b6b64a2e3c0807c
 k8s/generated/

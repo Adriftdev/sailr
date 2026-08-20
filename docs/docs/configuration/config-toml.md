@@ -16,46 +16,53 @@ When you initialize a new environment using `sailr init <environment_name>`, a `
 These settings define the overall behavior and metadata for your environment.
 
 ### `schema_version` (string)
-*   **Required**
-*   Specifies the version of the configuration file schema Sailr should expect.
-*   Example: `schema_version = "0.5.0"`
-*   Changing this version might indicate breaking changes or new features in the Sailr config specification. Consult the Sailr release notes if you need to change this.
+
+- **Required**
+- Specifies the version of the configuration file schema Sailr should expect.
+- Example: `schema_version = "0.5.0"`
+- Changing this version might indicate breaking changes or new features in the Sailr config specification. Consult the Sailr release notes if you need to change this.
 
 ### `extends` (string)
-*   **Optional**
-*   Names another environment under `k8s/environments/<name>/config.toml` to use as this environment's base.
-*   Layered environments must resolve to `schema_version = "0.5.0"`.
-*   Example: `extends = "develop"`
+
+- **Optional**
+- Names another environment under `k8s/environments/<name>/config.toml` to use as this environment's base.
+- Layered environments must resolve to `schema_version = "0.5.0"`.
+- Example: `extends = "develop"`
 
 ### `name` (string)
-*   **Required unless `extends` is set**
-*   The name of the environment. This is used for identification purposes and can be used as a variable in your templates (e.g., `{{name}}` or `{{env_name}}` - Sailr provides it as `{{name}}` as per `Environment::get_variables`).
-*   If an environment extends another environment and omits `name`, Sailr uses the child environment directory name.
-*   Example: `name = "production"`
+
+- **Required unless `extends` is set**
+- The name of the environment. This is used for identification purposes and can be used as a variable in your templates (e.g., `{{name}}` or `{{env_name}}` - Sailr provides it as `{{name}}` as per `Environment::get_variables`).
+- If an environment extends another environment and omits `name`, Sailr uses the child environment directory name.
+- Example: `name = "production"`
 
 ### `log_level` (string)
-*   **Optional**
-*   The logging level for the Sailr CLI application itself during its operations for this environment.
-*   Valid values (case-insensitive): `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`.
-*   Defaults to `"INFO"`.
-*   Example: `log_level = "DEBUG"`
+
+- **Optional**
+- The logging level for the Sailr CLI application itself during its operations for this environment.
+- Valid values (case-insensitive): `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`.
+- Defaults to `"INFO"`.
+- Example: `log_level = "DEBUG"`
 
 ### `domain` (string)
-*   **Required**
-*   The primary domain name associated with your services in this environment. This is often used in templates to construct ingress hostnames or other URLs.
-*   Example: `domain = "myapp.example.com"` (for production) or `domain = "dev.local"` (for development).
+
+- **Required**
+- The primary domain name associated with your services in this environment. This is often used in templates to construct ingress hostnames or other URLs.
+- Example: `domain = "myapp.example.com"` (for production) or `domain = "dev.local"` (for development).
 
 ### `default_replicas` (integer)
-*   **Optional**
-*   The default number of replicas for deployed services if not specified in the service's individual Kubernetes deployment manifest templates. This value is available in templates as `{{default_replicas}}`.
-*   Defaults to `1`.
-*   Example: `default_replicas = 3`
+
+- **Optional**
+- The default number of replicas for deployed services if not specified in the service's individual Kubernetes deployment manifest templates. This value is available in templates as `{{default_replicas}}`.
+- Defaults to `1`.
+- Example: `default_replicas = 3`
 
 ### `registry` (string)
-*   **Optional**
-*   The container image registry to use for pulling images if the image name does not include a registry hostname. Also used as a target for images built by Sailr. This value is available in templates as `{{registry}}`.
-*   Defaults to `"docker.io"`.
-*   Example: `registry = "gcr.io/my-project"` or `registry = "quay.io/my-org"`
+
+- **Optional**
+- The container image registry to use for pulling images if the image name does not include a registry hostname. Also used as a target for images built by Sailr. This value is available in templates as `{{registry}}`.
+- Defaults to `"docker.io"`.
+- Example: `registry = "gcr.io/my-project"` or `registry = "quay.io/my-org"`
 
 ## Layered Environments
 
@@ -78,13 +85,13 @@ version = "2.1.0"
 
 Merge behavior:
 
-*   Top-level scalar values override the base.
-*   Tables merge field by field.
-*   `[[service]]` entries merge by `name`; child fields override matching base fields, and new services are appended.
-*   `[[environment_variables]]` entries merge by `name`; child values override matching base values, and new variables are appended.
-*   Other arrays replace the base array.
-*   Inheritance can be chained. Cycles are rejected.
-*   `sailr add-service` and `sailr bump` write local child overrides instead of flattening the resolved environment.
+- Top-level scalar values override the base.
+- Tables merge field by field.
+- `[[service]]` entries merge by `name`; child fields override matching base fields, and new services are appended.
+- `[[environment_variables]]` entries merge by `name`; child values override matching base values, and new variables are appended.
+- Other arrays replace the base array.
+- Inheritance can be chained. Cycles are rejected.
+- `sailr add-service` and `sailr bump` write local child overrides instead of flattening the resolved environment.
 
 ## Build Policy (`[build]`)
 
@@ -100,32 +107,36 @@ after_all = "echo finished build"
 ```
 
 ### `engine` (string)
-*   **Optional**
-*   Selects the build backend for `sailr build` and the build step of `sailr go`.
-*   Valid values: `roomservice`, `runkernel`.
-*   Default: `roomservice`.
-*   The CLI flag wins over config. Selection order is:
-    1. CLI `--engine`
-    2. `[build].engine`
-    3. default Roomservice
-*   Example: `engine = "runkernel"`
+
+- **Optional**
+- Selects the build backend for `sailr build` and the build step of `sailr go`.
+- Valid values: `roomservice`, `runkernel`.
+- Default: `roomservice`.
+- The CLI flag wins over config. Selection order is:
+  1. CLI `--engine`
+  2. `[build].engine`
+  3. default Roomservice
+- Example: `engine = "runkernel"`
 
 ### `fail_fast` (boolean)
-*   **Optional**
-*   Roomservice uses this policy where supported.
-*   Runkernel always stops scheduling new forward work after a failure and
-    allows already-running siblings to settle before Sailr finalizers.
+
+- **Optional**
+- Roomservice uses this policy where supported.
+- Runkernel always stops scheduling new forward work after a failure and
+  allows already-running siblings to settle before Sailr finalizers.
 
 ### `max_parallelism` (integer)
-*   **Optional**
-*   Accepted by Sailr build policy.
-*   Roomservice uses this where supported.
-*   The runkernel translator enforces this limit across phase tasks with a shared concurrency semaphore.
+
+- **Optional**
+- Accepted by Sailr build policy.
+- Roomservice uses this where supported.
+- The runkernel translator enforces this limit across phase tasks with a shared concurrency semaphore.
 
 ### `before_all` and `after_all` (string or array of strings)
-*   **Optional**
-*   Commands that run before all selected dirty service builds and after all selected dirty service builds complete successfully.
-*   They are suppressed when no selected service is dirty and are never cached.
+
+- **Optional**
+- Commands that run before all selected dirty service builds and after all selected dirty service builds complete successfully.
+- They are suppressed when no selected service is dirty and are never cached.
 
 ## Deployment Policy (`[deployment_policy]`)
 
@@ -152,91 +163,101 @@ Older configs may still use `[[service_whitelist]]`; prefer `schema_version = "0
 Each service entry can have the following properties:
 
 ### `name` (string)
-*   **Required**
-*   The name of the service. This is used for identifying the service, naming Kubernetes resources, and as a reference in templates (e.g., `{{service_name}}`). It's also often used as the default name for the Docker image if built by Sailr.
-*   **Note:** In some contexts like `Service` deserialization, a combined `namespace/name` format might be seen internally, but for user definition, it's just the service name.
-*   Example: `name = "frontend-app"`
+
+- **Required**
+- The name of the service. This is used for identifying the service, naming Kubernetes resources, and as a reference in templates (e.g., `{{service_name}}`). It's also often used as the default name for the Docker image if built by Sailr.
+- **Note:** In some contexts like `Service` deserialization, a combined `namespace/name` format might be seen internally, but for user definition, it's just the service name.
+- Example: `name = "frontend-app"`
 
 ### `version` (string)
-*   **Required**
-*   The version of the service image (e.g., semantic version like `"1.2.3"`, a Docker tag like `"latest"`, or a git commit SHA). This is used in templates (e.g., `{{service_version}}`) to specify the image tag for deployment.
-*   Example: `version = "0.5.1"`
+
+- **Required**
+- The version of the service image (e.g., semantic version like `"1.2.3"`, a Docker tag like `"latest"`, or a git commit SHA). This is used in templates (e.g., `{{service_version}}`) to specify the image tag for deployment.
+- Example: `version = "0.5.1"`
 
 ### `path` (string)
-*   **Optional**
-*   The path to the service's Kubernetes manifest template directory, relative to the `k8s/templates/` directory in your Sailr project.
-*   If omitted, Sailr defaults this to the service `name` (i.e., Sailr will look for templates in `k8s/templates/<service_name>/`).
-*   Example: `path = "custom-frontend-templates"` (would look for templates in `k8s/templates/custom-frontend-templates/`)
+
+- **Optional**
+- The path to the service's Kubernetes manifest template directory, relative to the `k8s/templates/` directory in your Sailr project.
+- If omitted, Sailr defaults this to the service `name` (i.e., Sailr will look for templates in `k8s/templates/<service_name>/`).
+- Example: `path = "custom-frontend-templates"` (would look for templates in `k8s/templates/custom-frontend-templates/`)
 
 ### `namespace` (string)
-*   **Optional**
-*   The Kubernetes namespace where this service will be deployed. This value is available in templates as `{{service_namespace}}`.
-*   If omitted, Sailr defaults this to the environment `name` (from the global settings).
-*   Example: `namespace = "web-services"`
+
+- **Optional**
+- The Kubernetes namespace where this service will be deployed. This value is available in templates as `{{service_namespace}}`.
+- If omitted, Sailr defaults this to the environment `name` (from the global settings).
+- Example: `namespace = "web-services"`
 
 ### Build Configuration (within a `[[service]]` entry)
 
 Sailr integrates a build system to build your service's container images. Roomservice is the current default backend, and the experimental runkernel backend can be selected with `--engine runkernel` or `[build].engine = "runkernel"`. These fields control the build process for a specific service.
 
 #### `build` (string)
-*   **Optional**
-*   The path to the service's build context directory, relative to the Sailr project root. This directory should typically contain the `Dockerfile` (or the specified `dockerfile`) and all source code needed to build the image.
-*   If this field is present, Sailr will attempt to build an image for this service using the selected build backend. If absent, Sailr assumes it's a pre-built image to be pulled from a registry.
-*   Example: `build = "./services/backend-api/"`
+
+- **Optional**
+- The path to the service's build context directory, relative to the Sailr project root. This directory should typically contain the `Dockerfile` (or the specified `dockerfile`) and all source code needed to build the image.
+- If this field is present, Sailr will attempt to build an image for this service using the selected build backend. If absent, Sailr assumes it's a pre-built image to be pulled from a registry.
+- Example: `build = "./services/backend-api/"`
 
 #### `dockerfile` (string)
-*   **Optional**
-*   The path to the Dockerfile, relative to the `build` context directory.
-*   Defaults to `Dockerfile` at the root of the `build` path.
-*   Example: `dockerfile = "path/to/custom.Dockerfile"`
+
+- **Optional**
+- The path to the Dockerfile, relative to the `build` context directory.
+- Defaults to `Dockerfile` at the root of the `build` path.
+- Example: `dockerfile = "path/to/custom.Dockerfile"`
 
 #### `run_parallel` (string or array of strings)
-*   **Optional**
-*   A shell command or list of shell commands to run in parallel during the build phase for this service. These commands are executed within the `build` context directory.
-*   These commands run concurrently within the service when using the runkernel backend. Backend-level inter-service parallelism depends on the selected build backend.
-*   Example: `run_parallel = "npm install && npm run build"`
-*   Example: `run_parallel = ["yarn install", "yarn build:assets"]`
+
+- **Optional**
+- A shell command or list of shell commands to run in parallel during the build phase for this service. These commands are executed within the `build` context directory.
+- These commands run concurrently within the service when using the runkernel backend. Backend-level inter-service parallelism depends on the selected build backend.
+- Example: `run_parallel = "npm install && npm run build"`
+- Example: `run_parallel = ["yarn install", "yarn build:assets"]`
 
 #### `run_synchronous` (string or array of strings)
-*   **Optional**
-*   A shell command or list of shell commands to run synchronously during the build phase for this service. These commands are executed within the `build` context directory.
-*   These commands run sequentially for this service.
-*   Example: `run_synchronous = "./scripts/prepare_data.sh"`
+
+- **Optional**
+- A shell command or list of shell commands to run synchronously during the build phase for this service. These commands are executed within the `build` context directory.
+- These commands run sequentially for this service.
+- Example: `run_synchronous = "./scripts/prepare_data.sh"`
 
 #### `ignore_cache` (array of strings)
-*   **Optional**
-*   Excludes matching paths, relative to the service build path, from runkernel cache inputs.
-*   `ignoreCache` is accepted as a compatibility alias.
-*   Exclusions are resolved by Sailr before exact input paths are passed to runkernel.
-*   Example: `ignore_cache = ["dist/**", "*.log"]`
 
-<<<<<<< HEAD
+- **Optional**
+- Excludes matching paths, relative to the service build path, from runkernel cache inputs.
+- `ignoreCache` is accepted as a compatibility alias.
+- Exclusions are resolved by Sailr before exact input paths are passed to runkernel.
+- Example: `ignore_cache = ["dist/**", "*.log"]`
+
 `sailr build/go --force` disables both runkernel cache reads and writes for
 every executable translated service task. It does not delete or randomize
 existing cache state, so a later normal run can still use the last successful
 record.
 
-=======
->>>>>>> d531c3a31777e14ad2f74934c8cdcea62d96d242
 #### `before` (string or array of strings)
-*   **Optional**
-*   A shell command or list of shell commands to run *before* the main build steps (`run_parallel`, `run_synchronous`, Docker build) for this service. Executed within the `build` context directory.
-*   Example: `before = "./scripts/pre_build_checks.sh"`
+
+- **Optional**
+- A shell command or list of shell commands to run _before_ the main build steps (`run_parallel`, `run_synchronous`, Docker build) for this service. Executed within the `build` context directory.
+- Example: `before = "./scripts/pre_build_checks.sh"`
 
 #### `before_synchronous` (string or array of strings)
-*   **Optional**
-*   A shell command or list of shell commands to run synchronously *before* other build steps (including `before`) for this service. Executed within the `build` context directory.
-*   This hook provides a way to ensure certain prerequisite tasks are completed sequentially before any other build activity for the service.
-*   Example: `before_synchronous = "echo 'Starting critical synchronous pre-build tasks'"`
+
+- **Optional**
+- A shell command or list of shell commands to run synchronously _before_ other build steps (including `before`) for this service. Executed within the `build` context directory.
+- This hook provides a way to ensure certain prerequisite tasks are completed sequentially before any other build activity for the service.
+- Example: `before_synchronous = "echo 'Starting critical synchronous pre-build tasks'"`
 
 #### `after` (string or array of strings)
-*   **Optional**
-*   A shell command or list of shell commands to run *after* all other build steps (including the Docker image build) have successfully completed for this service. Executed within the `build` context directory.
-*   Useful for cleanup tasks, notifications, or pushing images to a staging registry.
-*   Example: `after = "./scripts/post_build_cleanup.sh"`
+
+- **Optional**
+- A shell command or list of shell commands to run _after_ all other build steps (including the Docker image build) have successfully completed for this service. Executed within the `build` context directory.
+- Useful for cleanup tasks, notifications, or pushing images to a staging registry.
+- Example: `after = "./scripts/post_build_cleanup.sh"`
 
 **Build Execution Order:**
 For a single service, Sailr runs build hooks in this order:
+
 1.  `before_synchronous` commands (sequentially)
 2.  `before` commands
 3.  `run_parallel` commands
@@ -248,13 +269,13 @@ Inter-service ordering follows service build dependencies. Global `before_all` a
 
 #### `finally` (string or array of strings)
 
-*   **Optional**
-*   Runs once after all already-running build siblings have settled, on both
-    success and failure.
-*   Dirty services are cleaned up in reverse dependency order, with stable
-    service-name ordering for independent services.
-*   Cleanup failures remain visible and fail the workflow. Build cache records
-    are written only after successful pipeline execution and cleanup.
+- **Optional**
+- Runs once after all already-running build siblings have settled, on both
+  success and failure.
+- Dirty services are cleaned up in reverse dependency order, with stable
+  service-name ordering for independent services.
+- Cleanup failures remain visible and fail the workflow. Build cache records
+  are written only after successful pipeline execution and cleanup.
 
 ## Environment Variables (`[[environment_variables]]`)
 
@@ -263,14 +284,16 @@ This is an array of tables, where each table defines an environment variable tha
 Each environment variable entry has the following properties:
 
 ### `name` (string)
-*   **Required**
-*   The name of the environment variable (the key used in templates).
-*   Example: `name = "API_ENDPOINT"`
+
+- **Required**
+- The name of the environment variable (the key used in templates).
+- Example: `name = "API_ENDPOINT"`
 
 ### `value` (string)
-*   **Required**
-*   The value to be assigned to the environment variable. This value will replace the corresponding `{{name}}` placeholder in your templates.
-*   Example: `value = "https://api.example.com/v1"`
+
+- **Required**
+- The value to be assigned to the environment variable. This value will replace the corresponding `{{name}}` placeholder in your templates.
+- Example: `value = "https://api.example.com/v1"`
 
 ---
 
