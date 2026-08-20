@@ -100,7 +100,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Sailr
-        run: cargo install --path .
+        run: cargo install --path . --locked
 
       - name: Run Workflow
         run: sailr workflow run {profile_name} --non-interactive
@@ -183,7 +183,7 @@ mod tests {
         let yaml = CiTemplateGenerator::generate(profile_name, &CiProvider::GitHub);
         assert!(yaml.contains("name: Sailr Workflow - edge"));
         assert!(yaml.contains("sailr workflow run edge --non-interactive"));
-        assert!(yaml.contains("cargo install --path ."));
+        assert!(yaml.contains("cargo install --path . --locked"));
     }
 
     #[test]
