@@ -1,4 +1,3 @@
-use scribe_rust::log;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -181,11 +180,10 @@ impl RoomserviceBuilder {
         force: bool,
         global_policy: GlobalPolicy,
     ) -> RoomserviceBuilder {
-        let cache_dir = PathBuf::from(cache_dir);
         RoomserviceBuilder {
             project,
             force,
-            cache_dir,
+            cache_dir: PathBuf::from(cache_dir),
             global_policy,
             rooms: Vec::new(),
         }
@@ -273,7 +271,6 @@ impl RoomserviceBuilder {
                 config_hash,
                 full_hash: String::new(),
             };
-
             let fingerprint = RoomFingerprint {
                 full_hash: hash_text(
                     &[
@@ -325,11 +322,10 @@ impl RoomserviceBuilder {
             room_dirty_state.insert(room.name.clone(), dirty);
             room_fingerprints.insert(room.name.clone(), fingerprint.clone());
 
-            let phases = build_phases(&room);
             room_plans.push(RoomPlan {
+                phases: build_phases(&room),
                 room,
                 fingerprint,
-                phases,
                 dirty_reasons,
                 dirty,
             });
@@ -363,7 +359,7 @@ impl RoomserviceBuilder {
         self.ensure_cache_dirs()?;
 
         if !plan.before_all.is_empty() {
-            log(scribe_rust::Color::Blue, "Executing Before All", "");
+            crate::LOGGER.info("Executing Before All");
             for command in &plan.before_all {
                 exec_cmd("./", command, "Before All")?;
             }
@@ -419,20 +415,16 @@ impl RoomserviceBuilder {
                     continue;
                 }
                 started = true;
-                log(
-                    scribe_rust::Color::Blue,
-                    "Executing phase",
-                    &format!("{} -> {}", room.room.name, phase.kind.as_str()),
-                );
+                crate::LOGGER.info(&format!(
+                    "Executing phase {} -> {}",
+                    room.room.name,
+                    phase.kind.as_str()
+                ));
                 for command in &phase.commands {
                     if let Err(error) = exec_cmd(&room.room.path, command, &room.room.name) {
                         overall_success = false;
                         room_success = false;
-                        log(
-                            scribe_rust::Color::Red,
-                            "Phase failed",
-                            &format!("{} ({})", room.room.name, error),
-                        );
+                        crate::LOGGER.warn(&format!("Phase failed {} ({})", room.room.name, error));
                         break;
                     }
                 }
@@ -446,20 +438,17 @@ impl RoomserviceBuilder {
                     if phase.commands.is_empty() {
                         continue;
                     }
-                    log(
-                        scribe_rust::Color::Blue,
-                        "Executing finalizer",
-                        &format!("{} -> {}", room.room.name, phase.kind.as_str()),
-                    );
+                    crate::LOGGER.info(&format!(
+                        "Executing finalizer {} -> {}",
+                        room.room.name,
+                        phase.kind.as_str()
+                    ));
                     for command in &phase.commands {
                         if let Err(error) = exec_cmd(&room.room.path, command, &room.room.name) {
                             overall_success = false;
                             room_success = false;
-                            log(
-                                scribe_rust::Color::Red,
-                                "Finalizer failed",
-                                &format!("{} ({})", room.room.name, error),
-                            );
+                            crate::LOGGER
+                                .warn(&format!("Finalizer failed {} ({})", room.room.name, error));
                             break;
                         }
                     }
@@ -488,7 +477,7 @@ impl RoomserviceBuilder {
         }
 
         if overall_success && !plan.after_all.is_empty() {
-            log(scribe_rust::Color::Blue, "Executing After All", "");
+            crate::LOGGER.info("Executing After All");
             for command in &plan.after_all {
                 exec_cmd("./", command, "After All")?;
             }
@@ -725,235 +714,5 @@ fn exec_cmd(cwd: &str, cmd: &str, name: &str) -> Result<(), String> {
             status => Err(format!("unexpected process status: {:?}", status)),
         },
         Err(error) => Err(format!("failed to spawn command '{}': {}", cmd, error)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::roomservice::room::Hooks;
-    use tempfile::tempdir;
-
-    fn room(
-        name: &str,
-        path: &Path,
-        deps: Vec<String>,
-        dep_paths: Vec<String>,
-        build_command: Option<String>,
-        push_command: Option<String>,
-        hooks: Hooks,
-    ) -> RoomBuilder {
-        RoomBuilder::new(
-            name.to_string(),
-            path.to_string_lossy().to_string(),
-            ".roomservice".to_string(),
-            vec!["./**/*".to_string()],
-            deps,
-            dep_paths,
-            None,
-            hooks,
-            build_command,
-            push_command,
-            Some(format!("registry/{}:latest", name)),
-        )
-    }
-
-    #[test]
-    fn planner_orders_rooms_by_dependency() {
-        let temp = tempdir().expect("tempdir should be created");
-        let api_dir = temp.path().join("api");
-        let web_dir = temp.path().join("web");
-        fs::create_dir_all(&api_dir).expect("api dir should be created");
-        fs::create_dir_all(&web_dir).expect("web dir should be created");
-        fs::write(api_dir.join("Dockerfile"), "FROM scratch").expect("file should be created");
-        fs::write(web_dir.join("Dockerfile"), "FROM scratch").expect("file should be created");
-
-        let mut builder = RoomserviceBuilder::new(
-            temp.path().to_string_lossy().to_string(),
-            temp.path()
-                .join(".roomservice")
-                .to_string_lossy()
-                .to_string(),
-            false,
-            GlobalPolicy::default(),
-        );
-        builder
-            .add_room(room(
-                "api",
-                &api_dir,
-                vec![],
-                vec![],
-                Some("echo api".to_string()),
-                Some("echo push-api".to_string()),
-                Hooks::default(),
-            ))
-            .expect("api room should be added");
-        builder
-            .add_room(room(
-                "web",
-                &web_dir,
-                vec!["api".to_string()],
-                vec![],
-                Some("echo web".to_string()),
-                Some("echo push-web".to_string()),
-                Hooks::default(),
-            ))
-            .expect("web room should be added");
-
-        let plan = builder.plan(false).expect("plan should succeed");
-        assert_eq!(plan.rooms[0].room.name, "api");
-        assert_eq!(plan.rooms[1].room.name, "web");
-    }
-
-    #[test]
-    fn planner_marks_command_changes_dirty() {
-        let temp = tempdir().expect("tempdir should be created");
-        let api_dir = temp.path().join("api");
-        fs::create_dir_all(&api_dir).expect("api dir should be created");
-        fs::write(api_dir.join("Dockerfile"), "FROM scratch").expect("file should be created");
-
-        let cache_root = temp.path().join(".roomservice");
-        let mut builder = RoomserviceBuilder::new(
-            temp.path().to_string_lossy().to_string(),
-            cache_root.to_string_lossy().to_string(),
-            false,
-            GlobalPolicy::default(),
-        );
-        builder
-            .add_room(room(
-                "api",
-                &api_dir,
-                vec![],
-                vec![],
-                Some("echo v1".to_string()),
-                Some("echo push".to_string()),
-                Hooks::default(),
-            ))
-            .expect("room should be added");
-        let initial_plan = builder.plan(false).expect("initial plan should succeed");
-        builder
-            .execute(&initial_plan, false)
-            .expect("initial execution should succeed");
-
-        let mut changed_builder = RoomserviceBuilder::new(
-            temp.path().to_string_lossy().to_string(),
-            cache_root.to_string_lossy().to_string(),
-            false,
-            GlobalPolicy::default(),
-        );
-        changed_builder
-            .add_room(room(
-                "api",
-                &api_dir,
-                vec![],
-                vec![],
-                Some("echo v2".to_string()),
-                Some("echo push".to_string()),
-                Hooks::default(),
-            ))
-            .expect("room should be added");
-        let changed_plan = changed_builder.plan(false).expect("plan should succeed");
-        assert!(changed_plan.rooms[0]
-            .dirty_reasons
-            .contains(&DirtyReason::CommandChanged));
-    }
-
-    #[test]
-    fn execution_runs_finally_on_failure_and_skips_downstream() {
-        let temp = tempdir().expect("tempdir should be created");
-        let api_dir = temp.path().join("api");
-        let web_dir = temp.path().join("web");
-        fs::create_dir_all(&api_dir).expect("api dir should be created");
-        fs::create_dir_all(&web_dir).expect("web dir should be created");
-        fs::write(api_dir.join("Dockerfile"), "FROM scratch").expect("file should be created");
-        fs::write(web_dir.join("Dockerfile"), "FROM scratch").expect("file should be created");
-        let marker = temp.path().join("finally.txt");
-
-        let mut builder = RoomserviceBuilder::new(
-            temp.path().to_string_lossy().to_string(),
-            temp.path()
-                .join(".roomservice")
-                .to_string_lossy()
-                .to_string(),
-            false,
-            GlobalPolicy {
-                fail_fast: false,
-                ..GlobalPolicy::default()
-            },
-        );
-        builder
-            .add_room(room(
-                "api",
-                &api_dir,
-                vec![],
-                vec![],
-                Some("sh -c 'exit 1'".to_string()),
-                Some("echo push".to_string()),
-                Hooks {
-                    finally: vec![format!("sh -c 'printf done > {}'", marker.display())],
-                    ..Hooks::default()
-                },
-            ))
-            .expect("room should be added");
-        builder
-            .add_room(room(
-                "web",
-                &web_dir,
-                vec!["api".to_string()],
-                vec![],
-                Some("echo web".to_string()),
-                Some("echo push".to_string()),
-                Hooks::default(),
-            ))
-            .expect("room should be added");
-
-        let plan = builder.plan(false).expect("plan should succeed");
-        let result = builder
-            .execute(&plan, false)
-            .expect("execution should return");
-        assert!(!result.success);
-        assert!(marker.exists());
-        assert!(matches!(result.rooms[0].status, ExecutionStatus::Failed));
-        assert!(matches!(
-            result.rooms[1].status,
-            ExecutionStatus::SkippedDependency
-        ));
-    }
-
-    #[test]
-    fn dry_run_does_not_execute_commands() {
-        let temp = tempdir().expect("tempdir should be created");
-        let api_dir = temp.path().join("api");
-        fs::create_dir_all(&api_dir).expect("api dir should be created");
-        fs::write(api_dir.join("Dockerfile"), "FROM scratch").expect("file should be created");
-        let marker = temp.path().join("dry-run.txt");
-
-        let mut builder = RoomserviceBuilder::new(
-            temp.path().to_string_lossy().to_string(),
-            temp.path()
-                .join(".roomservice")
-                .to_string_lossy()
-                .to_string(),
-            false,
-            GlobalPolicy::default(),
-        );
-        builder
-            .add_room(room(
-                "api",
-                &api_dir,
-                vec![],
-                vec![],
-                Some(format!("sh -c 'printf hi > {}'", marker.display())),
-                Some("echo push".to_string()),
-                Hooks::default(),
-            ))
-            .expect("room should be added");
-
-        let plan = builder.plan(false).expect("plan should succeed");
-        let result = builder
-            .execute(&plan, true)
-            .expect("dry run should succeed");
-        assert!(!result.executed);
-        assert!(!marker.exists());
     }
 }

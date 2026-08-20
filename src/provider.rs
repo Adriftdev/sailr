@@ -1,6 +1,5 @@
 use std::env;
 
-use scribe_rust::{log, Color};
 use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
@@ -74,11 +73,7 @@ impl ProviderStrategy for DockerDesktopProvider {
         LOGGER.info("Docker Desktop provider...");
         // TODO: Create a new Docker Desktop project
 
-        log(
-            Color::Green,
-            "Success",
-            "Docker Desktop provider initialized",
-        );
+        LOGGER.status("Success", "Docker Desktop provider initialized", "green");
         Ok(())
     }
 }

@@ -1,0 +1,55 @@
+# Workflow Profiles (`sailr.workflow.toml`)
+
+`sailr.workflow.toml` defines reusable CI/CD pipeline profiles executed via `sailr workflow run <profile>`.
+
+## Example Profile
+```toml
+[workflow.staging-deploy]
+environment = "staging"
+mode = "deploy"
+interactive = false
+build = "run"
+generate = "run"
+deploy = "run"
+deploy_context = "staging-cluster"
+namespace = "default"
+approval = "external"
+apply = true
+report = "both"
+```
+
+## Signed Deployment (Production)
+For an immutable, signed deployment:
+```toml
+[workflow.production]
+environment = "production"
+mode = "deploy"
+interactive = false
+build = "disabled"
+generate = "run"
+deploy = "run"
+deploy_context = "production-cluster"
+namespace = "app"
+approval = "signature"
+apply = true
+report = "both"
+
+[workflow.production.signature]
+trusted_public_key = "<base64 raw 32-byte Ed25519 public key>"
+
+[workflow.production.verification]
+rollout_timeout_seconds = 300
+
+[workflow.production.rollback]
+timeout_seconds = 300
+```
+
+Sailr renders only the key's `sha256:<hex>` fingerprint. The first run writes `.sailr/audit/<profile>/deployment-plan.json` and reports `awaiting_signature` without cluster mutation. Sign the exact ASCII message `sailr-deployment-plan-v1:<plan_hash>` outside Sailr, set only `DEPLOY_APPROVAL_SIG` to the base64 raw 64-byte signature, and retry. 
+
+Portable release profiles additionally require `push = "disabled"`, `interactive = false`,
+`apply = true`, and `approval = "external"` or `"signature"`. Use `workflow prepare`
+before approval and `workflow apply` afterward; apply never regenerates manifests.
+
+Continuous publication is a separate push-only profile: `build/push = "run"`,
+`deploy = "disabled"`, `approval = "none"`, `apply = false`, and JSON reporting. Its CI
+invocation deliberately passes CLI `--apply` as registry-mutation consent.

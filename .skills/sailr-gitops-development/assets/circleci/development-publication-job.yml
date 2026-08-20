@@ -1,0 +1,6 @@
+development-publication-job:
+  docker:
+    - image: __PLACEHOLDER_IMAGE__
+  steps:
+    - checkout
+    - run: sailr workflow run __PLACEHOLDER_PUBLISH_PROFILE__

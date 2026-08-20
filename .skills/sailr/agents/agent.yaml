@@ -1,0 +1,4 @@
+---
+name: sailr
+description: "Understand, configure, and operate Sailr projects. Use for Sailr environment files, service definitions, build configuration, Kubernetes templates, workflow profiles, CLI commands, configuration linting, migration, manifest generation, and core Sailr troubleshooting. Do not use as the primary skill for designing complete CircleCI production releases or Argo CD development flows; use the specialised Sailr delivery-flow skills for those tasks."
+capabilities: []

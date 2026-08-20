@@ -22,6 +22,14 @@ const sidebars = {
 		'configuration/config-toml',
 		{
 			type: 'category',
+			label: 'Migration',
+			items: [
+				'migration/roomservice-to-runkernel',
+				'workflow-audit-gate',
+			],
+		},
+		{
+			type: 'category',
 			label: 'Getting Started',
 			items: [
 				'getting-started/installation',

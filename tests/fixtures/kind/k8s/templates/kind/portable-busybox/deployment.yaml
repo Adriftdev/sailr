@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sailr-portable-busybox
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sailr-portable-busybox
+  template:
+    metadata:
+      labels:
+        app: sailr-portable-busybox
+    spec:
+      containers:
+        - name: busybox
+          image: "{{service_image}}"
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "sleep 3600"]

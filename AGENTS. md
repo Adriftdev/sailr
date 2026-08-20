@@ -1,0 +1,36 @@
+# Agent Directives for Sailr
+
+This repository contains **Sailr**, an environment management CLI for Kubernetes. It is a systems-level tool focused on deterministic workflow execution, concurrent container building, and template-driven manifest generation. 
+
+As an AI agent operating in this repository, you must adhere strictly to the constraints and execution paths defined below.
+
+## Technology Stack
+* **Language:** Rust (Strictly enforced for all system, backend, and CLI logic)
+* **Toolchain:** Cargo
+* **Build Engines:** `roomservice` (default), `runkernel` (deterministic workflow engine)
+* **Core Paradigms:** State-synchronization, strict schema validation (`0.5.0`), and template-based interpolation.
+
+## Concrete Execution Commands
+Do not guess command flags. When validating or building code in this repository, use these exact commands:
+
+* **Format check:** `cargo fmt --all -- --check`
+* **Linting:** `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+* **Testing:** `cargo test --workspace --locked`
+* **Release Build:** `cargo build --release`
+
+## Architectural Boundaries
+
+### 🔴 Never Do
+* **Never use JavaScript/TypeScript:** Frontend tooling is strictly prohibited in this codebase. All system logic, tooling, and backend processing must remain in Rust.
+* **Never introduce non-deterministic state:** Especially within the `runkernel` engine modules. Concurrency and parallel executions must be strictly managed to prevent race conditions or build cache corruption.
+* **Never bypass strict typing:** Sailr relies on rigid schema versions (e.g., `config.toml` schema `0.5.0`). Do not loosen structs or bypass `serde` validations to force a compilation.
+* **Never use `.unwrap()` in production logic:** Always handle `Result` and `Option` types explicitly to return clean, programmatic error states that external agents and CI pipelines can parse.
+
+### 🟡 Ask First
+* **Before modifying manifest generation:** Changes to how Sailr parses templates or replaces variables (the `{{ placeholder }}` logic) are high-risk. Propose the architectural change before writing the code.
+* **Before altering the CLI grammar:** Modifying subcommands (e.g., `sailr go`, `sailr workflow`) breaks backwards compatibility and existing agent skill files.
+* **Before adding heavy dependencies:** Keep the crate footprint lean and optimized for edge and CI environments.
+
+### 🟢 Always Do
+* **Cross-reference `skills/`:** If you add or modify a CLI command, you must immediately update the corresponding instructions in the `skills/` directory so external agents know how to use the new feature.
+* **Output structured data:** When modifying CLI outputs, ensure the tool provides clean, parseable STDOUT (or JSON where applicable) rather than just human-readable ANSI text.

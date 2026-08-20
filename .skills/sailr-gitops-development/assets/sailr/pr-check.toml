@@ -1,0 +1,7 @@
+[workflow.pr-check]
+environment = "development"
+mode = "check"
+interactive = false
+build = "plan"
+generate = "run"
+deploy = "disabled"

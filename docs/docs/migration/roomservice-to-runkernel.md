@@ -68,18 +68,9 @@ Or remove `[build].engine = "runkernel"` from `config.toml`; the default backend
 - `sailr init` and `sailr migrate` preserve Roomservice unless
   `--engine runkernel` is explicit. Migration converts schema 0.5.0 and records
   the engine without switching existing configurations automatically.
+
 - Deployment hooks can have external side effects and are not automatically reversible.
 - Sailr-scoped runkernel cache metadata is stored under `.sailr/cache/runkernel`; Sailr build outcome records remain under `.sailr/cache/build`. Sailr does not create a top-level `.runkernel` directory.
 
 The runkernel translator exposes command phases as deterministic graph nodes such as
 `service:api:run_parallel:0` and retains `service:api:build` as the service completion node.
-Synchronous commands chain, parallel commands fan out from their preceding
-dependency and join before the next phase, and dependent services point to the
-dependency service aggregate. `max_parallelism` is enforced across executable
-phase nodes. `--force` bypasses cache reads and writes without deleting prior
-cache state.
-
-Service `finally` commands are post-settlement Sailr finalizers rather than
-forward graph tasks. Runkernel stops new scheduling after failure and waits for
-active siblings; Sailr then runs dirty-service cleanup once in stable reverse
-dependency order. Cache writing is success-only and report persistence is last.

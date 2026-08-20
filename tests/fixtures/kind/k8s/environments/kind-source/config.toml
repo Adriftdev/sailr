@@ -1,0 +1,23 @@
+schema_version = "0.5.0"
+name = "kind-source"
+log_level = "info"
+domain = "kind.test"
+default_replicas = 1
+
+[registry]
+host = "docker.io"
+namespace = "library"
+
+[[service]]
+name = "nginx"
+version = "publication-only"
+path = "kind/portable"
+namespace = "default"
+build = "."
+
+[[service]]
+name = "busybox"
+version = "publication-only"
+path = "kind/portable-busybox"
+namespace = "default"
+build = "."

@@ -1,16 +1,364 @@
+pub mod bundle;
 pub mod k8sm8;
+pub mod lease;
+pub mod rollout;
 use crate::deployment::k8sm8::deployments::delete_deployment;
 use crate::deployment::k8sm8::multidoc_deserialize;
 use crate::environment::{CommandSpec, Environment, Service};
 use crate::{cli::DeploymentStrategy, deployment::k8sm8::daemonsets::delete_daemonset};
 use anyhow::Result;
+use kube::api::{DeleteParams, Patch, PatchParams};
 use kube::core::DynamicObject;
+use kube::core::GroupVersionKind;
+use kube::discovery::Discovery;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use walkdir::WalkDir;
 
 use crate::{errors::DeployError, LOGGER};
+
+#[derive(Debug, Clone)]
+pub struct AppliedMutation {
+    pub sequence: usize,
+    pub identity: bundle::ResourceIdentity,
+    pub previous: Option<DynamicObject>,
+    pub applied: DynamicObject,
+    pub source_path: String,
+    pub document_index: usize,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DeploymentJournal {
+    pub entries: Vec<AppliedMutation>,
+    pub rollback_attempted: bool,
+    pub rollback_errors: Vec<String>,
+}
+
+pub type SharedDeploymentJournal = Arc<Mutex<DeploymentJournal>>;
+
+#[async_trait::async_trait]
+pub trait DeploymentBackend: Send + Sync {
+    async fn get(
+        &self,
+        identity: &bundle::ResourceIdentity,
+    ) -> Result<Option<DynamicObject>, DeployError>;
+
+    async fn apply(
+        &self,
+        resource: &bundle::DeploymentResource,
+    ) -> Result<DynamicObject, DeployError>;
+
+    async fn restore(
+        &self,
+        identity: &bundle::ResourceIdentity,
+        previous: &DynamicObject,
+    ) -> Result<(), DeployError>;
+
+    async fn delete(&self, identity: &bundle::ResourceIdentity) -> Result<(), DeployError>;
+}
+
+pub struct KubernetesDeploymentBackend {
+    client: kube::Client,
+    discovery: Discovery,
+}
+
+impl KubernetesDeploymentBackend {
+    pub async fn new(context: String) -> Result<Self, DeployError> {
+        let client = k8sm8::create_client(context).await?;
+        let discovery = Discovery::new(client.clone())
+            .run()
+            .await
+            .map_err(|error| {
+                DeployError::DiscoveryInitializationFailed(format!(
+                    "Failed to initialize Kubernetes Discovery: {error}"
+                ))
+            })?;
+        Ok(Self { client, discovery })
+    }
+
+    fn resolve(
+        &self,
+        identity: &bundle::ResourceIdentity,
+    ) -> Result<(kube::Api<DynamicObject>, String, String), String> {
+        let (group, version) = identity
+            .api_version
+            .split_once('/')
+            .map_or(("", identity.api_version.as_str()), |(group, version)| {
+                (group, version)
+            });
+        let gvk = GroupVersionKind::gvk(group, version, &identity.kind);
+        let (resource, capabilities) = self
+            .discovery
+            .resolve_gvk(&gvk)
+            .ok_or_else(|| format!("Unable to resolve {} during rollback", gvk.kind))?;
+
+        let api = k8sm8::dynamic_api(
+            resource,
+            capabilities,
+            self.client.clone(),
+            identity.namespace.as_deref(),
+            false,
+        );
+        Ok((api, gvk.kind, identity.name.clone()))
+    }
+}
+
+#[async_trait::async_trait]
+impl DeploymentBackend for KubernetesDeploymentBackend {
+    async fn get(
+        &self,
+        identity: &bundle::ResourceIdentity,
+    ) -> Result<Option<DynamicObject>, DeployError> {
+        let (api, kind, name) = self
+            .resolve(identity)
+            .map_err(DeployError::ManifestApplicationFailed)?;
+        api.get_opt(&name).await.map_err(|error| {
+            DeployError::ManifestApplicationFailed(format!("Failed to read {kind} {name}: {error}"))
+        })
+    }
+
+    async fn apply(
+        &self,
+        resource: &bundle::DeploymentResource,
+    ) -> Result<DynamicObject, DeployError> {
+        let (api, kind, name) = self
+            .resolve(&resource.identity)
+            .map_err(DeployError::ManifestApplicationFailed)?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&resource.raw_bytes).map_err(|error| {
+                DeployError::ManifestApplicationFailed(format!(
+                    "Invalid canonical bundle bytes for {kind} {name}: {error}"
+                ))
+            })?;
+        let applied = api
+            .patch(
+                &name,
+                &PatchParams::apply("sailr").force(),
+                &Patch::Apply(value),
+            )
+            .await
+            .map_err(|error| {
+                DeployError::ManifestApplicationFailed(format!(
+                    "Failed to apply {kind} {name}: {error}"
+                ))
+            })?;
+        LOGGER.info(&format!("Applied {kind} {name}"));
+        Ok(applied)
+    }
+
+    async fn restore(
+        &self,
+        identity: &bundle::ResourceIdentity,
+        previous: &DynamicObject,
+    ) -> Result<(), DeployError> {
+        let (api, kind, name) = self
+            .resolve(identity)
+            .map_err(DeployError::ManifestApplicationFailed)?;
+        let mut value = serde_json::to_value(previous).map_err(|error| {
+            DeployError::ManifestApplicationFailed(format!(
+                "Failed to serialize rollback snapshot for {kind} {name}: {error}"
+            ))
+        })?;
+
+        sanitize_snapshot_for_apply(&mut value);
+        api.patch(
+            &name,
+            &PatchParams::apply("sailr-rollback").force(),
+            &Patch::Apply(value),
+        )
+        .await
+        .map_err(|error| {
+            DeployError::ManifestApplicationFailed(format!("{kind} {name}: {error}"))
+        })?;
+
+        LOGGER.info(&format!("[ROLLBACK] restored {kind} {name}"));
+        Ok(())
+    }
+
+    async fn delete(&self, identity: &bundle::ResourceIdentity) -> Result<(), DeployError> {
+        let (api, kind, name) = self
+            .resolve(identity)
+            .map_err(DeployError::ManifestApplicationFailed)?;
+        match api.delete(&name, &DeleteParams::default()).await {
+            Ok(_) => {}
+            Err(kube::Error::Api(response)) if response.code == 404 => {}
+            Err(error) => {
+                return Err(DeployError::ManifestApplicationFailed(format!(
+                    "{kind} {name}: {error}"
+                )));
+            }
+        }
+
+        LOGGER.info(&format!("[ROLLBACK] deleted newly created {kind} {name}"));
+        Ok(())
+    }
+}
+
+pub fn new_deployment_journal() -> SharedDeploymentJournal {
+    Arc::new(Mutex::new(DeploymentJournal::default()))
+}
+
+pub async fn deploy_bundle(
+    deployment_bundle: &bundle::DeploymentBundle,
+    backend: &dyn DeploymentBackend,
+    journal: SharedDeploymentJournal,
+) -> Result<(), DeployError> {
+    match apply_bundle(deployment_bundle, backend, journal.clone()).await {
+        Ok(()) => Ok(()),
+        Err(error) => fail_with_rollback(error, backend, &journal).await,
+    }
+}
+
+pub async fn apply_bundle(
+    deployment_bundle: &bundle::DeploymentBundle,
+    backend: &dyn DeploymentBackend,
+    journal: SharedDeploymentJournal,
+) -> Result<(), DeployError> {
+    {
+        let mut state = journal.lock().map_err(|_| {
+            DeployError::EnvironmentDeploymentFailed(
+                "Deployment journal lock is poisoned".to_string(),
+            )
+        })?;
+        *state = DeploymentJournal::default();
+    }
+
+    for resource in &deployment_bundle.resources {
+        let previous = match backend.get(&resource.identity).await {
+            Ok(previous) => previous,
+            Err(error) => return Err(error),
+        };
+        let applied = match backend.apply(resource).await {
+            Ok(applied) => applied,
+            Err(error) => return Err(error),
+        };
+        let mut state = journal.lock().map_err(|_| {
+            DeployError::EnvironmentDeploymentFailed(
+                "Deployment journal lock is poisoned".to_string(),
+            )
+        })?;
+        let sequence = state.entries.len();
+        state.entries.push(AppliedMutation {
+            sequence,
+            identity: resource.identity.clone(),
+            previous,
+            applied,
+            source_path: resource.source_path.clone(),
+            document_index: resource.document_index,
+            sha256: resource.sha256.clone(),
+        });
+    }
+    Ok(())
+}
+
+async fn fail_with_rollback<T>(
+    deploy_error: DeployError,
+    backend: &dyn DeploymentBackend,
+    journal: &SharedDeploymentJournal,
+) -> Result<T, DeployError> {
+    match rollback_transaction(journal, backend).await {
+        Ok(()) => Err(DeployError::EnvironmentDeploymentFailed(format!(
+            "{deploy_error}; successfully applied resources were restored"
+        ))),
+        Err(rollback_error) => Err(DeployError::EnvironmentDeploymentFailed(format!(
+            "{deploy_error}; automatic rollback also failed: {rollback_error}"
+        ))),
+    }
+}
+
+pub async fn rollback_transaction(
+    journal: &SharedDeploymentJournal,
+    backend: &dyn DeploymentBackend,
+) -> Result<(), DeployError> {
+    let entries = {
+        let mut state = journal.lock().map_err(|_| {
+            DeployError::EnvironmentDeploymentFailed(
+                "Deployment journal lock is poisoned".to_string(),
+            )
+        })?;
+        if state.rollback_attempted {
+            if state.rollback_errors.is_empty() {
+                return Ok(());
+            }
+            return Err(DeployError::EnvironmentDeploymentFailed(format!(
+                "Rollback failed for: {}",
+                state.rollback_errors.join("; ")
+            )));
+        }
+        state.rollback_attempted = true;
+        state.entries.clone()
+    };
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut errors = Vec::new();
+    for snapshot in entries.iter().rev() {
+        let result = if let Some(previous) = &snapshot.previous {
+            backend.restore(&snapshot.identity, previous).await
+        } else {
+            backend.delete(&snapshot.identity).await
+        };
+        if let Err(error) = result {
+            errors.push(error.to_string());
+        }
+    }
+    let mut state = journal.lock().map_err(|_| {
+        DeployError::EnvironmentDeploymentFailed("Deployment journal lock is poisoned".to_string())
+    })?;
+    state.rollback_errors = errors.clone();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(DeployError::EnvironmentDeploymentFailed(format!(
+            "Rollback failed for: {}",
+            errors.join("; ")
+        )))
+    }
+}
+
+pub async fn rollback_transaction_with_timeout(
+    journal: &SharedDeploymentJournal,
+    backend: &dyn DeploymentBackend,
+    timeout: std::time::Duration,
+) -> Result<(), DeployError> {
+    match tokio::time::timeout(timeout, rollback_transaction(journal, backend)).await {
+        Ok(result) => result,
+        Err(_) => {
+            let message = format!("rollback timed out after {} seconds", timeout.as_secs());
+            if let Ok(mut state) = journal.lock() {
+                state.rollback_attempted = true;
+                state.rollback_errors.push(message.clone());
+            }
+            Err(DeployError::EnvironmentDeploymentFailed(message))
+        }
+    }
+}
+
+fn sanitize_snapshot_for_apply(value: &mut serde_json::Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    object.remove("status");
+    if let Some(metadata) = object
+        .get_mut("metadata")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for field in [
+            "creationTimestamp",
+            "generation",
+            "managedFields",
+            "resourceVersion",
+            "selfLink",
+            "uid",
+        ] {
+            metadata.remove(field);
+        }
+    }
+}
 
 /// Applies all valid Kubernetes YAML manifests found recursively in a given path.
 ///
@@ -91,6 +439,32 @@ fn run_service_hooks(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeploymentHookStage {
+    Pre,
+    Post,
+}
+
+pub fn run_environment_hooks(
+    env: &Environment,
+    stage: DeploymentHookStage,
+) -> Result<(), DeployError> {
+    for service in &env.services {
+        let hook = service.hooks.as_ref().and_then(|hooks| match stage {
+            DeploymentHookStage::Pre => hooks.pre_deploy.as_ref(),
+            DeploymentHookStage::Post => hooks.post_deploy.as_ref(),
+        });
+        if let Some(hook) = hook {
+            let label = match stage {
+                DeploymentHookStage::Pre => "pre_deploy",
+                DeploymentHookStage::Post => "post_deploy",
+            };
+            run_service_hooks(label, hook, env, service)?;
+        }
+    }
+    Ok(())
+}
+
 /// Helper function to deserialize a YAML document and delete the resource if it's a target kind.
 ///
 /// This avoids code duplication for deleting Deployments, DaemonSets, etc.
@@ -142,12 +516,12 @@ pub async fn deploy(
     env_name: &str,
     strategy: DeploymentStrategy,
 ) -> Result<(), DeployError> {
-    LOGGER.info(&format!(
-        "Deploying to {} for {} with strategy {:?}",
-        ctx, env_name, strategy
-    ));
+    LOGGER.header(
+        "Deploy",
+        &format!("{} → {} ({:?})", env_name, ctx, strategy),
+    );
 
-    let env = Environment::load_from_file(&env_name.to_string()).map_err(|e| {
+    let env = Environment::load_from_file(env_name).map_err(|e| {
         DeployError::EnvironmentDeploymentFailed(format!(
             "Failed to load environment '{}': {}",
             env_name, e
@@ -239,10 +613,338 @@ pub async fn deploy(
         applied_total += applied.len();
     }
 
-    LOGGER.info(&format!(
-        "Deployed successfully! Applied {} manifests.",
-        applied_total
-    ));
+    LOGGER.status(
+        "Finished",
+        &format!(
+            "deployed successfully! Applied {} manifests.",
+            applied_total
+        ),
+        "green",
+    );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod transactional_tests {
+    use super::*;
+    use sha2::Digest;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[derive(Default)]
+    struct FakeDeploymentBackend {
+        operations: Mutex<Vec<String>>,
+        objects: Mutex<BTreeMap<String, DynamicObject>>,
+        fail_apply: Option<String>,
+        fail_rollback: BTreeSet<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl DeploymentBackend for FakeDeploymentBackend {
+        async fn get(
+            &self,
+            identity: &bundle::ResourceIdentity,
+        ) -> Result<Option<DynamicObject>, DeployError> {
+            Ok(self.objects.lock().unwrap().get(&identity.name).cloned())
+        }
+
+        async fn apply(
+            &self,
+            resource: &bundle::DeploymentResource,
+        ) -> Result<DynamicObject, DeployError> {
+            let name = resource.identity.name.clone();
+            self.operations
+                .lock()
+                .unwrap()
+                .push(format!("apply:{name}"));
+            if self.fail_apply.as_deref() == Some(name.as_str()) {
+                return Err(DeployError::ManifestApplicationFailed(format!(
+                    "apply failed for {name}"
+                )));
+            }
+            let applied = resource.object.clone();
+            self.objects.lock().unwrap().insert(name, applied.clone());
+            Ok(applied)
+        }
+
+        async fn restore(
+            &self,
+            identity: &bundle::ResourceIdentity,
+            previous: &DynamicObject,
+        ) -> Result<(), DeployError> {
+            let name = identity.name.clone();
+            self.operations
+                .lock()
+                .unwrap()
+                .push(format!("restore:{name}"));
+            if self.fail_rollback.contains(&name) {
+                return Err(DeployError::ManifestApplicationFailed(format!(
+                    "restore failed for {name}"
+                )));
+            }
+            self.objects.lock().unwrap().insert(name, previous.clone());
+            Ok(())
+        }
+
+        async fn delete(&self, identity: &bundle::ResourceIdentity) -> Result<(), DeployError> {
+            let name = identity.name.clone();
+            self.operations
+                .lock()
+                .unwrap()
+                .push(format!("delete:{name}"));
+            if self.fail_rollback.contains(&name) {
+                return Err(DeployError::ManifestApplicationFailed(format!(
+                    "delete failed for {name}"
+                )));
+            }
+            self.objects.lock().unwrap().remove(&name);
+            Ok(())
+        }
+    }
+
+    fn object(name: &str) -> DynamicObject {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": name, "namespace": "default"},
+            "data": {"key": "value"}
+        }))
+        .unwrap()
+    }
+
+    fn resource(name: &str) -> bundle::DeploymentResource {
+        let object = object(name);
+        let raw_bytes = serde_json::to_vec(&object).unwrap();
+        bundle::DeploymentResource {
+            source_path: format!("{name}.yaml"),
+            document_index: 0,
+            identity: bundle::ResourceIdentity {
+                api_version: "v1".to_string(),
+                kind: "ConfigMap".to_string(),
+                namespace: Some("default".to_string()),
+                name: name.to_string(),
+            },
+            sha256: hex::encode(sha2::Sha256::digest(&raw_bytes)),
+            raw_bytes,
+            object,
+        }
+    }
+
+    fn deployment_bundle(names: &[&str]) -> bundle::DeploymentBundle {
+        bundle::DeploymentBundle {
+            schema: bundle::DEPLOYMENT_BUNDLE_SCHEMA.to_string(),
+            profile: "test".to_string(),
+            environment: "test".to_string(),
+            target: bundle::DeploymentTarget {
+                context: "test".to_string(),
+                namespace: "default".to_string(),
+            },
+            resources: names.iter().map(|name| resource(name)).collect(),
+            plan_hash: "0".repeat(64),
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_failure_journals_and_rolls_back_only_successful_mutations() {
+        let backend = FakeDeploymentBackend {
+            fail_apply: Some("third".to_string()),
+            ..Default::default()
+        };
+        backend
+            .objects
+            .lock()
+            .unwrap()
+            .insert("first".to_string(), object("first"));
+        let journal = new_deployment_journal();
+        let result = deploy_bundle(
+            &deployment_bundle(&["first", "second", "third", "fourth"]),
+            &backend,
+            journal.clone(),
+        )
+        .await;
+        assert!(result.is_err());
+        let state = journal.lock().unwrap().clone();
+        assert_eq!(state.entries.len(), 2);
+        assert!(state.rollback_attempted);
+        assert_eq!(
+            *backend.operations.lock().unwrap(),
+            vec![
+                "apply:first",
+                "apply:second",
+                "apply:third",
+                "delete:second",
+                "restore:first"
+            ]
+        );
+        assert!(!backend.objects.lock().unwrap().contains_key("second"));
+        assert!(!backend.objects.lock().unwrap().contains_key("fourth"));
+    }
+
+    #[tokio::test]
+    async fn rollback_collects_backend_failures_without_stopping() {
+        let backend = FakeDeploymentBackend {
+            fail_apply: Some("third".to_string()),
+            fail_rollback: BTreeSet::from(["second".to_string()]),
+            ..Default::default()
+        };
+        backend
+            .objects
+            .lock()
+            .unwrap()
+            .insert("first".to_string(), object("first"));
+        let journal = new_deployment_journal();
+        let result = deploy_bundle(
+            &deployment_bundle(&["first", "second", "third"]),
+            &backend,
+            journal.clone(),
+        )
+        .await;
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("delete failed for second"));
+        assert_eq!(
+            *backend.operations.lock().unwrap(),
+            vec![
+                "apply:first",
+                "apply:second",
+                "apply:third",
+                "delete:second",
+                "restore:first"
+            ]
+        );
+        assert_eq!(journal.lock().unwrap().rollback_errors.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deploy_uses_bundle_bytes_after_source_file_changes() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: config\ndata:\n  value: approved\n",
+        )
+        .expect("approved manifest");
+        let bundle = bundle::build_deployment_bundle(root.path(), "test", "test", "ctx", "default")
+            .expect("bundle");
+        let approved_digest = bundle.resources[0].sha256.clone();
+        std::fs::write(
+            &path,
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: config\ndata:\n  value: tampered\n",
+        )
+        .expect("tampered manifest");
+
+        let backend = FakeDeploymentBackend::default();
+        let journal = new_deployment_journal();
+        deploy_bundle(&bundle, &backend, journal.clone())
+            .await
+            .expect("deploy bundle");
+        let applied = backend
+            .objects
+            .lock()
+            .unwrap()
+            .get("config")
+            .cloned()
+            .expect("applied object");
+        let value = serde_json::to_value(applied).expect("applied json");
+        assert_eq!(value["data"]["value"], "approved");
+        assert_eq!(journal.lock().unwrap().entries[0].sha256, approved_digest);
+    }
+
+    #[tokio::test]
+    async fn second_rollback_call_does_not_repeat_mutations() {
+        let backend = FakeDeploymentBackend {
+            fail_apply: Some("second".to_string()),
+            ..Default::default()
+        };
+        let journal = new_deployment_journal();
+        let _ = deploy_bundle(
+            &deployment_bundle(&["first", "second"]),
+            &backend,
+            journal.clone(),
+        )
+        .await;
+        let operations_len_after_first_rollback = backend.operations.lock().unwrap().len();
+
+        let result = rollback_transaction(&journal, &backend).await;
+        assert!(result.is_ok());
+
+        let operations_len_after_second_rollback = backend.operations.lock().unwrap().len();
+        assert_eq!(
+            operations_len_after_first_rollback,
+            operations_len_after_second_rollback
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_404_delete_is_treated_as_success() {
+        let backend = FakeDeploymentBackend::default();
+        let journal = new_deployment_journal();
+        {
+            let mut state = journal.lock().unwrap();
+            state.entries.push(AppliedMutation {
+                sequence: 0,
+                identity: bundle::ResourceIdentity {
+                    api_version: "v1".to_string(),
+                    kind: "ConfigMap".to_string(),
+                    namespace: Some("default".to_string()),
+                    name: "first".to_string(),
+                },
+                previous: None,
+                applied: object("first"),
+                source_path: "first.yaml".to_string(),
+                document_index: 0,
+                sha256: "hash".to_string(),
+            });
+        }
+
+        let result = rollback_transaction(&journal, &backend).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn journal_excludes_failed_apply() {
+        let backend = FakeDeploymentBackend {
+            fail_apply: Some("second".to_string()),
+            ..Default::default()
+        };
+        let journal = new_deployment_journal();
+        let _ = deploy_bundle(
+            &deployment_bundle(&["first", "second", "third"]),
+            &backend,
+            journal.clone(),
+        )
+        .await;
+
+        let state = journal.lock().unwrap();
+        let applied_names: Vec<String> = state
+            .entries
+            .iter()
+            .map(|e| e.identity.name.clone())
+            .collect();
+        assert_eq!(applied_names, vec!["first".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn journal_excludes_resources_after_failed_apply() {
+        let backend = FakeDeploymentBackend {
+            fail_apply: Some("second".to_string()),
+            ..Default::default()
+        };
+        let journal = new_deployment_journal();
+        let _ = deploy_bundle(
+            &deployment_bundle(&["first", "second", "third"]),
+            &backend,
+            journal.clone(),
+        )
+        .await;
+
+        let state = journal.lock().unwrap();
+        let applied_names: Vec<String> = state
+            .entries
+            .iter()
+            .map(|e| e.identity.name.clone())
+            .collect();
+        assert!(!applied_names.contains(&"third".to_string()));
+    }
 }

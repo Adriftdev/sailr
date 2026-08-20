@@ -40,6 +40,8 @@ Initializes a new Sailr environment, creating its directory structure (e.g., `./
     sailr init --name staging --registry quay.io/my-company --provider Aws --region us-east-1
     ```
 *   **Note on Default Service:** The `sailr init` command also creates a default "sample-app" service. This includes generating basic Kubernetes manifest templates (Deployment, Service, ConfigMap) in `k8s/templates/sample-app/` and adding a corresponding service entry to the new environment's `config.toml`. This makes the newly initialized environment immediately runnable and provides a quick way to demonstrate Sailr's capabilities.
+*   Use `sailr init --name dev --engine runkernel` to opt a new environment into the deterministic build backend. Omitting `--engine` preserves the Roomservice default.
+*   Use `sailr migrate --name dev --engine runkernel` to migrate to schema 0.5.0 and opt in atomically. A migration without `--engine` does not change backend selection.
 
 ---
 
@@ -125,6 +127,9 @@ Tears down the infrastructure for an environment.
 
 ### `sailr deploy`
 
+> [!NOTE]
+> `sailr deploy` uses legacy apply behaviour. Transactional deployment guarantees, bundle validation, and automated rollback apply exclusively to the newer `sailr workflow run` command.
+
 Deploys an existing, generated environment to a Kubernetes cluster. This command applies the manifests found in `./k8s/generated/<NAME>/`.
 
 *   **Usage:** `sailr deploy --name <NAME> --context <CONTEXT> [--strategy <STRATEGY>]`
@@ -178,6 +183,10 @@ Builds container images for services defined in an environment's `config.toml` t
 *   **Options:**
     *   `-n, --name <NAME>`: (Required) Name of the environment whose services need building.
     *   `-f, --force`: Force all services with a `build` configuration to rebuild, ignoring any cached build status or previous image digests.
+        * With runkernel, this bypasses cache reads and writes for executable
+          service phase tasks without deleting prior cache state.
+    *   `--engine <ENGINE>`: Selects `roomservice` or `runkernel`. Roomservice
+        remains the default unless configuration or this flag opts in.
     *   `-i, --ignore <SERVICES>`: Comma-separated list of service names to ignore during the build process.
 *   **Examples:**
     ```bash
@@ -217,6 +226,100 @@ A comprehensive command that performs a sequence of actions:
     # Run 'go' using a Rolling update strategy for deployment
     sailr go --name production --context prod-cluster --strategy Rolling
     ```
+
+---
+
+### `sailr workflow`
+
+Runs deterministic workflow profiles from `sailr.workflow.toml`.
+
+* `sailr workflow init <PROFILE> --environment <ENV> [--preset
+  build|deploy|portable-release]` validates an existing environment and safely
+  adds a profile to `sailr.workflow.toml`. It refuses profile collisions and
+  does not contact Docker, Git, registries, or Kubernetes. Use `--print` to
+  preview the complete resulting configuration without writing it, and
+  `--config <FILE>` to target another workflow file. Portable releases require
+  `--context`; signature approval additionally requires a file containing only
+  the base64-encoded trusted public key:
+
+  ```bash
+  sailr workflow init release-production \
+    --environment production \
+    --preset portable-release \
+    --context production-cluster \
+    --namespace production \
+    --approval external
+  ```
+
+  Initialization validates the profile and environment policy but does not
+  require every service to own an image-bearing workload. Exact promoted-image
+  binding is checked during `workflow prepare`. Templates may write variables
+  as either `{{service_image}}` or `{{ service_image }}`.
+
+  Only services with a `build` configuration participate in publication and
+  promotion image binding. External dependencies without a build step keep
+  vendor-owned references in their templates, for example
+  `image: emqx/nanomq:{{service_version}}`. Sailr emits a non-fatal warning when
+  an external service's workload image omits `{{service_version}}`.
+
+* `sailr workflow plan <PROFILE> [--format text|json]` builds and validates the
+  actual runkernel graph and predicts cache eligibility. Text output uses
+  `[CACHE]`, `[RUN]`, and `[SKIP]`.
+* `sailr workflow graph <PROFILE> --format text|mermaid` renders the same typed
+  plan, including the post-settlement Sailr finalizer chain.
+* `sailr workflow explain <PROFILE> --task <TASK_ID>` shows a task's typed kind,
+  phase, effects, dependencies, and cache policy.
+* `sailr workflow inspect <PROFILE>` shows the deployment target, explicit
+  environment policy, forced cache bypass, signer fingerprint, and finalizers.
+* `sailr workflow run <PROFILE> --non-interactive --apply [--release-id <ID>]`
+  executes a mutating profile with release locking, rollout verification, and
+  transactional rollback after its configured safety checks.
+* `sailr publication validate <REPORT>` validates a successful immutable-image
+  publication and prints structured JSON.
+* `sailr promote plan --from-report <REPORT> [--from-report <REPORT> ...] --to
+  <ENV> --out <FILE>` creates a deterministic, complete digest promotion plan.
+  Use mutually exclusive `--from-manifest <FILE>` for a
+  `sailr.release-candidates/v1` selection whose relative paths are bound to
+  canonical publication-report digests.
+* `sailr workflow prepare <PROFILE> --promotion-plan <FILE> --out <DIR>` writes
+  an immutable deployment bundle, offline diff, plan, and preparation evidence.
+* `sailr workflow apply <PROFILE> --bundle <FILE> --non-interactive --apply`
+  revalidates and applies only the canonical bytes stored in the bundle.
+* `sailr flow generate-ci [FLOW] --mode print|fragment|create|merge` generates a
+  capability-aware CircleCI release workflow. Schedule setup remains external.
+* `sailr capabilities --format json` reports supported schemas, release
+  features, Sailr version, and build revision for automation and agent tooling.
+
+Workflow step modes grant capability while CLI `--apply` grants consent for one
+invocation. Registry push requires `push=run` plus `--apply`. Kubernetes mutation
+also requires `deploy=run` and profile `apply=true`; invalid deploy capability is
+rejected before earlier build or push tasks execute.
+
+Signature profiles configure a trusted Ed25519 public key under
+`[workflow.<profile>.signature]`. The first unsigned run writes
+`.sailr/audit/<profile>/deployment-plan.json` and a workflow report, then stops
+before cluster mutation. Sign
+`sailr-deployment-plan-v1:<plan_hash>` externally and retry with only the
+base64 raw signature in `DEPLOY_APPROVAL_SIG`. See the
+[deterministic deployment audit gate](workflow-audit-gate.md).
+
+Portable preparation rejects pre-deployment hooks and binds post-deployment
+hooks into the immutable bundle. Keep database migrations in explicit,
+separately approved CI stages.
+
+For an in-process workflow with `build = "run"`, `push = "run"`, and
+`generate = "run"`, `{{service_image}}` resolves to the exact target image
+chosen by the push plan. An explicitly configured `[[service]].version` is used
+unchanged by build, push, `{{service_version}}`, and `{{service_image}}`. When a
+build-backed service omits `version`, Sailr derives an immutable seven-character
+tag from its build fingerprint and uses that same tag in legacy `build`,
+`generate`, and `go` as well as runkernel workflows. The derived value is never
+written back to TOML.
+
+`workflow.<profile>.namespace` is the generation default for services that do
+not declare `[[service]].namespace`; an explicit service namespace still wins.
+Sailr does not implicitly create namespaces, so any explicit non-default
+namespace must already exist or be included as a `Namespace` manifest.
 
 ---
 

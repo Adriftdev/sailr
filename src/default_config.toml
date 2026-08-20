@@ -7,3 +7,67 @@ registry = "{{default_registry}}"
 
 service = []
 environment_variables = []
+
+[workflow.local-deploy]
+environment = "local"
+mode = "go"
+interactive = true
+build = "plan"
+generate = "run"
+deploy = "run"
+deploy_context = "minikube"
+namespace = "default"
+approval = "prompt"
+apply = true
+report = "text"
+[workflow.ci-deploy-plan]
+environment = "local"
+mode = "deploy"
+interactive = false
+build = "plan"
+generate = "run"
+deploy = "plan"
+deploy_context = "none"
+namespace = "default"
+approval = "none"
+apply = false
+report = "both"
+
+[workflow.staging-deploy]
+environment = "staging"
+mode = "deploy"
+interactive = false
+build = "plan"
+generate = "run"
+deploy = "run"
+deploy_context = "staging"
+namespace = "default"
+approval = "external"
+apply = true
+report = "both"
+
+[workflow.ci-build-push-plan]
+environment = "staging"
+mode = "build"
+interactive = false
+build = "plan"
+push = "plan"
+generate = "disabled"
+deploy = "disabled"
+approval = "none"
+apply = false
+report = "both"
+
+[workflow.ci-build-push]
+environment = "staging"
+mode = "build"
+interactive = false
+apply = true
+approval = "external"
+build = "run"
+push = "run"
+generate = "disabled"
+deploy = "disabled"
+approval = "external"
+apply = true
+report = "both"

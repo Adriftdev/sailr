@@ -49,6 +49,9 @@ pub enum CliError {
 
     #[error("Deploy error: {0}")]
     DeployError(#[from] DeployError),
+
+    #[error("Workflow error: {0}")]
+    WorkflowError(#[from] crate::workflow::error::WorkflowError),
 }
 
 #[derive(Error, Debug)]

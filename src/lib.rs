@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, path::Path};
 
 use environment::{Environment, Service};
 use filesystem::FileSystemManager;
@@ -9,7 +9,6 @@ use templates::TemplateManager;
 use utils::replace_variables;
 
 use once_cell::sync::Lazy;
-use scribe_rust::{self, Logger};
 
 pub mod builder;
 pub mod cli;
@@ -21,15 +20,23 @@ pub mod filesystem;
 pub mod generate;
 pub mod infra;
 pub mod interactive;
+pub mod oci;
 pub mod orchestrator;
 pub mod plan;
 pub mod provider;
 pub mod roomservice;
 pub mod templates;
 pub mod tui;
+pub mod ui;
 pub mod utils;
+pub mod workflow;
 
-pub static LOGGER: Lazy<Arc<Logger>> = Lazy::new(Logger::default);
+pub static LOGGER: Lazy<ui::SailrUI> = Lazy::new(|| ui::SailrUI::new(false, false));
+pub const RUNKERNEL_CACHE_ROOT: &str = ".sailr/cache/runkernel";
+
+pub(crate) fn new_runkernel_pipeline(name: impl Into<String>) -> runkernel::Pipeline {
+    runkernel::Pipeline::new(name).cache_root(RUNKERNEL_CACHE_ROOT)
+}
 
 #[derive(Debug, Deserialize)]
 pub struct GlobalVars {
@@ -76,27 +83,91 @@ pub fn load_global_vars() -> Result<BTreeMap<String, String>, Box<dyn std::error
     Ok(vars)
 }
 
-pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
+pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) -> anyhow::Result<()> {
+    generate_with_context(name, env, services, &GenerationContext::default())
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct GenerationContext {
+    pub service_images: std::collections::BTreeMap<String, String>,
+    pub deployment_date: Option<String>,
+    pub default_namespace: Option<String>,
+}
+
+pub fn generate_with_image_overrides(
+    name: &str,
+    env: &Environment,
+    services: Vec<&Service>,
+    image_overrides: &std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    generate_with_context(
+        name,
+        env,
+        services,
+        &GenerationContext {
+            service_images: image_overrides.clone(),
+            deployment_date: None,
+            default_namespace: None,
+        },
+    )
+}
+
+pub fn generate_with_context(
+    name: &str,
+    env: &Environment,
+    services: Vec<&Service>,
+    context: &GenerationContext,
+) -> anyhow::Result<()> {
+    let services_needing_images = services
+        .iter()
+        .copied()
+        .filter(|service| {
+            service.build.is_some()
+                && !service.has_explicit_version()
+                && !context.service_images.contains_key(&service.name)
+        })
+        .collect::<Vec<_>>();
+    let mut resolved_images = context.service_images.clone();
+    if !services_needing_images.is_empty() {
+        resolved_images.extend(
+            crate::builder::generation_image_overrides(env, &services_needing_images)
+                .map_err(anyhow::Error::msg)?,
+        );
+    }
+
+    for service in services
+        .iter()
+        .filter(|service| service.build.is_none() && !service.has_explicit_version())
+    {
+        LOGGER.warn(&format!(
+            "External service '{}' has no explicit version; {{service_version}} and {{service_image}} use the legacy 'latest' fallback",
+            service.name
+        ));
+    }
+
     let mut template_manager = TemplateManager::new();
-    let (templates, config_maps) = match template_manager.read_templates(Some(env)) {
-        Ok((templates, config_maps)) => (templates, config_maps),
-        Err(e) => {
-            println!("Error: {:?}", e);
-            return;
-        }
-    };
+    let (templates, config_maps) = template_manager
+        .read_templates(Some(env))
+        .map_err(|e| anyhow::anyhow!("Failed to read templates: {:?}", e))?;
 
     let mut generator = Generator::new();
 
     for service in services {
-        let variables = &env.get_variables(service);
+        let variables = &env
+            .get_variables_with_context_overrides(
+                service,
+                resolved_images.get(&service.name).map(String::as_str),
+                context.deployment_date.as_deref(),
+                context.default_namespace.as_deref(),
+            )
+            .map_err(|e| anyhow::anyhow!("Registry config error: {}", e))?;
         for template in &templates {
             if template.name != service.name && template.name != service.get_path() {
                 continue;
             }
             let content = template_manager
                 .replace_variables(template, variables)
-                .unwrap();
+                .map_err(|e| anyhow::anyhow!("Failed to replace variables: {:?}", e))?;
 
             generator.add_template(template, content)
         }
@@ -108,16 +179,17 @@ pub fn generate(name: &str, env: &Environment, services: Vec<&Service>) {
             generator.add_config_map(config);
         }
     }
-    let res = generator.generate(&name.to_string());
-    if let Err(e) = res {
-        println!(": {:?}", e);
-    }
+    generator
+        .generate(&name.to_string())
+        .map_err(|e| anyhow::anyhow!("Failed to generate templates: {:?}", e))?;
+    Ok(())
 }
 
 pub fn create_default_env_config(
     name: String,
     config_template: Option<String>,
     registry: Option<String>,
+    engine: Option<environment::BuildEngine>,
 ) {
     let mut vars = load_global_vars().unwrap();
 
@@ -143,7 +215,8 @@ pub fn create_default_env_config(
             .read_file(&config.1, Some(&"".to_string()))
             .unwrap();
 
-        let generated_config = replace_variables(content.clone(), vars);
+        let generated_config =
+            configure_build_engine(&replace_variables(content.clone(), vars), engine);
 
         file_manager
             .create_file(
@@ -160,7 +233,8 @@ pub fn create_default_env_config(
             .read_file(&config_template.clone(), Some(&"".to_string()))
             .unwrap();
 
-        let generated_config = replace_variables(content.clone(), vars);
+        let generated_config =
+            configure_build_engine(&replace_variables(content.clone(), vars), engine);
 
         file_manager
             .create_file(
@@ -177,7 +251,8 @@ pub fn create_default_env_config(
             "config.toml".to_string(),
             include_str!("default_config.toml").to_string(),
         );
-        let generated_config = replace_variables(default_env_config.1, vars);
+        let generated_config =
+            configure_build_engine(&replace_variables(default_env_config.1, vars), engine);
 
         file_manager
             .create_file(
@@ -190,6 +265,20 @@ pub fn create_default_env_config(
             )
             .unwrap();
     }
+}
+
+fn configure_build_engine(contents: &str, engine: Option<environment::BuildEngine>) -> String {
+    let Some(engine) = engine else {
+        return contents.to_string();
+    };
+    let mut document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .expect("generated environment config must be valid TOML");
+    document["build"]["engine"] = toml_edit::value(match engine {
+        environment::BuildEngine::Roomservice => "roomservice",
+        environment::BuildEngine::Runkernel => "runkernel",
+    });
+    document.to_string()
 }
 
 pub fn create_default_env_infra(
@@ -207,13 +296,24 @@ pub fn create_default_env_infra(
     vars.insert("name".to_string(), name.clone());
 
     if let Some(r) = registry {
-        println!("Registry: {:?}", Some(&r));
         vars.insert("default_registry".to_string(), r);
     }
 
-    println!("Vars: {:?}", vars);
-
     if let Some(config_template) = infra_template {
         Infra::use_template(&name, &config_template, &mut vars);
+    }
+}
+
+#[cfg(test)]
+mod runkernel_cache_contract_tests {
+    #[test]
+    fn sailr_pipelines_keep_runkernel_cache_under_sailr() {
+        let pipeline = super::new_runkernel_pipeline("cache-contract");
+        assert_eq!(
+            pipeline.cache_root,
+            std::path::PathBuf::from(super::RUNKERNEL_CACHE_ROOT)
+        );
+        assert!(super::RUNKERNEL_CACHE_ROOT.starts_with(".sailr/"));
+        assert!(!super::RUNKERNEL_CACHE_ROOT.starts_with(".runkernel/"));
     }
 }

@@ -1,0 +1,23 @@
+schema_version = "0.5.0"
+name = "local"
+log_level = "info"
+domain = "local.dev"
+default_replicas = 1
+registry = "local.registry"
+
+[[service]]
+name = "hello-sailr"
+version = "latest"
+path = "hello-sailr"
+
+
+[[service]]
+name = "ci-build-hello"
+version = "ci"
+path = "examples/ci-build/hello"
+
+[service.build]
+path = "examples/ci-build/hello"
+include = ["Dockerfile", "index.html"]
+build_command = "docker build -t hello-sailr:ci ."
+push_command = "true"

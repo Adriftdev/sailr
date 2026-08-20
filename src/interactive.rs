@@ -1,8 +1,7 @@
 use crate::orchestrator::RoomError;
 use crate::tui::app::{Action, App, AppAction, AppState, PendingExternalAction};
-use crate::{cli::InteractiveArgs, deployment::k8sm8, errors::CliError};
+use crate::{cli::InteractiveArgs, deployment::k8sm8, errors::CliError, LOGGER};
 use crossterm::event::{self, Event, KeyCode};
-use scribe_rust::log;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -35,12 +34,12 @@ pub async fn main_menu(args: InteractiveArgs) -> Result<(), CliError> {
         {
             println!("\nExecuting {}...", action.as_str());
             if let Err(e) = run_external_action(args.clone(), action.clone(), items, input).await {
-                log(scribe_rust::Color::Red, "Error", &format!("Failed: {}", e));
+                LOGGER.status("Error", &format!("Failed: {}", e), "red");
             } else {
-                log(
-                    scribe_rust::Color::Green,
+                LOGGER.status(
                     "Success",
                     &format!("Command '{}' executed successfully", action.as_str()),
+                    "green",
                 );
             }
             println!("\nPress Enter to return to menu...");
@@ -297,14 +296,15 @@ async fn run_external_action(
                 .await
                 .map_err(|e| CliError::Other(e.to_string()))?;
             for event in events {
-                log(
-                    scribe_rust::Color::Green,
-                    &event.metadata.name.unwrap_or_default(),
+                LOGGER.status(
+                    "Event",
                     &format!(
-                        "\nReason: {}\nMessage: {}\n",
+                        "{} - Reason: {} Message: {}",
+                        event.metadata.name.unwrap_or_default(),
                         event.reason.unwrap_or_default(),
                         event.message.unwrap_or_default()
                     ),
+                    "green",
                 );
             }
         }

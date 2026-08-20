@@ -113,9 +113,59 @@ pub fn get_current_timestamp() -> String {
 }
 
 pub fn replace_variables(content: String, variables: BTreeMap<String, String>) -> String {
-    let mut new_content = content.clone();
+    let mut new_content = content;
     for (key, value) in variables {
-        new_content = new_content.replace(&format!("{{{{{}}}}}", key), &value);
+        new_content = replace_template_variable(&new_content, &key, &value);
     }
     new_content
+}
+
+pub fn contains_template_variable(content: &str, key: &str) -> bool {
+    template_variable_ranges(content).any(|(start, end)| content[start + 2..end - 2].trim() == key)
+}
+
+pub fn replace_template_variable(content: &str, key: &str, value: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut cursor = 0;
+    for (start, end) in template_variable_ranges(content) {
+        output.push_str(&content[cursor..start]);
+        if content[start + 2..end - 2].trim() == key {
+            output.push_str(value);
+        } else {
+            output.push_str(&content[start..end]);
+        }
+        cursor = end;
+    }
+    output.push_str(&content[cursor..]);
+    output
+}
+
+fn template_variable_ranges(content: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let mut cursor = 0;
+    std::iter::from_fn(move || {
+        let start = content[cursor..].find("{{").map(|offset| cursor + offset)?;
+        let body_start = start + 2;
+        let Some(close_offset) = content[body_start..].find("}}") else {
+            cursor = content.len();
+            return None;
+        };
+        let end = body_start + close_offset + 2;
+        cursor = end;
+        Some((start, end))
+    })
+}
+
+#[cfg(test)]
+mod template_variable_tests {
+    use super::*;
+
+    #[test]
+    fn template_variables_allow_whitespace_without_replacing_unknown_keys() {
+        let input = "{{service_image}} {{ service_image }} {{  service_image\t}} {{other}}";
+        assert!(contains_template_variable(input, "service_image"));
+        assert_eq!(
+            replace_template_variable(input, "service_image", "image@sha256:digest"),
+            "image@sha256:digest image@sha256:digest image@sha256:digest {{other}}"
+        );
+    }
 }

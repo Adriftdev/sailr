@@ -161,7 +161,7 @@ pub async fn apply(
         } else {
             LOGGER.error(&format!(
                 "cannot apply object without valid TypeMeta {:?}",
-                &obj
+                obj
             ));
             LOGGER.error("please add apiVersion and kind to the object");
             continue;
@@ -213,7 +213,7 @@ pub fn diff_resources(current: &Value, new: &Value) -> Option<String> {
     Some(res)
 }
 
-fn dynamic_api(
+pub(crate) fn dynamic_api(
     ar: ApiResource,
     caps: ApiCapabilities,
     client: Client,
