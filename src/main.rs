@@ -693,6 +693,25 @@ async fn main() -> Result<(), CliError> {
         Commands::Workflow(cmd) => handle_workflow(cmd).await?,
         Commands::Flow(cmd) => handle_flow(cmd).await?,
         Commands::Publication(cmd) => match cmd {
+            sailr::cli::PublicationCommands::Init(args) => {
+                sailr::workflow::init::run(sailr::cli::WorkflowInitArgs {
+                    profile: args.profile,
+                    environment: args.environment,
+                    preset: sailr::cli::WorkflowInitPreset::Publication,
+                    context: None,
+                    namespace: None,
+                    approval: None,
+                    trusted_public_key_file: None,
+                    print: args.print,
+                    config: args.config,
+                })
+                .map_err(CliError::Other)?;
+            }
+            sailr::cli::PublicationCommands::Run(args) => {
+                sailr::workflow::publication::run(args)
+                    .await
+                    .map_err(CliError::Other)?;
+            }
             sailr::cli::PublicationCommands::Validate(args) => {
                 sailr::workflow::publication::validate_to_stdout(&args.report)
                     .map_err(CliError::Other)?;

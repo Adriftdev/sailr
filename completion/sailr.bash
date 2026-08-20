@@ -184,6 +184,12 @@ _sailr() {
             sailr__help__promote,plan)
                 cmd="sailr__help__promote__plan"
                 ;;
+            sailr__help__publication,init)
+                cmd="sailr__help__publication__init"
+                ;;
+            sailr__help__publication,run)
+                cmd="sailr__help__publication__run"
+                ;;
             sailr__help__publication,validate)
                 cmd="sailr__help__publication__validate"
                 ;;
@@ -253,11 +259,23 @@ _sailr() {
             sailr__publication,help)
                 cmd="sailr__publication__help"
                 ;;
+            sailr__publication,init)
+                cmd="sailr__publication__init"
+                ;;
+            sailr__publication,run)
+                cmd="sailr__publication__run"
+                ;;
             sailr__publication,validate)
                 cmd="sailr__publication__validate"
                 ;;
             sailr__publication__help,help)
                 cmd="sailr__publication__help__help"
+                ;;
+            sailr__publication__help,init)
+                cmd="sailr__publication__help__init"
+                ;;
+            sailr__publication__help,run)
+                cmd="sailr__publication__help__run"
                 ;;
             sailr__publication__help,validate)
                 cmd="sailr__publication__help__validate"
@@ -1195,8 +1213,36 @@ _sailr() {
             return 0
             ;;
         sailr__help__publication)
-            opts="validate"
+            opts="init run validate"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sailr__help__publication__init)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sailr__help__publication__run)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1763,7 +1809,7 @@ _sailr() {
             return 0
             ;;
         sailr__publication)
-            opts="-q -v -h -V --quiet --verbose --help --version validate help"
+            opts="-q -v -h -V --quiet --verbose --help --version init run validate help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1777,7 +1823,7 @@ _sailr() {
             return 0
             ;;
         sailr__publication__help)
-            opts="validate help"
+            opts="init run validate help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1804,6 +1850,34 @@ _sailr() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        sailr__publication__help__init)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sailr__publication__help__run)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         sailr__publication__help__validate)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -1811,6 +1885,54 @@ _sailr() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sailr__publication__init)
+            opts="-q -v -h -V --environment --print --config --quiet --verbose --help --version <PROFILE>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --environment)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        sailr__publication__run)
+            opts="-q -v -h -V --only --ignore --apply --out --quiet --verbose --help --version <PROFILE>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --only)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --ignore)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --out)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -2124,7 +2246,7 @@ _sailr() {
                     return 0
                     ;;
                 --preset)
-                    COMPREPLY=($(compgen -W "build deploy portable-release" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "build publication deploy portable-release" -- "${cur}"))
                     return 0
                     ;;
                 --context)

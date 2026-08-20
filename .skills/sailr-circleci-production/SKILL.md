@@ -8,6 +8,7 @@ description: "Implement production deployment flows using CircleCI and Sailr. Us
 This skill generates and maintains production delivery flows using CircleCI and Sailr direct push.
 
 Start by running `sailr capabilities --format json`. Require `publication_consumption`,
+`publication_execution`,
 `multi_report_promotion`, `portable_deployment_bundle`, `publication_flow_generation`,
 `release_flow_generation`, `circleci_generation`, `rollout_verification`, and `locking`.
 If any capability is absent, stop and explain the installed version mismatch.
@@ -21,7 +22,8 @@ Activate this skill when the user asks to:
 
 ## 2. Target Flow
 The standard production flow is:
-1. **Publication**: Commits to `main` build and push immutable images.
+1. **Publication**: Commits to `main` run `sailr publication run <profile> --apply`, which
+   builds and pushes immutable images and validates the generated report.
 2. **Release Schedule**: A cron schedule triggers the release workflow.
 3. **Candidate Selection**: Use an adapter to select reports and write a digest-bound manifest.
 4. **Plan**: Validate the publication, create a promotion plan, and run `workflow prepare`.

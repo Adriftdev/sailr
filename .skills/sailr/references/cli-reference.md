@@ -31,6 +31,8 @@
 * **Generate CI configuration**: `sailr workflow generate-ci <PROFILE> --provider github`
 
 ## Release Contracts
+* **Create a publication profile**: `sailr publication init <PROFILE> --environment <ENV>`
+* **Publish and produce validated evidence**: `sailr publication run <PROFILE> --apply [--out <REPORT>]`
 * **Validate publication evidence**: `sailr publication validate <REPORT>`
 * **Plan digest promotion**: `sailr promote plan --from-report <REPORT> [--from-report <REPORT> ...] --to <ENV> --out <FILE>`
 * **Promote a bound candidate manifest**: `sailr promote plan --from-manifest <MANIFEST> --to <ENV> --out <FILE>`

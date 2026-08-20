@@ -360,7 +360,7 @@ _arguments "${_arguments_options[@]}" : \
             (init)
 _arguments "${_arguments_options[@]}" : \
 '--environment=[Existing Sailr environment to use]:ENVIRONMENT:_default' \
-'--preset=[Safe workflow profile preset]:PRESET:(build deploy portable-release)' \
+'--preset=[Safe workflow profile preset]:PRESET:(build publication deploy portable-release)' \
 '--context=[Kubernetes context for deploy profiles]:CONTEXT:_default' \
 '--namespace=[Kubernetes namespace override]:NAMESPACE:_default' \
 '--approval=[Portable-release approval mechanism]:APPROVAL:(external signature)' \
@@ -744,7 +744,40 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:sailr-publication-command-$line[1]:"
         case $line[1] in
-            (validate)
+            (init)
+_arguments "${_arguments_options[@]}" : \
+'--environment=[Existing Sailr environment whose build-backed services will be published]:ENVIRONMENT:_default' \
+'--config=[Workflow configuration to create or update]:CONFIG:_files' \
+'--print[Print the complete resulting workflow configuration without writing it]' \
+'-q[Do not print log messages]' \
+'--quiet[Do not print log messages]' \
+'-v[Use verbose output]' \
+'--verbose[Use verbose output]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+':profile -- Name of the publication workflow profile to create:_default' \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+'--only=[Limit publication to a comma-separated service list]:ONLY:_default' \
+'--ignore=[Ignore a comma-separated service list]:IGNORE:_default' \
+'--out=[Optional durable output path for the validated publication report]:OUT:_files' \
+'--apply[Consent to build and push images for this invocation]' \
+'-q[Do not print log messages]' \
+'--quiet[Do not print log messages]' \
+'-v[Use verbose output]' \
+'--verbose[Use verbose output]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+':profile -- Publication workflow profile to run:_default' \
+&& ret=0
+;;
+(validate)
 _arguments "${_arguments_options[@]}" : \
 '-q[Do not print log messages]' \
 '--quiet[Do not print log messages]' \
@@ -769,7 +802,15 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:sailr-publication-help-command-$line[1]:"
         case $line[1] in
-            (validate)
+            (init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(validate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1050,7 +1091,15 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:sailr-help-publication-command-$line[1]:"
         case $line[1] in
-            (validate)
+            (init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(validate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1112,7 +1161,7 @@ _sailr_commands() {
 'lint:Lint an environment configuration' \
 'workflow:Manage workflow profiles' \
 'flow:Delivery flow management and validation' \
-'publication:Validate immutable publication reports' \
+'publication:Create and validate immutable publication reports' \
 'promote:Plan immutable artifact promotion' \
 'capabilities:Show machine-readable Sailr feature support' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -1255,7 +1304,7 @@ _sailr__help_commands() {
 'lint:Lint an environment configuration' \
 'workflow:Manage workflow profiles' \
 'flow:Delivery flow management and validation' \
-'publication:Validate immutable publication reports' \
+'publication:Create and validate immutable publication reports' \
 'promote:Plan immutable artifact promotion' \
 'capabilities:Show machine-readable Sailr feature support' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -1396,9 +1445,21 @@ _sailr__help__promote__plan_commands() {
 (( $+functions[_sailr__help__publication_commands] )) ||
 _sailr__help__publication_commands() {
     local commands; commands=(
+'init:Create a safe build-and-push publication workflow profile' \
+'run:Run a publication profile and validate its generated report' \
 'validate:Validate a workflow publication report' \
     )
     _describe -t commands 'sailr help publication commands' commands "$@"
+}
+(( $+functions[_sailr__help__publication__init_commands] )) ||
+_sailr__help__publication__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr help publication init commands' commands "$@"
+}
+(( $+functions[_sailr__help__publication__run_commands] )) ||
+_sailr__help__publication__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr help publication run commands' commands "$@"
 }
 (( $+functions[_sailr__help__publication__validate_commands] )) ||
 _sailr__help__publication__validate_commands() {
@@ -1574,6 +1635,8 @@ _sailr__promote__plan_commands() {
 (( $+functions[_sailr__publication_commands] )) ||
 _sailr__publication_commands() {
     local commands; commands=(
+'init:Create a safe build-and-push publication workflow profile' \
+'run:Run a publication profile and validate its generated report' \
 'validate:Validate a workflow publication report' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1582,6 +1645,8 @@ _sailr__publication_commands() {
 (( $+functions[_sailr__publication__help_commands] )) ||
 _sailr__publication__help_commands() {
     local commands; commands=(
+'init:Create a safe build-and-push publication workflow profile' \
+'run:Run a publication profile and validate its generated report' \
 'validate:Validate a workflow publication report' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1592,10 +1657,30 @@ _sailr__publication__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'sailr publication help help commands' commands "$@"
 }
+(( $+functions[_sailr__publication__help__init_commands] )) ||
+_sailr__publication__help__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr publication help init commands' commands "$@"
+}
+(( $+functions[_sailr__publication__help__run_commands] )) ||
+_sailr__publication__help__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr publication help run commands' commands "$@"
+}
 (( $+functions[_sailr__publication__help__validate_commands] )) ||
 _sailr__publication__help__validate_commands() {
     local commands; commands=()
     _describe -t commands 'sailr publication help validate commands' commands "$@"
+}
+(( $+functions[_sailr__publication__init_commands] )) ||
+_sailr__publication__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr publication init commands' commands "$@"
+}
+(( $+functions[_sailr__publication__run_commands] )) ||
+_sailr__publication__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'sailr publication run commands' commands "$@"
 }
 (( $+functions[_sailr__publication__validate_commands] )) ||
 _sailr__publication__validate_commands() {
